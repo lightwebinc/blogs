@@ -1,0 +1,48 @@
+{
+  "description": "Registry values and the keys they derive for the fixed test key (32 bytes of 0x42), counterparty anyone, forSelf true on the producer's side (docs/spec.md section 6).",
+  "identityKey": "0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c",
+  "keys": [
+    {
+      "invoice": "1-blogs-batch",
+      "keyId": "batch",
+      "lockingKey": "03e3ca3f677896e16c2ab42af7b02a52c2bfd0aee83af6be62a7f6c1ac63aed4f4"
+    },
+    {
+      "invoice": "1-blogs-anchor",
+      "keyId": "anchor",
+      "lockingKey": "0360039a160cf1fcb4f61e15e7259a1462a2ce4510ec673a9716bc28484e3c935b"
+    },
+    {
+      "invoice": "1-blogs-fund",
+      "keyId": "fund",
+      "lockingKey": "032a73bed05d8746a893737750d7fa70c3364e3d672785c383ee3d9e5bd260ede4"
+    }
+  ],
+  "lookupService": "ls_log",
+  "magicAnchor": "626c6101",
+  "magicBatch": "626c6201",
+  "maxStreamName": 32,
+  "protocol": [
+    1,
+    "blogs"
+  ],
+  "streams": [
+    {
+      "name": "example_app",
+      "stream": "example_app_qzxkvbmwtr",
+      "suffix": "qzxkvbmwtr",
+      "topic": "tm_log_example_app_qzxkvbmwtr"
+    },
+    {
+      "name": "example_app",
+      "stream": "example_app_hdjvnwpxle",
+      "suffix": "hdjvnwpxle",
+      "topic": "tm_log_example_app_hdjvnwpxle"
+    }
+  ],
+  "streamsNote": "Two streams with one readable part and different suffixes: different streams, different topics. Suffixes here are fixed examples; a real stream draws its suffix at random when it is created.",
+  "suffixLength": 10,
+  "tagAnchor": "626c01",
+  "tagFunding": "626c02",
+  "topic": "tm_log_example_app_qzxkvbmwtr"
+}

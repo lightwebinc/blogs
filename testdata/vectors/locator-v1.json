@@ -1,0 +1,28 @@
+{
+  "description": "Digest-only locators (docs/spec.md section 4), encoded alone as they appear under batch key 10.",
+  "locators": [
+    {
+      "locator": {
+        "digest": "c868ea8c9d5455797f29e484dbfd85500ac2bb6d6fbdfaa575bd50608624333c",
+        "length": 173,
+        "urls": [
+          "https://logs.example.com/blobs/c868ea8c9d5455797f29e484dbfd85500ac2bb6d6fbdfaa575bd50608624333c"
+        ],
+        "unsupported": false,
+        "encoding": "a36475726c7381785f68747470733a2f2f6c6f67732e6578616d706c652e636f6d2f626c6f62732f63383638656138633964353435353739376632396534383464626664383535303061633262623664366662646661613537356264353036303836323433333363666469676573745820c868ea8c9d5455797f29e484dbfd85500ac2bb6d6fbdfaa575bd50608624333c666c656e67746818ad"
+      },
+      "name": "locator-hints"
+    },
+    {
+      "locator": {
+        "digest": "c868ea8c9d5455797f29e484dbfd85500ac2bb6d6fbdfaa575bd50608624333c",
+        "length": 173,
+        "urls": [],
+        "unsupported": true,
+        "encoding": "a46475726c7380666469676573745820c868ea8c9d5455797f29e484dbfd85500ac2bb6d6fbdfaa575bd50608624333c666c656e67746818ad66726567696f6e676578616d706c65"
+      },
+      "name": "locator-unknown-member",
+      "note": "an unknown member makes the locator unsupported, never the batch"
+    }
+  ]
+}

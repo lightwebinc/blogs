@@ -1,0 +1,173 @@
+{
+  "anchors": [
+    {
+      "count": 5,
+      "first": 1,
+      "interval": 1,
+      "leaves": [
+        {
+          "seq": 1,
+          "commitment": "656ee0a653c6ea0667df0d52952454cae88766acc154143b52f7c69caaf0c383",
+          "leaf": "09000571209a0b723239d7513490e138cb4a06a7901deb1f7b7f834b6b6a5338",
+          "path": [
+            {
+              "hash": "c94156fa9b264bbe04ca10b84b31e2e35cf982b7648ba2f63730844e4795d80c",
+              "left": false
+            },
+            {
+              "hash": "144a31909359584bd263512535b33aabd4f7077ee3a86833438684689fd349e7",
+              "left": false
+            },
+            {
+              "hash": "a926e2069d1473f4d76e44e9b6f7a63429bbcc83dd43e1b615dd52e455a8f149",
+              "left": false
+            }
+          ]
+        },
+        {
+          "seq": 2,
+          "commitment": "7e5d5be37b1a68433e0fa3e2c2bdbfe98c20a1f323472dfd6559d6c25514af66",
+          "leaf": "c94156fa9b264bbe04ca10b84b31e2e35cf982b7648ba2f63730844e4795d80c",
+          "path": [
+            {
+              "hash": "09000571209a0b723239d7513490e138cb4a06a7901deb1f7b7f834b6b6a5338",
+              "left": true
+            },
+            {
+              "hash": "144a31909359584bd263512535b33aabd4f7077ee3a86833438684689fd349e7",
+              "left": false
+            },
+            {
+              "hash": "a926e2069d1473f4d76e44e9b6f7a63429bbcc83dd43e1b615dd52e455a8f149",
+              "left": false
+            }
+          ]
+        },
+        {
+          "seq": 3,
+          "commitment": "5c40cb1f56ae9c801a839af6b2e32788e42bd2d66c94a60cc883c74a9ac51484",
+          "leaf": "06418e908f79755f258f3516ddf73fe398f8927269a3dd95bcbe6e47e6350e38",
+          "path": [
+            {
+              "hash": "f62663c82601a275f205bf09a17f17cec551a06ea3384740cc9faefb6363594f",
+              "left": false
+            },
+            {
+              "hash": "bfe63b32fc14b8d4c963072c2fa0fab388103ea2511eee6589fd598e4cee16eb",
+              "left": true
+            },
+            {
+              "hash": "a926e2069d1473f4d76e44e9b6f7a63429bbcc83dd43e1b615dd52e455a8f149",
+              "left": false
+            }
+          ]
+        },
+        {
+          "seq": 4,
+          "commitment": "1bb0d5a2f9fccd108dee3f2f099268ffff883d71a31ba35c11713938d7ae0c06",
+          "leaf": "f62663c82601a275f205bf09a17f17cec551a06ea3384740cc9faefb6363594f",
+          "path": [
+            {
+              "hash": "06418e908f79755f258f3516ddf73fe398f8927269a3dd95bcbe6e47e6350e38",
+              "left": true
+            },
+            {
+              "hash": "bfe63b32fc14b8d4c963072c2fa0fab388103ea2511eee6589fd598e4cee16eb",
+              "left": true
+            },
+            {
+              "hash": "a926e2069d1473f4d76e44e9b6f7a63429bbcc83dd43e1b615dd52e455a8f149",
+              "left": false
+            }
+          ]
+        },
+        {
+          "seq": 5,
+          "commitment": "7c0be3561d61b3d6be9255bcbb4d202b461c7103804242e70061f3d1bf86cd95",
+          "leaf": "a926e2069d1473f4d76e44e9b6f7a63429bbcc83dd43e1b615dd52e455a8f149",
+          "path": [
+            {
+              "hash": "fe450e0b63baabb0a4d14a4093a3d5a8bd4e6791c984c26be747af2bc285008d",
+              "left": true
+            }
+          ]
+        }
+      ],
+      "name": "anchor-interval-1",
+      "prev": "0000000000000000000000000000000000000000000000000000000000000000",
+      "producer": "0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c",
+      "record": "a90044626c61010158210324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c02766578616d706c655f6170705f717a786b76626d7774720301045820000000000000000000000000000000000000000000000000000000000000000005010605075820e951f90527cf23420a849bfe7b96931b48da86a9570c8b6718a988385d93edef081b0000019b76db9260",
+      "recordLength": 153,
+      "root": "e951f90527cf23420a849bfe7b96931b48da86a9570c8b6718a988385d93edef",
+      "stream": "example_app_qzxkvbmwtr",
+      "timestamp": 1767225660000,
+      "tokenFields": [
+        "626c01",
+        "a90044626c61010158210324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c02766578616d706c655f6170705f717a786b76626d7774720301045820000000000000000000000000000000000000000000000000000000000000000005010605075820e951f90527cf23420a849bfe7b96931b48da86a9570c8b6718a988385d93edef081b0000019b76db9260"
+      ],
+      "tokenSignedHash": "7c602ca1533476e302ebede1193fffea7eae031178500771b99b4828ea560012"
+    },
+    {
+      "count": 3,
+      "first": 6,
+      "interval": 2,
+      "leaves": [
+        {
+          "seq": 6,
+          "commitment": "c2a663433c2c69d66e891d62910975dd6edf3c86025bc7fc04399d49651a455a",
+          "leaf": "8fd9f3de01232666f53dcbd9185812b9fe0eb3088e4b334c6399cafa49cc9bc0",
+          "path": [
+            {
+              "hash": "dc91a5881b66820397372f16ce03e89ad9e19acaf6f75db299d1a0463192d6cd",
+              "left": false
+            },
+            {
+              "hash": "7cd8c13983a7496e18ad7b80556fe46325a0f48e8db2195cbfcb3a4bd30befe0",
+              "left": false
+            }
+          ]
+        },
+        {
+          "seq": 7,
+          "commitment": "bb261fd3b49bff4f0ccaecbb44379557b84d49ca96696ee99e878b66ea07e4e8",
+          "leaf": "dc91a5881b66820397372f16ce03e89ad9e19acaf6f75db299d1a0463192d6cd",
+          "path": [
+            {
+              "hash": "8fd9f3de01232666f53dcbd9185812b9fe0eb3088e4b334c6399cafa49cc9bc0",
+              "left": true
+            },
+            {
+              "hash": "7cd8c13983a7496e18ad7b80556fe46325a0f48e8db2195cbfcb3a4bd30befe0",
+              "left": false
+            }
+          ]
+        },
+        {
+          "seq": 8,
+          "commitment": "e15d6de38611348b755fe602c82fff24e8c03fe047af876af3241e6c562590ac",
+          "leaf": "7cd8c13983a7496e18ad7b80556fe46325a0f48e8db2195cbfcb3a4bd30befe0",
+          "path": [
+            {
+              "hash": "c0f27969cca3675336be7219c27e696d52f1999cb8679b8b33b7abd6296b2459",
+              "left": true
+            }
+          ]
+        }
+      ],
+      "name": "anchor-interval-2",
+      "prev": "3d058fc0eddab871faef36fb406fd5869cff07ca429acf8b943653677109d6df",
+      "producer": "0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c",
+      "record": "a90044626c61010158210324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c02766578616d706c655f6170705f717a786b76626d77747203020458203d058fc0eddab871faef36fb406fd5869cff07ca429acf8b943653677109d6df0506060307582052f7357f13327c2ffcedcaaa11d99daee32590e6d8f1c516e913383e38287967081b0000019b76dc7cc0",
+      "recordLength": 153,
+      "root": "52f7357f13327c2ffcedcaaa11d99daee32590e6d8f1c516e913383e38287967",
+      "stream": "example_app_qzxkvbmwtr",
+      "timestamp": 1767225720000,
+      "tokenFields": [
+        "626c01",
+        "a90044626c61010158210324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c02766578616d706c655f6170705f717a786b76626d77747203020458203d058fc0eddab871faef36fb406fd5869cff07ca429acf8b943653677109d6df0506060307582052f7357f13327c2ffcedcaaa11d99daee32590e6d8f1c516e913383e38287967081b0000019b76dc7cc0"
+      ],
+      "tokenSignedHash": "1fd81f0f28892f5a332626e09e4587bf74408792d304a5d092f4989d181bf758"
+    }
+  ],
+  "description": "Interval anchors (docs/spec.md section 5). leaf = SHA-256(0x00 || commitment); the root is RFC 6962 over the commitments in seq order; each path runs leaf to root, left meaning the sibling is on the left. Commitments are stand-in carrier txids in hash byte order."
+}
