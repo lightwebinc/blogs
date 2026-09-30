@@ -1,0 +1,28 @@
+{
+  "name": "@lightwebinc/blogs-host",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The blogs record layer in TypeScript for an overlay host: batch, locator and anchor records, stream identifiers, and the topic manager's transaction rules, held to the Go codec's vectors",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "prebuild": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "tsc",
+    "check": "tsc --noEmit",
+    "pretest": "npm run build",
+    "test": "node --test \"dist/**/*.test.js\"",
+    "vectors": "node dist/tsvectors.js",
+    "vectors-check": "node dist/tsvectors.js -check"
+  },
+  "dependencies": {
+    "@bsv/sdk": "2.7.1",
+    "@lightwebinc/bcommon": "file:vendor/lightwebinc-bcommon-0.4.0.tgz"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3"
+  }
+}
