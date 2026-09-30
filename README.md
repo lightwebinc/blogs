@@ -12,8 +12,9 @@ manager and lookup rules, and golden vectors are specified; the record codec
 and the topic manager's transaction rules are built in Go (`internal/logrec`)
 and in TypeScript (`host/`), held to the same vectors; the host module
 (`tm_log_<name>_<suffix>` and `ls_log`) loads into a reference overlay host;
-the `blogs` command produces streams from stdin or a followed file, and
-reads, audits and backfills them.
+the `blogs` command produces streams from stdin or a followed file,
+retracts batches by sweeping their funding outputs, and reads, audits,
+backfills and archives them. The host module deploys as one file.
 
 ## Documentation
 
@@ -25,8 +26,8 @@ reads, audits and backfills them.
 - [Host module](docs/host.md): loading `tm_log` and `ls_log` into an overlay
   host, configuration, statuses, restore and metrics
 - [The blogs command](docs/usage.md): `init`, `fund`, `stream`, `produce`,
-  `anchor`, `read`, `verify-interval`, `backfill`, `doctor`; configuration,
-  exit codes and messages
+  `anchor`, `sweep`, `read`, `verify-interval`, `backfill`, `archive`,
+  `doctor`; configuration, exit codes and messages
 
 ```bash
 blogs init && blogs fund && blogs stream new app
@@ -49,6 +50,7 @@ make test            # Go and TypeScript tests
 make vectors         # regenerate testdata/vectors (Go) and testdata/ts (TypeScript)
 make vectors-check   # compare both, write nothing
 make blogs           # the command, into bin/blogs
+make module          # the host module bundle, host/bundle/blogs-module.js
 make e2e REFERENCE_HOST=/path/to/host         # the module on a local host (Docker)
 make e2e-client REFERENCE_HOST=/path/to/host  # the command against local hosts (Docker)
 ```

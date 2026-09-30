@@ -16,6 +16,7 @@ against block headers it chooses, before it prints a line.
   ────────────────
   read, verify-interval ◀── ls_log answers ── hosts;  proofs checked against header_url
   backfill: ls_log answers of a sibling ─▶ submit route of the host being filled
+  archive:  ls_log answers of one host ─▶ files: batches, anchors, interval proofs
 ```
 
 ## Build
@@ -40,7 +41,9 @@ go build ./cmd/blogs    # or directly
 | `doctor` | optional | nothing | the home's state and whether the node, headers, facade and hosts answer; reads only |
 | `read <stream> <producer>` | no | `hosts`, `header_url` | verifies and prints a stream's batches |
 | `verify-interval <stream> <producer> <n>` | no | `hosts`, `header_url`; `asset` for fee trees | the auditor's check of interval n |
+| `sweep <stream>` | yes | `facade`, `settle`, `asset`; `hosts` for `-retract-seqs` | retracts batches by sweeping their funding outputs, or retires unused funding outputs to the pool |
 | `backfill <stream> <producer>` | no | `-from`, `-to`; `asset` for fee trees | fills a host's holes from a sibling host |
+| `archive <stream> <producer>` | no | `-dir`, a host, `header_url`, `asset` | keeps one host's copy of a stream, with each interval's proof, in local files |
 | `version` | no | nothing | prints the version |
 
 `<stream>` is always the full identifier `<name>_<suffix>`; the readable
@@ -102,15 +105,16 @@ header_url = https://headers.example.com
 | `identity.json` | the identity key (mode 0600); the producer is this key |
 | `wallet.json` | the coin pool (mode 0600): fees for funding trees come from here |
 | `config` | the config file, when it is kept here |
-| `lock` | held while `produce`, `anchor` or `fund` runs |
+| `lock` | held while `produce`, `anchor`, `sweep` or `fund` runs |
 | `streams/<stream>/state.json` | one stream's state (mode 0600), written atomically before every publish |
 
 A stream's state holds its head (`seq` and commitment), the carrier
 persisted before it is published, the commitments not yet anchored, the
-anchor chain's head and the anchor in flight, and the funding trees. Losing
-it loses the head, and a producer that lost its head must not restart the
-stream (specification section 12): `produce` refuses a stream the home does
-not hold, and the answer is a new stream from `stream new`.
+anchor chain's head and the anchor in flight, the funding trees, and the
+sweeps built from them. Losing it loses the head, and a producer that lost
+its head must not restart the stream (specification section 12): `produce`
+refuses a stream the home does not hold, and the answer is a new stream
+from `stream new`.
 
 One `produce`, `anchor` or `fund` runs per home at a time, because they
 share the coin pool; a second exits 2. To run several producers at once,
@@ -188,9 +192,9 @@ tree running out does not stop the stream for a block.
 | `-anchor-ahead` | 2 | mint the next anchor fee tree at this many outputs left |
 | `-poll` | `5s` | how often proofs are asked for |
 
-A tree minted ahead that a run ends without using is recorded in the state
-for a later sweep; its change is back in the pool, its outputs are not
-spent by this producer again.
+A tree minted ahead that a run ends without using is recorded in the state;
+its change is back in the pool, its outputs are not spent by a carrier
+again, and `blogs sweep -retire` pays them back to the pool.
 
 ### Restart and crash
 
@@ -309,6 +313,101 @@ not admit a token, `backfill` reads the funding trees its inputs spend from
 line per position (`held`, `filled from the sibling`, `MISSING`, `REFUSED`),
 then a count.
 
+## Sweeping
+
+```bash
+blogs sweep app_qzxkvbmwtr -retract-seqs 7            # prints the plan, changes nothing
+blogs sweep app_qzxkvbmwtr -retract-seqs 7-9 -yes     # retracts seqs 7 to 9
+blogs sweep app_qzxkvbmwtr -retract-tree 5f0e... -yes # every batch one tree funded
+blogs sweep app_qzxkvbmwtr -retire -yes               # unused outputs back to the pool
+blogs sweep app_qzxkvbmwtr                            # finishes a sweep in flight, or lists them
+```
+
+A sweep is one mined transaction per funding tree (specification section
+6.4), and needs the producer's home: only the producer can sign for its
+funding outputs.
+
+- **Retraction.** `-retract-seqs A-B` asks the hosts for the carriers at
+  those seqs (every candidate, a fork included), checks that each is this
+  producer's and spends a batch tree the stream recorded, and sweeps
+  exactly the outputs they spent with bcommon `carrier.Sweep`: output 0 is
+  a funding-shaped tombstone carrying the swept value, the fee comes from
+  the coin pool and its change goes back to it. `-retract-tree TXID` sweeps
+  every output of one batch tree, used and unused. Once the sweep mines it
+  is published, with its proof, to the stream's topic; each carrier that
+  spent a swept output is then a double spend, and a host stops serving it
+  and keeps its seq as a numbered position: the anchor still commits it, a
+  reader finds it missing, and an archive proves the interval with a hole
+  where the next batch's `prev` names the commitment. A retracted batch
+  that is the last of its interval leaves nothing to name it, so an
+  archive that did not hold it cannot prove that interval (specification
+  section 8.4). An anchor fee tree funds no carrier and cannot be
+  retracted.
+- **Retirement.** `-retire` spends the unused outputs of every tree no
+  longer in use (batch trees, anchor fee trees, and trees minted ahead and
+  never adopted) to the fund address, the fee coming out of their value,
+  and pools the result. It retracts nothing. A tree whose unused outputs
+  cannot pay the fee is left and named (`left: ...`), which is the usual
+  case for a batch tree of one-satoshi outputs. A retirement of a tree the
+  hosts hold is published once it mines; one of a tree minted ahead, which
+  was never published, is not.
+
+Without `-yes` a sweep prints its plan (`retract seqs 7: tree T outputs
+3`, `retire anchor tree T: 5 unused output(s) of 1000 sat`) and changes
+nothing. With it, each sweep is written to the stream's state before it is
+settled and the swept outputs are marked used, so no later carrier or
+anchor spends them; the run then settles it, waits up to `-wait` (default
+`10m`) for it to mine, pools its change and publishes it. A sweep in flight
+when a run stops is finished by the next `sweep` run, with or without
+flags, before anything new is built. `sweep` holds the home's lock, like
+`produce`.
+
+## Archive
+
+```bash
+blogs archive app_qzxkvbmwtr 02c0ffee... -dir /srv/blogs-archive -host https://archive-a.example.com
+blogs archive app_qzxkvbmwtr 02c0ffee... -dir /srv/blogs-archive -follow -poll 1m
+```
+
+`archive` is a storage adapter for one host: each pass asks the host for
+every `seq` from where the last pass stopped until the host holds nothing,
+checks each carrier as `read` does (the carrier rules, this producer, the
+`seq`, SPV through its funding parent against `header_url`) and stores it;
+then it walks the interval class from the last interval proven, keeps each
+canonical anchor token (held to the anchor rules, its fee tree read from
+`asset`), fetches any `seq` the interval covers that is not yet stored, and
+writes the interval's proof. `-follow` repeats the pass every `-poll`.
+`-content-dir` and `-allow-host` find digest-only content as for `read`.
+
+The layout, under `DIR/<stream>/<producer>/`:
+
+| Path | What |
+| --- | --- |
+| `archive.json` | the cursor: the next `seq` to walk to, the last interval proven, the hosts followed |
+| `batches/<seq>-<carrier>.beef` | each verified carrier's BEEF as the host answered it; it carries the funding tree the carrier spends and the tree's proof |
+| `batches/<seq>-<carrier>.json` | what was read from it: `seq`, `prev`, `timestamp`, `count`, `encoding`, `profile`, `size`, the funding outpoint, the host, and `content` (`ok`, `pending`, `unsupported`, `invalid`) |
+| `content/<seq>-<carrier>.log` | the decoded lines, as the producer wrote them (not filtered for a terminal), when the content was read |
+| `anchors/<interval>-<token>.beef` | each canonical anchor token's BEEF, with its proof |
+| `intervals/<interval>.json` | the interval's proof: `token`, `vout`, `height`, `position` in its block, `prevToken`, `first`, `count`, `root`, `status`, `holes`, and per `seq` its `commitment`, whether its bytes are `held`, and its RFC 6962 inclusion `path` (leaf to root, each step the sibling's hash in hex, `L:` before a left sibling) |
+
+`<seq>` and `<interval>` are 16 decimal digits, zero padded; `<carrier>`
+and `<token>` are txids. Files are written atomically and never rewritten,
+so an interrupted pass is continued by the next and two archives of the
+same stream hold identical `intervals/` files. An interval's `status` is
+`proven` when every batch is held, and `proven-with-holes` when some `seq`
+is held by no file and its commitment was taken from the next batch's
+`prev` (a retracted batch, or one the host never received); those seqs are
+listed in `holes`. The root over the commitments must equal the token's,
+or the interval is not written. A batch the archive stored before it was
+retracted stays stored.
+
+It prints one line per interval proven, a summary, and last
+`latest interval K root R token T`, so two archives are compared by that
+line. Exit 0 when the pass is done, 1 when the host answered something
+refused or the chain or a root does not hold, 3 when an interval the host
+answers cannot be proven from what it holds (for example its last `seq`
+retracted and never stored).
+
 ## Exit codes
 
 | Code | Meaning |
@@ -341,6 +440,9 @@ Results go to stdout; progress and errors to stderr, errors as one line
 | `seq N: <CODE> <reason>` | `read`: a refused answer (`REFUSED-SEQ`, `REFUSED-KEY`, `REFUSED-SIG`, `REFUSED-BUMP`, `REFUSED-DECODE`, ...) |
 | `seq N: FORK: ...`, `seq N: BROKEN LINK: ...`, `seq N: MISSING: ...` | `read` |
 | `VERIFIED interval ...`, `REFUSED interval N: ...`, `INCOMPLETE interval N: ...` | `verify-interval`, on stdout |
+| `sweep TXID: mined at height H and published; seqs ... retracted` | a retraction done |
+| `retire <kind> tree T: left: ...` | a tree whose unused outputs cannot pay the fee |
+| `latest interval K root R token T` | `archive`, on stdout |
 
 ## Testing
 
@@ -353,10 +455,12 @@ make e2e-client REFERENCE_HOST=/path/to/host       # the command against local r
 a stand-in host (`internal/testchain`): every command path, restart and
 crash resumption, both profiles and gzip, a followed file with rotation,
 hostile answers, terminal filtering, forks and equivocation, backfill and
-the audit's refusals. `make e2e-client` runs the command against two
-reference overlay hosts with this module loaded, over the same local chain
-serving the node's API and the header source: two produce runs and a
-digest-only one, read, verify-interval, a backfill of the second host from
-the first, a host restart, and a publish that fails and is resumed. It needs
+the audit's refusals, retraction and retirement, and archives with and
+without holes. `make e2e-client` runs the command against two reference
+overlay hosts loading the bundle, over the same local chain serving the
+node's API and the header source: two produce runs and a digest-only one,
+read, verify-interval, a backfill of the second host from the first, a host
+restart, a publish that fails and is resumed, archives of both hosts
+agreeing on every interval, and a retraction the host module applies. It needs
 Docker for the hosts' MySQL and a reference host directory holding its
 compiled `dist/index.js` and its `node_modules`.
