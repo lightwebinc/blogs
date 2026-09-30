@@ -12,6 +12,8 @@ import (
 	"github.com/bsv-blockchain/go-sdk/script"
 	"github.com/bsv-blockchain/go-sdk/transaction"
 
+	"github.com/lightwebinc/bcommon/nodeapi"
+
 	"github.com/lightwebinc/blogs/internal/testchain"
 )
 
@@ -103,4 +105,38 @@ func chainCoinbase(t *testing.T, chain *testchain.Chain, h uint32) []string {
 	}
 	t.Fatalf("no transaction at height %d", h)
 	return nil
+}
+
+// Both sources name an output's spender, and "" while it is unspent.
+func TestSpenderFromTheNodeAndWhatsOnChain(t *testing.T) {
+	spent := "ab" + strings.Repeat("0", 62)
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/utxos/"+strings.Repeat("1", 64)+"/json" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`[{"vout":0,"status":"OK"},{"vout":1,"status":"SPENT","spendingData":{"txId":"` + spent + `","vin":0}}]`))
+	}))
+	defer node.Close()
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/main/tx/"+strings.Repeat("1", 64)+"/1/spent" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"txid":"` + spent + `","vin":0}`))
+	}))
+	defer api.Close()
+	ctx := context.Background()
+	id := strings.Repeat("1", 64)
+	for _, src := range []SpendSource{AssetSource{Asset: &nodeapi.Asset{Base: node.URL}}, WhatsOnChain{Network: "main", Base: api.URL + "/"}} {
+		if got, err := src.Spender(ctx, id, 1); err != nil || got != spent {
+			t.Fatalf("%T spent: %q %v", src, got, err)
+		}
+		if got, err := src.Spender(ctx, id, 0); err != nil || got != "" {
+			t.Fatalf("%T unspent: %q %v", src, got, err)
+		}
+	}
+	if _, err := (AssetSource{Asset: &nodeapi.Asset{Base: node.URL}}).Spender(ctx, strings.Repeat("2", 64), 0); err == nil {
+		t.Fatal("an unknown transaction answered")
+	}
 }

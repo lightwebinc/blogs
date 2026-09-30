@@ -20,10 +20,20 @@ interval proven, keep each canonical anchor token, fetch any seq the
 interval covers that is not yet stored, and write the interval's proof: its
 token, its root, and every seq's commitment with its inclusion path. A seq
 no file holds takes its commitment from the next batch's prev (a retracted
-or undelivered batch), and the interval is written proven-with-holes. The
-layout under DIR/<stream>/<producer> is in docs/usage.md. -host defaults to
-the first configured host. Needs header_url, and asset for the funding
-trees anchors spend.
+or undelivered batch), and the interval is written proven-with-holes.
+
+Each pass first asks the host again for every seq it has stored. A stored
+carrier the host no longer serves is checked for a retraction: a mined
+transaction other than the carrier that spends its funding output (the
+node, or tx_source, names it; the archive checks it against header_url).
+When one is found the archive keeps a receipt (the seq, the commitment,
+its prev, and the sweep with its proof, under retracted/) and drops the
+batch's bytes; the receipt still completes the interval's root. A carrier
+the host stops serving with no such spend is kept.
+
+The layout under DIR/<stream>/<producer> is in docs/usage.md. -host
+defaults to the first configured host. Needs header_url, and asset (or
+tx_source) for the funding trees anchors spend and for spends.
 
 Prints what it stored and proved, then one line
 "latest interval K root R token T" naming the last interval proven.
@@ -106,10 +116,16 @@ func (g *global) archiveSummary(a *archive.Archive, s *archive.Summary, final bo
 	out := g.stdout
 	for _, f := range s.Proven {
 		line := fmt.Sprintf("interval %d  %s  seqs %d to %d  root %s  token %s  height %d", f.Interval, f.Status, f.First, f.First+f.Count-1, f.Root, f.Token, f.Height)
+		if len(f.Retracted) > 0 {
+			line += "  retracted " + joinU64(f.Retracted)
+		}
 		if len(f.Holes) > 0 {
 			line += "  holes " + joinU64(f.Holes)
 		}
 		fmt.Fprintln(out, line)
+	}
+	if len(s.Retracted) > 0 {
+		fmt.Fprintf(out, "retracted seqs %s: receipt and sweep kept in retracted/, bytes dropped\n", joinU64(s.Retracted))
 	}
 	fmt.Fprintf(out, "archive %s from %s: %d batch(es) stored, walked to seq %d, intervals 1 to %d proven, in %s\n",
 		a.Stream, a.Host, s.Stored, s.Next-1, s.Intervals, a.Root())

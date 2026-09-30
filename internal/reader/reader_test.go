@@ -89,12 +89,37 @@ func TestTheNextBatchChoosesAForkCandidate(t *testing.T) {
 	first := cand(1, 0x1, 0)
 	an := &logrec.Anchor{First: 1, Count: 2, Root: logrec.IntervalRoot([][32]byte{first.Carrier.Commitment, b.Carrier.Commitment})}
 	held := map[uint64][]*Candidate{1: {first}, 2: {a, b}}
-	got, ok := choose(held, an)
-	if !ok || got[1] != b {
+	got, holes, ok := choose(held, an)
+	if !ok || got[1] != b || len(holes) != 0 {
 		t.Fatal("choose missed the candidate the root names")
 	}
 	an.Root[0] ^= 1
-	if _, ok := choose(held, an); ok {
+	if _, _, ok := choose(held, an); ok {
 		t.Fatal("choose matched a root nothing makes")
+	}
+}
+
+// A seq no host serves takes its commitment from the next batch's prev, as
+// an archive proves across a retraction; the last seq, or two holes in a
+// row, cannot be recovered.
+func TestChooseRecoversAHoleFromTheNextPrev(t *testing.T) {
+	one, three, four := cand(1, 0x1, 0), cand(3, 0x3, 0x2), cand(4, 0x4, 0x3)
+	var two [32]byte
+	two[0] = 0x2
+	an := &logrec.Anchor{First: 1, Count: 4, Root: logrec.IntervalRoot([][32]byte{one.Carrier.Commitment, two, three.Carrier.Commitment, four.Carrier.Commitment})}
+	got, holes, ok := choose(map[uint64][]*Candidate{1: {one}, 3: {three}, 4: {four}}, an)
+	if !ok || len(holes) != 1 || holes[0] != 2 || got[1] != nil || got[0] != one {
+		t.Fatalf("hole at 2: ok %v holes %v", ok, holes)
+	}
+	// Before a hole, a fork cannot be chosen: nothing names a candidate.
+	fork := cand(1, 0x9, 0)
+	if _, _, ok := choose(map[uint64][]*Candidate{1: {one, fork}, 3: {three}, 4: {four}}, an); ok {
+		t.Fatal("a fork before a hole was chosen")
+	}
+	if _, _, ok := choose(map[uint64][]*Candidate{1: {one}, 4: {four}}, an); ok {
+		t.Fatal("two holes in a row were recovered")
+	}
+	if _, _, ok := choose(map[uint64][]*Candidate{1: {one}, 3: {three}}, an); ok {
+		t.Fatal("a hole at the last seq was recovered")
 	}
 }

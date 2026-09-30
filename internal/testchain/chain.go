@@ -47,6 +47,7 @@ type Chain struct {
 	mined   map[string]uint32
 	cbAt    map[string]uint32 // coinbase txid to height
 	utxo    map[transaction.Outpoint]*transaction.TransactionOutput
+	spent   map[transaction.Outpoint]string // outpoint to the txid spending it
 	pending []string
 	// Hold keeps accepted transactions unmined until Mine; otherwise each
 	// is mined as it is accepted. HoldIf holds only those it answers true
@@ -64,7 +65,7 @@ type Chain struct {
 func New(start uint32) *Chain {
 	return &Chain{height: start, roots: map[uint32]chainhash.Hash{},
 		txs: map[string]*transaction.Transaction{}, mined: map[string]uint32{}, cbAt: map[string]uint32{},
-		utxo: map[transaction.Outpoint]*transaction.TransactionOutput{}}
+		utxo: map[transaction.Outpoint]*transaction.TransactionOutput{}, spent: map[transaction.Outpoint]string{}}
 }
 
 func blockHash(h uint32) string { return fmt.Sprintf("%064x", uint64(0xb10c)<<32|uint64(h)) }
@@ -241,7 +242,9 @@ func (c *Chain) Send(tx *transaction.Transaction) error {
 		}
 	}
 	for _, in := range tx.Inputs {
-		delete(c.utxo, transaction.Outpoint{Txid: *in.SourceTXID, Index: in.SourceTxOutIndex})
+		op := transaction.Outpoint{Txid: *in.SourceTXID, Index: in.SourceTxOutIndex}
+		delete(c.utxo, op)
+		c.spent[op] = tx.TxID().String()
 	}
 	for i, o := range tx.Outputs {
 		c.utxo[transaction.Outpoint{Txid: *tx.TxID(), Index: uint32(i)}] = o //nolint:gosec // an output index
@@ -364,6 +367,23 @@ func (c *Chain) asset(w http.ResponseWriter, r *http.Request, p string) {
 		}
 		txid, _ := chainhash.NewHashFromHex(id)
 		_, _ = w.Write(proof(txid, h).Bytes())
+	case strings.HasPrefix(p, "utxos/"):
+		// The node's UTXO view of a transaction: each output's status, and
+		// its spender once spent.
+		tx, ok := c.txs[strings.TrimSuffix(strings.TrimPrefix(p, "utxos/"), "/json")]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		outs := []map[string]any{}
+		for i := range tx.Outputs {
+			o := map[string]any{"txid": tx.TxID().String(), "vout": i, "status": "OK"}
+			if by, ok := c.spent[transaction.Outpoint{Txid: *tx.TxID(), Index: uint32(i)}]; ok { //nolint:gosec // an output index
+				o["status"], o["spendingData"] = "SPENT", map[string]any{"txId": by, "vin": 0}
+			}
+			outs = append(outs, o)
+		}
+		writeJSON(w, outs)
 	case strings.HasPrefix(p, "tx/"):
 		tx, ok := c.txs[strings.TrimPrefix(p, "tx/")]
 		if !ok {

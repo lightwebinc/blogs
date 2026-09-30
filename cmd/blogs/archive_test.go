@@ -101,20 +101,94 @@ func TestArchiveProvesAnIntervalWithARetractedHole(t *testing.T) {
 	h.produce(linesOf(0, 4), stream, "-max-lines", "1")
 	held := t.TempDir()
 	h.must("", "archive", stream, producer, "-dir", held)
+	fh, _ := readInterval(t, filepath.Join(held, stream, producer), 1)
 	h.must("", append([]string{"sweep", stream, "-retract-seqs", "2", "-yes"}, fast...)...)
+
+	// The archive that stored seq 2 finds it retracted on its next pass:
+	// it keeps a receipt and the sweep, and drops the batch's bytes.
+	r := h.must("", "archive", stream, producer, "-dir", held)
+	if !strings.Contains(r.stdout, "retracted seqs 2: receipt and sweep kept") {
+		t.Fatalf("recheck:\n%s\n%s", r.stdout, r.stderr)
+	}
+	rootH := filepath.Join(held, stream, producer)
+	name := "0000000000000002-" + fh.Leaves[1].Commitment
+	for _, gone := range []string{"batches/" + name + ".beef", "batches/" + name + ".json", "content/" + name + ".log"} {
+		if _, err := os.Stat(filepath.Join(rootH, gone)); !os.IsNotExist(err) {
+			t.Fatalf("%s was not dropped: %v", gone, err)
+		}
+	}
+	var rc archive.Receipt
+	raw, err := os.ReadFile(filepath.Join(rootH, "retracted", name+".json"))
+	if err == nil {
+		err = json.Unmarshal(raw, &rc)
+	}
+	if err != nil || rc.Seq != 2 || rc.Commitment != fh.Leaves[1].Commitment || rc.Sweep == "" || rc.SweepHeight == 0 || rc.Content != "dropped" {
+		t.Fatalf("receipt: %+v %v", rc, err)
+	}
+	if _, err := os.Stat(filepath.Join(rootH, "retracted", name+".sweep.beef")); err != nil {
+		t.Fatal(err)
+	}
+	// A further pass finds nothing new, and seq 3 stays stored.
+	r = h.must("", "archive", stream, producer, "-dir", held)
+	if strings.Contains(r.stdout, "retracted seqs") {
+		t.Fatalf("retracted twice:\n%s", r.stdout)
+	}
+	if got, _ := filepath.Glob(filepath.Join(rootH, "batches", "0000000000000003-*.beef")); len(got) != 1 {
+		t.Fatalf("seq 3: %v", got)
+	}
+
 	// An archive started after the retraction recovers seq 2's commitment
 	// from seq 3's prev.
 	late := t.TempDir()
-	r := h.must("", "archive", stream, producer, "-dir", late)
+	r = h.must("", "archive", stream, producer, "-dir", late)
 	if !strings.Contains(r.stdout, "interval 1  proven-with-holes  seqs 1 to 4") || !strings.Contains(r.stdout, "holes 2") {
 		t.Fatalf("late archive:\n%s\n%s", r.stdout, r.stderr)
 	}
 	f, _ := readInterval(t, filepath.Join(late, stream, producer), 1)
-	fh, _ := readInterval(t, filepath.Join(held, stream, producer), 1)
 	if f.Root != fh.Root || f.Leaves[1].Held || !fh.Leaves[1].Held || f.Leaves[1].Commitment != fh.Leaves[1].Commitment {
 		t.Fatalf("hole: %+v\nheld: %+v", f.Leaves[1], fh.Leaves[1])
 	}
-	// The interval's last seq retracted: nothing names its commitment.
-	h.must("", append([]string{"sweep", stream, "-retract-seqs", "4", "-yes"}, fast...)...)
-	h.want(h.run("", "archive", stream, producer, "-dir", t.TempDir()), exitIncomplete, "seq 4, the interval's last, is held by no file")
+	// The auditor proves it the same way and names the seq retracted.
+	v := h.must("", "verify-interval", stream, producer, "1")
+	if !strings.Contains(v.stdout, "retracted seqs 2: no host serves them") || !strings.Contains(v.stdout, "VERIFIED interval 1") || !strings.Contains(v.stdout, "root "+fh.Root) {
+		t.Fatalf("verify-interval:\n%s", v.stdout)
+	}
+
+	// A second interval whose last seq is retracted: nothing names its
+	// commitment, so neither a fresh archive nor the auditor can recover
+	// it, but an archive holding the receipt proves the interval.
+	h.produce(linesOf(10, 4), stream, "-max-lines", "1")
+	h.must("", "archive", stream, producer, "-dir", held)
+	f2, _ := readInterval(t, rootH, 2)
+	h.must("", append([]string{"sweep", stream, "-retract-seqs", "8", "-yes"}, fast...)...)
+	h.want(h.run("", "archive", stream, producer, "-dir", t.TempDir()), exitIncomplete, "seq 8, the interval's last, is held by no file")
+	h.want(h.run("", "verify-interval", stream, producer, "2"), exitIncomplete, "cannot be recovered")
+	r = h.must("", "archive", stream, producer, "-dir", held)
+	if !strings.Contains(r.stdout, "retracted seqs 8") {
+		t.Fatalf("recheck of seq 8:\n%s", r.stdout)
+	}
+	// Proving interval 2 again from these files (as a rebuilt index would):
+	// the receipt completes the root.
+	if err := os.Remove(filepath.Join(rootH, "intervals", fmt.Sprintf("%016d.json", 2))); err != nil {
+		t.Fatal(err)
+	}
+	a := &archive.Archive{Dir: held, Stream: stream}
+	a.Producer = mustHex(producer)
+	cur, err := a.LoadCursor()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cur.Intervals = 1
+	curRaw, _ := json.Marshal(cur)
+	if err := os.WriteFile(filepath.Join(rootH, "archive.json"), curRaw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r = h.must("", "archive", stream, producer, "-dir", held)
+	if !strings.Contains(r.stdout, "interval 2  proven  seqs 5 to 8  root "+f2.Root) || !strings.Contains(r.stdout, "retracted 8") {
+		t.Fatalf("receipt proof:\n%s\n%s", r.stdout, r.stderr)
+	}
+	g, _ := readInterval(t, rootH, 2)
+	if len(g.Retracted) != 1 || g.Retracted[0] != 8 || !g.Leaves[3].Retracted || g.Leaves[3].Held || len(g.Holes) != 0 {
+		t.Fatalf("interval 2 from the receipt: %+v", g)
+	}
 }

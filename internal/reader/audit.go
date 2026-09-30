@@ -47,8 +47,14 @@ type Report struct {
 	// Batches are the interval's batches in seq order, as chosen by the
 	// root.
 	Batches []*Candidate
-	// Missing are seqs of the interval no host answered.
+	// Missing are seqs of the interval no host answered whose commitment
+	// could not be recovered.
 	Missing []uint64
+	// Retracted are seqs of a verified interval that no host serves, each
+	// commitment taken from the next batch's prev, as an archive proves an
+	// interval across a retraction (docs/spec.md section 8.4). Batches
+	// holds none for them.
+	Retracted []uint64
 	// Refusals are answers refused along the way, for the trace.
 	Refusals []string
 }
@@ -69,7 +75,10 @@ func (r *Report) incomplete(format string, args ...any) *Report {
 // each later one: the one that spends its predecessor), holds every token to
 // the anchor rules and its proof to the reader's headers, then asks the
 // batch class for every seq interval n covers and requires the root over
-// their commitments to equal the token's. The outputs a token's inputs
+// their commitments to equal the token's. A seq no host serves takes its
+// commitment from the next batch's prev, as an archive's does, and is
+// reported in Retracted; one whose commitment nothing names leaves the
+// interval Incomplete. The outputs a token's inputs
 // spend are read from the predecessor token's transaction, from the funding
 // trees the interval's carriers carry, or from Txs.
 //
@@ -163,14 +172,19 @@ func (c *Client) VerifyInterval(ctx context.Context, stream string, producer []b
 			return r.refuse("interval %d token %s: %s: %v", t.Anchor.Interval, t.Txid, logrec.Reason(err), err), nil
 		}
 	}
-	if len(r.Missing) > 0 {
-		return r.incomplete("interval %d: %d of %d seqs answered by no host", n, len(r.Missing), last.Count), nil
-	}
-	chosen, ok := choose(held, last)
-	if !ok {
+	chosen, holes, ok := choose(held, last)
+	switch {
+	case !ok && len(r.Missing) > 0:
+		return r.incomplete("interval %d: %d of %d seqs answered by no host, and their commitments cannot be recovered from the next batch's prev", n, len(r.Missing), last.Count), nil
+	case !ok:
 		return r.refuse("interval %d: root-mismatch: no choice of the answered batches reproduces the anchor's root", n), nil
 	}
-	r.Batches = chosen
+	for _, b := range chosen {
+		if b != nil {
+			r.Batches = append(r.Batches, b)
+		}
+	}
+	r.Retracted, r.Missing = holes, nil
 	r.Outcome = Verified
 	return r, nil
 }
@@ -275,35 +289,51 @@ func (c *Client) coins(ctx context.Context, tx *transaction.Transaction, prev *T
 	return coins, "", nil
 }
 
-// choose picks one candidate per seq so that the root is the anchor's: the
-// next batch's prev selects a candidate, and each candidate at the last
-// seq is tried.
-func choose(held map[uint64][]*Candidate, a *logrec.Anchor) ([]*Candidate, bool) {
+// choose picks one candidate per seq so that the root is the anchor's, as
+// an archive proves an interval (docs/spec.md section 8.4): the next
+// batch's prev selects a candidate, and each candidate at the last seq is
+// tried. A seq no host serves takes its commitment from the next batch's
+// prev and is returned in holes, with a nil candidate; the seq before a
+// hole, whose commitment nothing names, must then have exactly one
+// candidate. A hole at the last seq, or two in a row, cannot be recovered.
+func choose(held map[uint64][]*Candidate, a *logrec.Anchor) (chosen []*Candidate, holes []uint64, ok bool) {
 	for _, tail := range held[a.Last()] {
-		chosen := make([]*Candidate, a.Count)
-		chosen[a.Count-1] = tail
-		ok := true
+		chosen = make([]*Candidate, a.Count)
+		cs := make([][32]byte, a.Count)
+		chosen[a.Count-1], cs[a.Count-1] = tail, tail.Carrier.Commitment
+		next, nextKnown := tail.Carrier.Batch.Prev, true
+		holes = nil
+		ok = true
 		for i := int(a.Count) - 2; i >= 0; i-- {
-			next := chosen[i+1]
-			pick, found := Link(held[a.First+uint64(i)], next)
-			if !found {
+			seq := a.First + uint64(i)
+			cands := held[seq]
+			var pick *Candidate
+			switch {
+			case len(cands) == 0 && nextKnown:
+				cs[i], nextKnown = next, false
+				holes = append([]uint64{seq}, holes...)
+				continue
+			case nextKnown:
+				for _, c := range cands {
+					if c.Carrier.Commitment == next {
+						pick = c
+					}
+				}
+			case len(cands) == 1:
+				pick = cands[0]
+			}
+			if pick == nil {
 				ok = false
 				break
 			}
-			chosen[i] = pick
+			chosen[i], cs[i] = pick, pick.Carrier.Commitment
+			next, nextKnown = pick.Carrier.Batch.Prev, true
 		}
-		if !ok {
-			continue
-		}
-		cs := make([][32]byte, len(chosen))
-		for i, cand := range chosen {
-			cs[i] = cand.Carrier.Commitment
-		}
-		if logrec.IntervalRoot(cs) == a.Root {
-			return chosen, true
+		if ok && logrec.IntervalRoot(cs) == a.Root {
+			return chosen, holes, true
 		}
 	}
-	return nil, false
+	return nil, nil, false
 }
 
 // Token reads one answered anchor token for interval k of producer's
@@ -369,4 +399,51 @@ func (c *Client) Next(ctx context.Context, stream string, producer []byte, k uin
 	r.Chain = []*Token{canon}
 	r.Outcome = Verified
 	return canon, r, nil
+}
+
+// Retraction looks for the evidence that a stored carrier was retracted
+// (docs/spec.md section 8.4): a transaction other than the carrier that
+// spends its funding outpoint and is mined in the reader's headers. Txs
+// must also be a SpendSource to name the spender, whose answer is only a
+// lead: the spender is fetched with its proof by txid and checked here.
+// With no such transaction, why says what was found; an error is a source
+// that answered other bytes for a txid, or no header source.
+func (c *Client) Retraction(ctx context.Context, cand *Candidate) (sweep *transaction.Transaction, why string, err error) {
+	if c.Headers == nil {
+		return nil, "", errors.New("no header source: a proof cannot be checked")
+	}
+	ss, ok := c.Txs.(SpendSource)
+	if !ok {
+		return nil, "no transaction source that answers spends is configured (asset or tx_source)", nil
+	}
+	fund := cand.Carrier.Funding
+	id, err := ss.Spender(ctx, fund.Txid.String(), fund.Index)
+	switch {
+	case err != nil:
+		return nil, fmt.Sprintf("the spend of %s could not be read: %v", fund.String(), err), nil
+	case id == "":
+		return nil, fmt.Sprintf("its funding output %s is unspent", fund.String()), nil
+	case id == cand.Tx.TxID().String():
+		return nil, "its funding output is spent by the carrier itself", nil
+	}
+	tx, err := c.Fetch(ctx, id, true)
+	if errors.Is(err, ErrOtherBytes) {
+		return nil, "", err
+	}
+	if err != nil {
+		return nil, fmt.Sprintf("the spender %s could not be fetched: %v", id, err), nil
+	}
+	spends := false
+	for _, in := range tx.Inputs {
+		if in.SourceTXID != nil && in.SourceTXID.Equal(fund.Txid) && in.SourceTxOutIndex == fund.Index {
+			spends = true
+		}
+	}
+	if !spends {
+		return nil, fmt.Sprintf("the named spender %s does not spend %s", id, fund.String()), nil
+	}
+	if !logrec.Mined(ctx, tx, c.Headers) {
+		return nil, fmt.Sprintf("the spender %s is not mined in the header source", id), nil
+	}
+	return tx, "", nil
 }

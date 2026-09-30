@@ -308,6 +308,21 @@ func TestClientE2E(t *testing.T) {
 	}
 	step("sweep: seq 7 retracted at host a; a fresh archive proves interval 2 with the hole the anchor commits")
 
+	// The archive that stored seq 7 keeps a receipt and drops its bytes;
+	// the auditor proves interval 2 across the retracted seq.
+	r = h.must("", "archive", stream, producer, "-dir", dirA, "-host", a.url, "-content-dir", content)
+	if !strings.Contains(r.stdout, "retracted seqs 7: receipt and sweep kept") {
+		t.Fatalf("archive recheck:\n%s\n%s", r.stdout, r.stderr)
+	}
+	if got, _ := filepath.Glob(filepath.Join(dirA, stream, producer, "batches", "0000000000000007-*")); len(got) != 0 {
+		t.Fatalf("seq 7 bytes kept: %v", got)
+	}
+	r = h.must("", "verify-interval", stream, producer, "2")
+	if !strings.Contains(r.stdout, "retracted seqs 7") || !strings.Contains(r.stdout, "VERIFIED interval 2") {
+		t.Fatalf("verify across the retraction:\n%s", r.stdout)
+	}
+	step("archive a marks seq 7 retracted (receipt kept, bytes dropped); verify-interval 2 VERIFIED across it")
+
 	r = h.must("", "doctor")
 	if !strings.Contains(r.stdout, "host        "+a.url+" answering") {
 		t.Fatalf("doctor:\n%s", r.stdout)
@@ -401,6 +416,19 @@ func TestClientE2EUnicast(t *testing.T) {
 		h.want(h.run("", "-hosts", host.url, "read", stream, producer, "-from", "2", "-to", "2"), exitIncomplete, "seq 2: MISSING")
 	}
 	step("sweep: seq 2 retracted at both hosts")
+
+	for i, host := range []*refHost{a, b} {
+		dir := []string{dirA, dirB}[i]
+		r = h.must("", "archive", stream, producer, "-dir", dir, "-host", host.url)
+		if !strings.Contains(r.stdout, "retracted seqs 2: receipt and sweep kept") {
+			t.Fatalf("archive recheck at %s:\n%s\n%s", host.url, r.stdout, r.stderr)
+		}
+		r = h.must("", "-hosts", host.url, "verify-interval", stream, producer, "1")
+		if !strings.Contains(r.stdout, "retracted seqs 2") || !strings.Contains(r.stdout, "VERIFIED interval 1") {
+			t.Fatalf("verify at %s:\n%s", host.url, r.stdout)
+		}
+	}
+	step("both archives mark seq 2 retracted; verify-interval 1 VERIFIED across it at both hosts")
 
 	r = h.must("", "doctor")
 	if !strings.Contains(r.stdout, "mode        unicast") || !strings.Contains(r.stdout, "host        "+b.url+" answering") {

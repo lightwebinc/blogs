@@ -272,7 +272,10 @@ anchor token (interval 1 the first mined, each later one the token that
 spends its predecessor); hold each to the anchor rules and its proof to the
 header source; ask the batch class for every seq interval n covers, verify
 each carrier, and require the RFC 6962 root over their commitments to equal
-the token's. The outputs an anchor's inputs spend are read from the
+the token's. A seq no host serves takes its commitment from the next
+batch's prev, as an archive proves across a retraction, and is reported
+retracted; one whose commitment nothing names (the interval's last seq, or
+the first of two in a row) leaves the interval INCOMPLETE. The outputs an anchor's inputs spend are read from the
 predecessor token, from the funding trees the interval's carriers carry, or
 from the node (asset), which an anchor's fee tree needs. Needs no producer
 home; needs hosts and header_url.
@@ -317,6 +320,9 @@ func cmdVerifyInterval(ctx context.Context, g *global, args []string) error {
 	}
 	for _, b := range rep.Batches {
 		fmt.Fprintf(out, "seq %d  carrier %s  timestamp %d  %d line(s)\n", b.Carrier.Batch.Seq, b.Tx.TxID(), b.Carrier.Batch.Timestamp, b.Carrier.Batch.Count)
+	}
+	if len(rep.Retracted) > 0 {
+		fmt.Fprintf(out, "retracted seqs %s: no host serves them; each commitment is the next batch's prev\n", seqList(rep.Retracted))
 	}
 	if len(rep.Missing) > 0 {
 		fmt.Fprintf(out, "missing seqs %s\n", seqList(rep.Missing))

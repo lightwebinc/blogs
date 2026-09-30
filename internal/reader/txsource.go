@@ -3,6 +3,7 @@ package reader
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -150,3 +151,94 @@ func (c *Client) Fetch(ctx context.Context, txid string, proof bool) (*transacti
 var ErrOtherBytes = errors.New("other bytes")
 
 var errNoTxSource = errors.New("no transaction source: configure asset (a node's asset API) or tx_source (woc:main or woc:test)")
+
+// SpendSource answers which transaction spent an output, for an archive
+// checking whether a batch it stored was retracted. Its answer is never
+// trusted: Client.Retraction fetches the spender with its proof and checks
+// that it spends the output and is mined in the reader's headers.
+type SpendSource interface {
+	// Spender is the txid of the transaction that spent txid:vout, or ""
+	// while the output is unspent.
+	Spender(ctx context.Context, txid string, vout uint32) (string, error)
+}
+
+// getBounded fetches url with a bounded body; a 404 is (nil, nil).
+func getBounded(ctx context.Context, c *http.Client, timeout time.Duration, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	if c == nil {
+		c = &http.Client{Timeout: timeout, Transport: &http.Transport{Proxy: nil}}
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxTxAnswer+1))
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case resp.StatusCode == http.StatusNotFound:
+		return nil, nil
+	case resp.StatusCode != http.StatusOK:
+		return nil, fmt.Errorf("GET %s: status %d", url, resp.StatusCode)
+	case len(body) > maxTxAnswer:
+		return nil, fmt.Errorf("GET %s: answer over %d bytes", url, maxTxAnswer)
+	}
+	return body, nil
+}
+
+// Spender reads the node's UTXO view of txid (/api/v1/utxos/<txid>/json)
+// and names the spender of output vout, if it is spent.
+func (s AssetSource) Spender(ctx context.Context, txid string, vout uint32) (string, error) {
+	body, err := getBounded(ctx, s.Asset.Client, 30*time.Second, strings.TrimRight(s.Asset.Base, "/")+"/api/v1/utxos/"+txid+"/json")
+	if err != nil {
+		return "", err
+	}
+	if body == nil {
+		return "", fmt.Errorf("the node does not know transaction %s", txid)
+	}
+	var outs []struct {
+		Vout     uint32 `json:"vout"`
+		Status   string `json:"status"`
+		Spending *struct {
+			TxID string `json:"txId"`
+		} `json:"spendingData"`
+	}
+	if err := json.Unmarshal(body, &outs); err != nil {
+		return "", fmt.Errorf("the node's UTXO view of %s: %w", txid, err)
+	}
+	for _, o := range outs {
+		if o.Vout != vout {
+			continue
+		}
+		if o.Status == "SPENT" && o.Spending != nil && o.Spending.TxID != "" {
+			return o.Spending.TxID, nil
+		}
+		return "", nil
+	}
+	return "", fmt.Errorf("the node's UTXO view of %s has no output %d", txid, vout)
+}
+
+// Spender asks WhatsOnChain (/tx/<txid>/<vout>/spent), which answers 404
+// for an unspent output.
+func (w WhatsOnChain) Spender(ctx context.Context, txid string, vout uint32) (string, error) {
+	base := w.Base
+	if base == "" {
+		base = WhatsOnChainBase
+	}
+	body, err := getBounded(ctx, w.HTTP, w.Timeout, fmt.Sprintf("%s/%s/tx/%s/%d/spent", strings.TrimRight(base, "/"), w.Network, txid, vout))
+	if err != nil || body == nil {
+		return "", err
+	}
+	var sp struct {
+		TxID string `json:"txid"`
+	}
+	if err := json.Unmarshal(body, &sp); err != nil {
+		return "", fmt.Errorf("WhatsOnChain (%s): spender of %s:%d: %w", w.Network, txid, vout, err)
+	}
+	return sp.TxID, nil
+}

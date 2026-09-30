@@ -28,10 +28,12 @@ func TestSweepRetractsNamedBatchesAndLeavesTheirPositions(t *testing.T) {
 	if len(st.Sweeps) != 1 || !st.Sweeps[0].Done || st.Sweeps[0].Kind != state.SweepRetract || st.Sweeps[0].Height == 0 {
 		t.Fatalf("recorded sweeps: %+v", st.Sweeps)
 	}
-	// The seq is a hole the anchor still commits: a reader finds it missing
-	// and the audit cannot complete the interval from the hosts alone.
+	// The seq is a hole the anchor still commits: a reader finds it missing,
+	// and the audit proves the interval across it from seq 3's prev.
 	h.want(h.run("", "read", stream, producer, "-to", "4"), exitIncomplete, "seq 2: MISSING")
-	h.want(h.run("", "verify-interval", stream, producer, "1"), exitIncomplete, "1 of 4 seqs answered by no host")
+	if v := h.must("", "verify-interval", stream, producer, "1"); !strings.Contains(v.stdout, "retracted seqs 2") || !strings.Contains(v.stdout, "VERIFIED interval 1") {
+		t.Fatalf("verify-interval:\n%s", v.stdout)
+	}
 	// Retracted already: the hosts no longer hold its carrier.
 	h.want(h.run("", append([]string{"sweep", stream, "-retract-seqs", "2", "-yes"}, fast...)...), exitIncomplete, "no host holds its carrier")
 	// The stream goes on.

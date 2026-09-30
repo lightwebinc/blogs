@@ -22,12 +22,28 @@
 //	                                height, the root, and every seq's
 //	                                commitment with its RFC 6962 inclusion
 //	                                path
+//	retracted/<seq>-<carrier>.json  the receipt of a stored batch found
+//	                                retracted: what was read from it, its
+//	                                commitment, and the sweep that spent
+//	                                its funding output
+//	retracted/<seq>-<carrier>.sweep.beef
+//	                                that sweep, with its proof
+//
+// Each pass first asks the host again for every seq it has stored. A stored
+// carrier the host no longer serves is checked for a retraction: a mined
+// transaction other than the carrier spending its funding output, named by
+// the transaction source and checked against the headers. When one is
+// found the archive writes the receipt and the sweep, then drops the
+// batch's bytes (its BEEF, record file and content). The receipt keeps the
+// seq a numbered position: it completes an interval's root (docs/spec.md
+// section 8.4), and its prev lets a proof continue past it.
 //
 // <seq> and <interval> are 16 decimal digits, zero padded, so a directory
 // listing is in order; <carrier> and <token> are txids. Every file is
 // written atomically and never rewritten, so a pass that stops part way is
 // continued by the next, and two archives of the same stream hold the same
-// bytes.
+// bytes. An interval file records what the archive held when it was proven;
+// a later retraction adds a receipt and does not rewrite it.
 package archive
 
 import (
@@ -42,6 +58,7 @@ import (
 	"strings"
 
 	"github.com/bsv-blockchain/go-sdk/chainhash"
+	"github.com/bsv-blockchain/go-sdk/transaction"
 
 	"github.com/lightwebinc/bcommon/commit"
 
@@ -95,12 +112,27 @@ type IntervalFile struct {
 	Height    uint32 `json:"height"`
 	Position  uint64 `json:"position"`
 	PrevToken string `json:"prevToken,omitempty"`
-	// Status is proven (every batch held) or proven-with-holes (Holes are
-	// seqs whose commitment was recovered from the next batch's prev, whose
-	// bytes this archive does not hold: retracted, or never delivered).
+	// Status is proven (every seq held as a batch or a retraction receipt)
+	// or proven-with-holes (Holes are seqs whose commitment was recovered
+	// from the next batch's prev, whose bytes this archive does not hold
+	// and never held: retracted, or never delivered).
 	Status string   `json:"status"`
 	Holes  []uint64 `json:"holes,omitempty"`
-	Leaves []Leaf   `json:"leaves"`
+	// Retracted are seqs held as a retraction receipt.
+	Retracted []uint64 `json:"retracted,omitempty"`
+	Leaves    []Leaf   `json:"leaves"`
+}
+
+// Receipt is retracted/<seq>-<carrier>.json: a stored batch found
+// retracted, whose bytes were dropped.
+type Receipt struct {
+	BatchFile
+	// Commitment is C, the carrier's txid, which the anchor commits.
+	Commitment string `json:"commitment"`
+	// Sweep is the mined transaction that spent the funding output, and
+	// SweepHeight the block it is in.
+	Sweep       string `json:"sweep"`
+	SweepHeight uint32 `json:"sweepHeight"`
 }
 
 // Leaf is one position of an interval.
@@ -108,6 +140,8 @@ type Leaf struct {
 	Seq        uint64 `json:"seq"`
 	Commitment string `json:"commitment"`
 	Held       bool   `json:"held"`
+	// Retracted is a seq held as a retraction receipt: its bytes dropped.
+	Retracted bool `json:"retracted,omitempty"`
 	// Path is the RFC 6962 inclusion path, leaf to root: each step the
 	// sibling's hash in hex, prefixed L: when it sits to the left.
 	Path []string `json:"path"`
@@ -142,6 +176,8 @@ type Summary struct {
 	Stopped string
 	// Refused counts answers refused.
 	Refused int
+	// Retracted are the seqs whose stored batch this pass found retracted.
+	Retracted []uint64
 }
 
 func (a *Archive) note(format string, args ...any) {
@@ -217,13 +253,16 @@ func (a *Archive) Pass(ctx context.Context) (*Summary, error) {
 	one := *a.Client
 	one.Hosts = []string{a.Host}
 	s := &Summary{}
+	if err := a.recheck(ctx, s); err != nil {
+		return nil, err
+	}
 	for seq := cur.Next; seq <= logrec.MaxSafe; seq++ {
 		n, held, err := a.fetch(ctx, seq, s)
 		if err != nil {
 			return nil, err
 		}
 		s.Stored += n
-		if !held {
+		if !held && len(a.receipts(seq)) == 0 {
 			break
 		}
 		cur.Next = seq + 1
@@ -250,7 +289,7 @@ func (a *Archive) Pass(ctx context.Context) (*Summary, error) {
 			break
 		}
 		for seq := tok.Anchor.First; seq <= tok.Anchor.Last(); seq++ {
-			if len(a.held(seq)) > 0 {
+			if len(a.held(seq)) > 0 || len(a.receipts(seq)) > 0 {
 				continue
 			}
 			n, _, err := a.fetch(ctx, seq, s)
@@ -278,6 +317,10 @@ func (a *Archive) Pass(ctx context.Context) (*Summary, error) {
 			return nil, err
 		}
 		cur.Intervals = k
+		// A proven interval settles every seq it covers, held or not.
+		if cur.Next <= tok.Anchor.Last() {
+			cur.Next = tok.Anchor.Last() + 1
+		}
 		if err := writeJSON(a.path("archive.json"), cur); err != nil {
 			return nil, err
 		}
@@ -326,7 +369,7 @@ func (a *Archive) store(ctx context.Context, cand *reader.Candidate) (int, error
 	b := cand.Carrier.Batch
 	id := cand.Tx.TxID().String()
 	name := pad(b.Seq) + "-" + id
-	if exists(a.path("batches", name+".json")) {
+	if exists(a.path("batches", name+".json")) || exists(a.path("retracted", name+".json")) {
 		return 0, nil
 	}
 	if err := write(a.path("batches", name+".beef"), cand.Beef); err != nil {
@@ -409,16 +452,40 @@ func (a *Archive) token(ctx context.Context, k uint64) (*reader.Token, error) {
 	return t, nil
 }
 
-// prove builds the interval's proof from the stored batches: one
-// candidate per seq, chosen from the last seq backwards by each batch's
-// prev, a seq held by no file taking its commitment from the next batch's
-// prev (spec section 8.4), and the root over them equal to the token's.
-// A nil file comes with the reason it could not be proven.
+// position is one thing an archive holds at a seq: a stored carrier, or
+// the receipt of one retracted.
+type position struct {
+	c, prev   [32]byte
+	retracted bool
+}
+
+// positions are the stored carriers and receipts at seq.
+func (a *Archive) positions(seq uint64) []position {
+	var out []position
+	for _, c := range a.held(seq) {
+		out = append(out, position{c: c.Carrier.Commitment, prev: c.Carrier.Batch.Prev})
+	}
+	for _, r := range a.receipts(seq) {
+		c, err1 := chainhash.NewHashFromHex(r.Commitment)
+		p, err2 := chainhash.NewHashFromHex(r.Prev)
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		out = append(out, position{c: [32]byte(*c), prev: [32]byte(*p), retracted: true})
+	}
+	return out
+}
+
+// prove builds the interval's proof from the stored batches and receipts:
+// one per seq, chosen from the last seq backwards by each one's prev, a seq
+// held by nothing taking its commitment from the next batch's prev (spec
+// section 8.4), and the root over them equal to the token's. A nil file
+// comes with the reason it could not be proven.
 func (a *Archive) prove(_ context.Context, tok, prev *reader.Token) (*IntervalFile, string, error) {
 	an := tok.Anchor
-	held := map[uint64][]*reader.Candidate{}
+	held := map[uint64][]position{}
 	for seq := an.First; seq <= an.Last(); seq++ {
-		held[seq] = a.held(seq)
+		held[seq] = a.positions(seq)
 	}
 	tails := held[an.Last()]
 	if len(tails) == 0 {
@@ -428,16 +495,17 @@ func (a *Archive) prove(_ context.Context, tok, prev *reader.Token) (*IntervalFi
 	for _, tail := range tails {
 		cs := make([][32]byte, an.Count)
 		heldAt := make([]bool, an.Count)
-		cs[an.Count-1], heldAt[an.Count-1] = tail.Carrier.Commitment, true
-		next := tail.Carrier.Batch.Prev
+		retrAt := make([]bool, an.Count)
+		cs[an.Count-1], heldAt[an.Count-1], retrAt[an.Count-1] = tail.c, !tail.retracted, tail.retracted
+		next := tail.prev
 		nextKnown := true
 		ok := true
 		for i := int(an.Count) - 2; i >= 0; i-- {
 			seq := an.First + uint64(i)
-			var pick *reader.Candidate
-			for _, c := range held[seq] {
-				if nextKnown && c.Carrier.Commitment == next {
-					pick = c
+			var pick *position
+			for j, c := range held[seq] {
+				if nextKnown && c.c == next {
+					pick = &held[seq][j]
 				}
 			}
 			switch {
@@ -446,7 +514,7 @@ func (a *Archive) prove(_ context.Context, tok, prev *reader.Token) (*IntervalFi
 				cs[i], nextKnown = next, false
 				continue
 			case pick == nil && !nextKnown && len(held[seq]) == 1:
-				pick = held[seq][0]
+				pick = &held[seq][0]
 			case pick == nil:
 				ok = false
 				why = fmt.Sprintf("seq %d: no stored batch links to seq %d", seq, seq+1)
@@ -454,8 +522,8 @@ func (a *Archive) prove(_ context.Context, tok, prev *reader.Token) (*IntervalFi
 			if !ok {
 				break
 			}
-			cs[i], heldAt[i] = pick.Carrier.Commitment, true
-			next, nextKnown = pick.Carrier.Batch.Prev, true
+			cs[i], heldAt[i], retrAt[i] = pick.c, !pick.retracted, pick.retracted
+			next, nextKnown = pick.prev, true
 		}
 		if !ok {
 			continue
@@ -475,7 +543,7 @@ func (a *Archive) prove(_ context.Context, tok, prev *reader.Token) (*IntervalFi
 			if err != nil {
 				return nil, "", err
 			}
-			l := Leaf{Seq: seq, Commitment: chainhash.Hash(cs[i]).String(), Held: heldAt[i]}
+			l := Leaf{Seq: seq, Commitment: chainhash.Hash(cs[i]).String(), Held: heldAt[i], Retracted: retrAt[i]}
 			for _, st := range path {
 				h := hex.EncodeToString(st.Hash[:])
 				if st.Left {
@@ -483,7 +551,10 @@ func (a *Archive) prove(_ context.Context, tok, prev *reader.Token) (*IntervalFi
 				}
 				l.Path = append(l.Path, h)
 			}
-			if !heldAt[i] {
+			switch {
+			case retrAt[i]:
+				f.Retracted = append(f.Retracted, seq)
+			case !heldAt[i]:
 				f.Holes = append(f.Holes, seq)
 			}
 			f.Leaves = append(f.Leaves, l)
@@ -494,6 +565,116 @@ func (a *Archive) prove(_ context.Context, tok, prev *reader.Token) (*IntervalFi
 		return f, "", nil
 	}
 	return nil, why, nil
+}
+
+// receipts reads the retraction receipts stored for seq.
+func (a *Archive) receipts(seq uint64) []Receipt {
+	names, _ := filepath.Glob(a.path("retracted", pad(seq)+"-*.json"))
+	sort.Strings(names)
+	var out []Receipt
+	for _, n := range names {
+		raw, err := os.ReadFile(n)
+		if err != nil {
+			continue
+		}
+		var r Receipt
+		if json.Unmarshal(raw, &r) == nil && r.Seq == seq {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// recheck asks the host again for every seq with a stored carrier. A
+// stored carrier the host no longer serves is checked for a retraction
+// (reader.Client.Retraction); when one is proven, retract writes its
+// receipt and drops its bytes. One not proven retracted is kept and noted:
+// an empty answer proves nothing.
+func (a *Archive) recheck(ctx context.Context, s *Summary) error {
+	names, _ := filepath.Glob(a.path("batches", "*.beef"))
+	seqs := map[uint64]bool{}
+	var order []uint64
+	for _, n := range names {
+		var seq uint64
+		if _, err := fmt.Sscanf(filepath.Base(n), "%016d-", &seq); err != nil || seqs[seq] {
+			continue
+		}
+		seqs[seq] = true
+		order = append(order, seq)
+	}
+	sort.Slice(order, func(i, j int) bool { return order[i] < order[j] })
+	c := *a.Client
+	c.Hosts = []string{a.Host}
+	for _, seq := range order {
+		stored := a.held(seq)
+		if len(stored) == 0 {
+			continue
+		}
+		live, _, err := c.Batch(ctx, a.Stream, a.Producer, seq, false)
+		if err != nil {
+			return err
+		}
+		served := map[string]bool{}
+		for _, l := range live {
+			served[l.Tx.TxID().String()] = true
+		}
+		for _, cand := range stored {
+			id := cand.Tx.TxID().String()
+			if served[id] {
+				continue
+			}
+			sweep, why, err := c.Retraction(ctx, cand)
+			if err != nil {
+				return err
+			}
+			if sweep == nil {
+				a.note("seq %d: carrier %s is no longer served by the host and is kept: %s", seq, id, why)
+				continue
+			}
+			if err := a.retract(cand, sweep); err != nil {
+				return err
+			}
+			s.Retracted = append(s.Retracted, seq)
+		}
+	}
+	return nil
+}
+
+// retract writes a stored carrier's receipt and its sweep, then drops the
+// carrier's bytes. The receipt is written first, so a pass that stops part
+// way leaves the receipt, and the next pass (which then finds the batch
+// files beside a receipt) finishes the drop.
+func (a *Archive) retract(cand *reader.Candidate, sweep *transaction.Transaction) error {
+	b := cand.Carrier.Batch
+	id := cand.Tx.TxID().String()
+	name := pad(b.Seq) + "-" + id
+	var f BatchFile
+	raw, err := os.ReadFile(a.path("batches", name+".json"))
+	if err == nil {
+		err = json.Unmarshal(raw, &f)
+	}
+	if err != nil {
+		return fmt.Errorf("seq %d: carrier %s: %w", b.Seq, id, err)
+	}
+	f.Content = "dropped"
+	beef, err := sweep.AtomicBEEF(false)
+	if err != nil {
+		return err
+	}
+	if err := write(a.path("retracted", name+".sweep.beef"), beef); err != nil {
+		return err
+	}
+	r := Receipt{BatchFile: f, Commitment: chainhash.Hash(cand.Carrier.Commitment).String(), Sweep: sweep.TxID().String(), SweepHeight: sweep.MerklePath.BlockHeight}
+	if err := writeJSON(a.path("retracted", name+".json"), r); err != nil {
+		return err
+	}
+	for _, p := range []string{a.path("content", name+".log"), a.path("batches", name+".beef"), a.path("batches", name+".json")} {
+		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	a.note("seq %d: carrier %s retracted by sweep %s at height %d; receipt kept, bytes dropped", b.Seq, id, r.Sweep, r.SweepHeight)
+	return nil
 }
 
 // Anchor rebuilds the anchor record an interval file describes, enough to
