@@ -2,6 +2,7 @@ package produce
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
@@ -273,6 +274,33 @@ func (e *Engine) record(tx *transaction.Transaction, kind string, info TreeInfo,
 	return sw, nil
 }
 
+// rebuildSweep rebuilds a sweep from the stream's state. A mined sweep is
+// its raw bytes and proof, through funding.Rebuild. An unmined one is the
+// BEEF record kept, and that BEEF can hold a stand-in parent with no inputs:
+// the Payer builds one for a coinbase fee coin, carrying just the output the
+// sweep spends, which is all signing and the settlement leg's extended
+// format need. bcommon's guard refuses a transaction of no inputs in any
+// BEEF it reads, so this one, which the producer wrote itself into its own
+// mode 0600 state and which never reaches a host, is parsed by the SDK
+// directly and held to the txid recorded beside it.
+func rebuildSweep(sw *state.Sweep) (*transaction.Transaction, error) {
+	if sw.BumpHex != "" || sw.BeefHex == "" {
+		return funding.Rebuild(sw.RawHex, sw.BumpHex, sw.BeefHex)
+	}
+	b, err := hex.DecodeString(sw.BeefHex)
+	if err != nil {
+		return nil, err
+	}
+	_, tx, _, err := transaction.ParseBeef(b)
+	if err != nil {
+		return nil, err
+	}
+	if tx == nil || tx.TxID().String() != sw.Txid {
+		return nil, errors.New("the kept BEEF does not hold the sweep")
+	}
+	return tx, nil
+}
+
 // FinishSweeps settles every sweep in flight, waits for it to mine, adds
 // its change to the pool, and publishes it once, with its proof, to the
 // stream's topic when the hosts hold what it spends. An error leaves the
@@ -284,7 +312,7 @@ func (e *Engine) FinishSweeps(ctx context.Context) error {
 		if sw.Done {
 			continue
 		}
-		tx, err := funding.Rebuild(sw.RawHex, sw.BumpHex, sw.BeefHex)
+		tx, err := rebuildSweep(sw)
 		if err != nil {
 			return fmt.Errorf("sweep %s: %w", sw.Txid, err)
 		}
