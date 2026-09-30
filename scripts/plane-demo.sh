@@ -2,11 +2,11 @@
 # The blogs demo against three archive hosts: two overlay hosts that receive
 # the stream from the plane, and a third host process that does not.
 #
-#   scripts/lab-demo.sh [-c ENV_FILE] setup   # home, funds, stream; prints the host lines
-#   scripts/lab-demo.sh [-c ENV_FILE] run     # the demo; run it twice, green both times
+#   scripts/plane-demo.sh [-c ENV_FILE] setup   # home, funds, stream; prints the host lines
+#   scripts/plane-demo.sh [-c ENV_FILE] run     # the demo; run it twice, green both times
 #
-# Every endpoint comes from ENV_FILE (default scripts/lab-demo.env, which git
-# ignores); scripts/lab-demo.env.example lists the keys with documentation
+# Every endpoint comes from ENV_FILE (default scripts/plane-demo.env, which git
+# ignores); scripts/plane-demo.env.example lists the keys with documentation
 # addresses. Nothing here names a network.
 #
 # setup is idempotent: it creates the producer home once, funds it when it
@@ -28,7 +28,7 @@
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-env_file="$here/lab-demo.env"
+env_file="$here/plane-demo.env"
 while getopts "c:" opt; do
 	case $opt in
 	c) env_file=$OPTARG ;;
@@ -46,7 +46,7 @@ setup | run) ;;
 esac
 
 [ -r "$env_file" ] || {
-	echo "lab-demo: no config at $env_file (copy scripts/lab-demo.env.example and fill it in)" >&2
+	echo "plane-demo: no config at $env_file (copy scripts/plane-demo.env.example and fill it in)" >&2
 	exit 2
 }
 set -a
@@ -58,7 +58,7 @@ need() {
 	local k
 	for k in "$@"; do
 		[ -n "${!k:-}" ] || {
-			echo "lab-demo: $k is not set in $env_file" >&2
+			echo "plane-demo: $k is not set in $env_file" >&2
 			exit 2
 		}
 	done
@@ -72,7 +72,7 @@ FUND_BLOCKS=${FUND_BLOCKS:-101}
 DELIVERY_WAIT=${DELIVERY_WAIT:-180}
 ANCHOR_WAIT=${ANCHOR_WAIT:-15m}
 [ -x "$BLOGS_BIN" ] || {
-	echo "lab-demo: $BLOGS_BIN is not an executable (make blogs)" >&2
+	echo "plane-demo: $BLOGS_BIN is not an executable (make blogs)" >&2
 	exit 2
 }
 mkdir -p "$DEMO_DIR"
@@ -164,7 +164,7 @@ run() {
 	# 1. Produce and anchor.
 	input="$dir/input.log"
 	for i in $(seq 1 "$DEMO_LINES"); do
-		printf 'blogs lab demo %s line %d of %d\n' "$id" "$i" "$DEMO_LINES"
+		printf 'blogs plane demo %s line %d of %d\n' "$id" "$i" "$DEMO_LINES"
 	done >"$input"
 	blogs produce "$STREAM" -max-lines "$DEMO_MAX_LINES" -anchor-wait "$ANCHOR_WAIT" <"$input" >"$dir/produce.out" 2>"$dir/produce.err" ||
 		fail "produce exited $? (see $dir/produce.err)"
