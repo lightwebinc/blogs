@@ -341,22 +341,33 @@ func seqList(s []uint64) string {
 	return strings.Join(parts, " ")
 }
 
-const backfillHelp = `usage: blogs backfill <stream> <producer> -from URL -to URL (-seqs A-B | -interval K) [-anchors K]
+const backfillHelp = `usage: blogs backfill <stream> <producer> [-from URL] [-to URL] (-seqs A-B | -interval K | -anchors K)
 
-Fill holes in the host -to from its sibling -from: each position is asked of
--to first, and fetched from -from only when -to holds nothing; the answer is
-checked (the carrier rules and, with header_url set, the proof) and submitted
-to -to. -interval K fills the anchor chain 1 to K and the seqs interval K
-covers; -seqs fills a range of seqs; -anchors K fills the anchor chain 1 to
-K. Needs no producer home.
+Fill holes in a host from its siblings. Each position is asked of the host
+first and fetched from the first sibling that holds it only when the host
+holds nothing; the answer is checked (the carrier rules and, with
+header_url set, the proof) and submitted to the host.
 
-Exit 0 when every position is held, 1 when the sibling answered something
+-to names the host to fill; without it every configured host is filled in
+turn. -from names the sibling; without it the siblings are the configured
+hosts other than the one being filled. With neither, the configured hosts
+are brought into step with each other, which is how the hosts of a unicast
+producer are repaired after one missed submissions.
+
+-interval K fills the anchor chain 1 to K and the seqs interval K covers;
+-seqs A-B fills a range of seqs; -anchors K fills the anchor chain 1 to K;
+-seqs and -anchors combine. A host admits an anchor only once it holds the
+fee tree the anchor spends, which no lookup class serves, so backfill reads
+it from the node (asset) when a host does not admit a token. Needs no
+producer home.
+
+Exit 0 when every position is held, 1 when a sibling answered something
 refused, 3 when a position is still missing.`
 
 func cmdBackfill(ctx context.Context, g *global, args []string) error {
 	fs := g.flagSet("backfill", backfillHelp)
-	from := fs.String("from", "", "the sibling host's base URL")
-	to := fs.String("to", "", "the host to fill")
+	from := fs.String("from", "", "the sibling to copy from (default: every configured host but the one filled)")
+	to := fs.String("to", "", "the host to fill (default: every configured host in turn)")
 	seqs := fs.String("seqs", "", "a seq range A-B, or one seq")
 	interval := fs.Uint64("interval", 0, "fill the anchor chain to interval K and the seqs it covers")
 	anchors := fs.Uint64("anchors", 0, "fill the anchor chain 1 to K")
@@ -364,13 +375,23 @@ func cmdBackfill(ctx context.Context, g *global, args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(pos) != 2 || *from == "" || *to == "" {
-		return usage("backfill <stream> <producer> -from URL -to URL (-seqs A-B | -interval K)")
+	if len(pos) != 2 {
+		return usage("backfill <stream> <producer> [-from URL] [-to URL] (-seqs A-B | -interval K | -anchors K)")
 	}
 	stream := pos[0]
 	producer, err := streamAndProducer(stream, pos[1])
 	if err != nil {
 		return err
+	}
+	targets, sources := g.cfg.Hosts, g.cfg.Hosts
+	if *to != "" {
+		targets = []string{*to}
+	}
+	if *from != "" {
+		sources = []string{*from}
+	}
+	if len(targets) == 0 || len(sources) == 0 || (len(targets) == 1 && len(sources) == 1 && targets[0] == sources[0]) {
+		return usage("backfill needs a host to fill and another to copy from: -to and -from, or two or more configured hosts")
 	}
 	c := readerFor(g, nil, g.cfg.Timeout)
 	if g.cfg.HeaderURL != "" {
@@ -378,8 +399,7 @@ func cmdBackfill(ctx context.Context, g *global, args []string) error {
 			return err
 		}
 	}
-	b := reader.Backfill{From: *from, To: *to, Stream: stream, Producer: producer, Intervals: max(*anchors, *interval),
-		Note: func(f string, a ...any) { fmt.Fprintf(g.stdout, f+"\n", a...) }}
+	var seqList []uint64
 	switch {
 	case *seqs != "" && *interval != 0:
 		return usage("-seqs and -interval are exclusive")
@@ -389,31 +409,67 @@ func cmdBackfill(ctx context.Context, g *global, args []string) error {
 			return err
 		}
 		for s := a; s <= z; s++ {
-			b.Seqs = append(b.Seqs, s)
+			seqList = append(seqList, s)
 		}
 	case *interval != 0:
-		first, last, err := intervalRange(ctx, c, *from, *to, stream, producer, *interval)
+		first, last, err := intervalRange(ctx, c, unique(targets, sources), stream, producer, *interval)
 		if err != nil {
 			return err
 		}
 		for s := first; s <= last; s++ {
-			b.Seqs = append(b.Seqs, s)
+			seqList = append(seqList, s)
 		}
 	case *anchors == 0:
 		return usage("give -seqs, -interval or -anchors")
 	}
-	res, err := c.Run(ctx, b)
-	if err != nil {
-		return err
+	var total reader.Result
+	var runErr error
+	for _, t := range targets {
+		b := reader.Backfill{From: sources, To: t, Stream: stream, Producer: producer, Intervals: max(*anchors, *interval), Seqs: seqList,
+			Note: func(f string, a ...any) { fmt.Fprintf(g.stdout, f+"\n", a...) }}
+		if len(targets) > 1 {
+			fmt.Fprintf(g.stdout, "filling %s\n", t)
+		}
+		res, err := c.Run(ctx, b)
+		if err != nil {
+			if len(targets) == 1 {
+				return err
+			}
+			// One host down does not stop the others being filled.
+			fmt.Fprintf(g.stdout, "backfill %s to %s: FAILED: %v\n", stream, t, err)
+			if runErr == nil {
+				runErr = err
+			}
+			continue
+		}
+		fmt.Fprintf(g.stdout, "backfill %s to %s: %d held, %d filled, %d missing, %d refused\n", stream, t, res.Held, res.Filled, res.Missing, res.Refused)
+		total.Held += res.Held
+		total.Filled += res.Filled
+		total.Missing += res.Missing
+		total.Refused += res.Refused
 	}
-	fmt.Fprintf(g.stdout, "backfill %s: %d held, %d filled, %d missing, %d refused\n", stream, res.Held, res.Filled, res.Missing, res.Refused)
 	switch {
-	case res.Refused > 0:
+	case total.Refused > 0:
 		return &exitError{exitRefused, ""}
-	case res.Missing > 0:
+	case runErr != nil:
+		return runErr
+	case total.Missing > 0:
 		return &exitError{exitIncomplete, ""}
 	}
 	return nil
+}
+
+// unique is a and then b, each host once, in order.
+func unique(a, b []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, h := range append(append([]string(nil), a...), b...) {
+		if !seen[h] {
+			seen[h] = true
+			out = append(out, h)
+		}
+	}
+	return out
 }
 
 func seqRange(s string) (uint64, uint64, error) {
@@ -429,15 +485,17 @@ func seqRange(s string) (uint64, uint64, error) {
 	return x, y, nil
 }
 
-// intervalRange reads the seqs interval k covers from a token either host
-// answers. Several tokens for one interval (a producer that equivocated)
-// are refused: the operator names the range with -seqs.
-func intervalRange(ctx context.Context, c *reader.Client, from, to, stream string, producer []byte, k uint64) (uint64, uint64, error) {
+// intervalRange reads the seqs interval k covers from a token the first of
+// hosts that holds one answers. Several tokens for one interval (a producer
+// that equivocated) are refused: the operator names the range with -seqs.
+func intervalRange(ctx context.Context, c *reader.Client, hosts []string, stream string, producer []byte, k uint64) (uint64, uint64, error) {
 	q := reader.Query{Stream: stream, Producer: hex.EncodeToString(producer), Interval: k}
-	for _, h := range []string{to, from} {
+	var askErr error
+	for _, h := range hosts {
 		as, err := c.Ask(ctx, h, q)
 		if err != nil {
-			return 0, 0, err
+			askErr = err
+			continue
 		}
 		var found []*logrec.Anchor
 		for _, a := range as {
@@ -454,7 +512,10 @@ func intervalRange(ctx context.Context, c *reader.Client, from, to, stream strin
 			return 0, 0, refused("%s answers %d tokens for interval %d; name the range with -seqs", h, len(found), k)
 		}
 	}
-	return 0, 0, incomplete("neither host holds a token for interval %d", k)
+	if askErr != nil {
+		return 0, 0, askErr
+	}
+	return 0, 0, incomplete("no host holds a token for interval %d", k)
 }
 
 func decodeAnswer(a reader.Answer) (*logrec.Anchor, bool) {

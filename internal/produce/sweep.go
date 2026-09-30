@@ -317,7 +317,14 @@ func (e *Engine) FinishSweeps(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
-			if _, err := e.Legs.Facade.Submit(ctx, e.topic, beef); err != nil {
+			if e.Legs.Hosts != nil {
+				// No lookup class serves a sweep, so no backfill repairs a
+				// host that missed one: every host must take it.
+				o := e.Legs.Hosts.Send(ctx, "sweep "+sw.Txid, e.topic, beef, len(e.Legs.Hosts.Hosts))
+				if err := o.Err(); err != nil {
+					return fmt.Errorf("sweep %s: publish: %w; it is mined and persisted, and the next sweep publishes it to every host", sw.Txid, err)
+				}
+			} else if _, err := e.Legs.Facade.Submit(ctx, e.topic, beef); err != nil {
 				return fmt.Errorf("sweep %s: publish: %w; it is mined and persisted, and the next sweep publishes it", sw.Txid, err)
 			}
 		}

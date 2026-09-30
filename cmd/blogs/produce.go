@@ -32,7 +32,12 @@ collected by the next produce or anchor.
 
 A run persists each carrier before publishing it and republishes a carrier
 it finds persisted, so a restart continues the stream at the next seq and
-never builds two carriers for one. Needs facade, settle and asset.`
+never builds two carriers for one.
+
+Needs settle and asset, and where objects go: facade in mode plane, or
+hosts in mode unicast, where each host is sent every object, retried on
+its own, and the run ends with what each host took and missed and the
+backfill that repairs a host that missed something.`
 
 // repeated is a flag given several times.
 type repeated []string
@@ -225,6 +230,7 @@ func cmdProduce(ctx context.Context, g *global, args []string) error {
 	interrupted := errors.Is(runErr, context.Canceled) || (runErr == nil && ctx.Err() != nil)
 	if runErr != nil && !interrupted {
 		closeEngine(e)
+		g.hostSummary(e)
 		return runErr
 	}
 	if !interrupted && f.anchorWait > 0 {
@@ -234,11 +240,13 @@ func cmdProduce(ctx context.Context, g *global, args []string) error {
 		if err != nil && ctx.Err() == nil {
 			closeEngine(e)
 			g.summary(e, first)
+			g.hostSummary(e)
 			return err
 		}
 	}
 	closeEngine(e)
 	g.summary(e, first)
+	g.hostSummary(e)
 	return nil
 }
 
@@ -268,6 +276,49 @@ func (g *global) summary(e *produce.Engine, first uint64) {
 	}
 }
 
+// hostSummary prints, in unicast mode, what each host took and missed in
+// this run, and the backfill that repairs the hosts that missed something.
+func (g *global) hostSummary(e *produce.Engine) {
+	if e.Legs.Hosts == nil {
+		return
+	}
+	st := e.St
+	var low uint64
+	missed := false
+	for _, t := range e.Legs.Hosts.Tallies() {
+		line := fmt.Sprintf("host %s: took %d object(s), missed %d", t.Host, t.Took, t.Missed)
+		if t.Missed > 0 {
+			missed = true
+			line += ": " + strings.Join(t.MissedWhat, ", ")
+		}
+		fmt.Fprintln(g.stdout, line)
+		for _, w := range t.MissedWhat {
+			var n uint64
+			if _, err := fmt.Sscanf(w, "seq %d", &n); err == nil && (low == 0 || n < low) {
+				low = n
+			}
+		}
+	}
+	if !missed {
+		return
+	}
+	cmd := "blogs backfill " + st.Stream + " " + st.Identity
+	if low > 0 && st.Seq >= low {
+		low = max(low, st.Seq-min(st.Seq, logrec.MaxIntervalBatches-1))
+		cmd += fmt.Sprintf(" -seqs %d-%d", low, st.Seq)
+	}
+	if st.Anchor != nil {
+		cmd += fmt.Sprintf(" -anchors %d", st.Anchor.Interval)
+	}
+	if !strings.Contains(cmd, " -") {
+		// Only funding trees: a carrier carries its batch tree, and
+		// backfill feeds an anchor's fee tree from the node.
+		fmt.Fprintln(g.stdout, "a host missed only funding trees, which needs no repair")
+		return
+	}
+	fmt.Fprintf(g.stdout, "a host missed objects; once it is back, copy them from the others: %s\n", cmd)
+}
+
 // screen checks every line against the terminal-safety rules a reader
 // applies (termsafe.Validate), counting the lines that fail and dropping
 // them when drop is set.
@@ -293,7 +344,8 @@ const anchorHelp = `usage: blogs anchor <stream> [-wait DUR]
 
 Publish a carrier a previous run persisted and may not have published,
 collect the anchor in flight, anchor every published batch not yet
-anchored, and wait until the anchors are mined and published.`
+anchored, and wait until the anchors are mined and published. Needs what
+produce needs.`
 
 func cmdAnchor(ctx context.Context, g *global, args []string) error {
 	fs := g.flagSet("anchor", anchorHelp)
@@ -317,6 +369,7 @@ func cmdAnchor(ctx context.Context, g *global, args []string) error {
 	cancel()
 	closeEngine(e)
 	g.summary(e, e.St.Seq+1)
+	g.hostSummary(e)
 	if ctx.Err() != nil {
 		// Interrupted: what is in flight is collected by the next run.
 		return nil

@@ -35,8 +35,13 @@ type Config struct {
 	HeaderURL string
 	// Home is the producer's directory: identity, coin pool and streams.
 	Home string
-	// Hosts are the overlay hosts a reader asks, in order.
+	// Hosts are the overlay hosts a reader asks, in order. In unicast mode
+	// they are also every host a producer submits to.
 	Hosts []string
+	// Mode is how a producer's objects reach the hosts: "plane" (one
+	// submit to Facade, which the multicast plane delivers to every
+	// subscribed host) or "unicast" (one submit to each of Hosts).
+	Mode string
 	// Network is "main", "test" or "regtest". It picks the fund address's
 	// prefix and the proof-of-work floor a header source is held to.
 	Network string
@@ -45,6 +50,9 @@ type Config struct {
 	ObjectBound int
 	// Originator is the BRC-100 originator presented to the wallet.
 	Originator string
+	// Quorum is, in unicast mode, how many of Hosts must take an object
+	// for it to count as published: "all", "majority", "one", or a number.
+	Quorum string
 	// RPC is the node's JSON-RPC URL; RPCUser and RPCPass its basic auth.
 	RPC     string
 	RPCPass string
@@ -59,6 +67,40 @@ type Config struct {
 // DefaultObjectBound is the object bound assumed when none is configured.
 const DefaultObjectBound = 1 << 20
 
+// The modes and the named quorums.
+const (
+	ModePlane      = "plane"
+	ModeUnicast    = "unicast"
+	QuorumAll      = "all"
+	QuorumMajority = "majority"
+	QuorumOne      = "one"
+)
+
+// Need is how many of n hosts the quorum q requires. q is one Apply
+// accepted; a number above n is an error, because a quorum no host set can
+// meet would refuse every publish.
+func Need(q string, n int) (int, error) {
+	if n < 1 {
+		return 0, errors.New("no hosts")
+	}
+	switch q {
+	case QuorumAll, "":
+		return n, nil
+	case QuorumMajority:
+		return n/2 + 1, nil
+	case QuorumOne:
+		return 1, nil
+	}
+	k, err := strconv.Atoi(q)
+	if err != nil || k < 1 {
+		return 0, fmt.Errorf("quorum %q is not all, majority, one or a positive number", q)
+	}
+	if k > n {
+		return 0, fmt.Errorf("quorum %d is more than the %d configured host(s)", k, n)
+	}
+	return k, nil
+}
+
 // DefaultHome is ~/.blogs, or .blogs when there is no home directory.
 func DefaultHome() string {
 	if h, err := os.UserHomeDir(); err == nil {
@@ -71,9 +113,11 @@ func DefaultHome() string {
 func Defaults() Config {
 	return Config{
 		Home:        DefaultHome(),
+		Mode:        ModePlane,
 		Network:     "main",
 		ObjectBound: DefaultObjectBound,
 		Originator:  "blogs",
+		Quorum:      QuorumAll,
 		RPCPass:     "bitcoin",
 		RPCUser:     "bitcoin",
 		Timeout:     15 * time.Second,
@@ -83,7 +127,7 @@ func Defaults() Config {
 // Keys is the file grammar's key list, in lexicographic order. A key not in
 // it is an error: a misspelt key that was silently ignored would leave a
 // setting at its default with no sign that the file was ever read.
-var Keys = []string{"arcade_key", "asset", "facade", "header_url", "home", "hosts", "network", "object_bound", "originator", "rpc", "rpc_pass", "rpc_user", "settle", "timeout"}
+var Keys = []string{"arcade_key", "asset", "facade", "header_url", "home", "hosts", "mode", "network", "object_bound", "originator", "quorum", "rpc", "rpc_pass", "rpc_user", "settle", "timeout"}
 
 // ErrUnknownKey reports a key the grammar does not define.
 var ErrUnknownKey = errors.New("config: unknown key")
@@ -190,6 +234,11 @@ func (c Config) Apply(vals map[string]string) (Config, error) {
 					c.Hosts = append(c.Hosts, h)
 				}
 			}
+		case "mode":
+			if v != ModePlane && v != ModeUnicast {
+				return c, fmt.Errorf("config: mode must be plane or unicast, got %q", v)
+			}
+			c.Mode = v
 		case "network":
 			if v != "main" && v != "test" && v != "regtest" {
 				return c, fmt.Errorf("config: network must be main, test or regtest, got %q", v)
@@ -203,6 +252,11 @@ func (c Config) Apply(vals map[string]string) (Config, error) {
 			c.ObjectBound = n
 		case "originator":
 			c.Originator = v
+		case "quorum":
+			if _, err := Need(v, 1<<30); err != nil {
+				return c, fmt.Errorf("config: %w", err)
+			}
+			c.Quorum = v
 		case "rpc":
 			c.RPC = v
 		case "rpc_pass":

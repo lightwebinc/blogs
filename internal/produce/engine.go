@@ -39,6 +39,7 @@ import (
 
 	"github.com/lightwebinc/blogs/internal/logrec"
 	"github.com/lightwebinc/blogs/internal/state"
+	"github.com/lightwebinc/blogs/internal/unicast"
 )
 
 // Params are the carrier parameters of every blogs carrier.
@@ -95,12 +96,24 @@ type Options struct {
 	Wait time.Duration
 }
 
-// Legs are the endpoints a producer talks to.
+// Legs are the endpoints a producer talks to. Objects go to exactly one of
+// Facade (plane mode: one submit, which the plane delivers to every
+// subscribed host) and Hosts (unicast mode: one submit to each host).
 type Legs struct {
 	Settler publish.Settler
 	Asset   *nodeapi.Asset
 	Arcade  *publish.Arcade
 	Facade  *publish.Facade
+	Hosts   *unicast.Set
+}
+
+// treeFacade is where a new funding tree is published: the facade, or in
+// unicast mode a facade that submits to every host.
+func (l Legs) treeFacade(what string) *publish.Facade {
+	if l.Hosts != nil {
+		return l.Hosts.Facade(what)
+	}
+	return l.Facade
 }
 
 // Engine is one producer run on one stream.
@@ -133,8 +146,8 @@ func New(st *state.Stream, signer *bwallet.Signer, pool *bwallet.Pool, legs Legs
 	if st.Identity != signer.IdentityHex() {
 		return nil, fmt.Errorf("stream %s belongs to identity %s, not this home's %s", st.Stream, st.Identity, signer.IdentityHex())
 	}
-	if legs.Settler == nil || legs.Facade == nil || legs.Asset == nil {
-		return nil, errors.New("a producer needs a settlement leg, a facade and a node")
+	if legs.Settler == nil || (legs.Facade == nil) == (legs.Hosts == nil) || legs.Asset == nil {
+		return nil, errors.New("a producer needs a settlement leg, a node, and either a facade or hosts")
 	}
 	e := &Engine{St: st, Signer: signer, Pool: pool, Legs: legs, Opts: o, Now: time.Now, topic: topic}
 	e.kept = &producer.Kept{Load: e.load}
@@ -144,10 +157,10 @@ func New(st *state.Stream, signer *bwallet.Signer, pool *bwallet.Pool, legs Legs
 	}
 	e.trees = &producer.Trees{Payer: e.payer, State: treeState{e, false}, Identity: signer.IdentityHex(),
 		Count: o.TreeCount, Sats: o.TreeSats, Funder: "pool", Lock: lock, Change: signer.FundScript,
-		Facade: legs.Facade, Topic: topic, Ahead: o.Ahead}
+		Facade: legs.treeFacade("batch funding tree"), Topic: topic, Ahead: o.Ahead}
 	e.anchorTrees = &producer.Trees{Payer: e.payer, State: treeState{e, true}, Identity: signer.IdentityHex(),
 		Count: o.AnchorTreeCount, Sats: o.AnchorTreeSats, Funder: "pool", Lock: lock, Change: signer.FundScript,
-		Facade: legs.Facade, Topic: topic, Ahead: o.AnchorAhead}
+		Facade: legs.treeFacade("anchor fee tree"), Topic: topic, Ahead: o.AnchorAhead}
 	e.collector = &producer.Collector{Proofs: producer.Proofs{Arcade: legs.Arcade, Asset: legs.Asset},
 		Kept: e.kept, Pool: pool, Save: st.Save, Note: e.note}
 	return e, nil
@@ -398,6 +411,19 @@ func (e *Engine) publishOne(ctx context.Context, b Batch, content []byte) error 
 var Retries = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
 
 func (e *Engine) publishCarrier(ctx context.Context, seq uint64, beef []byte, resumed bool) error {
+	if e.Legs.Hosts != nil {
+		// Unicast: every host is sent the carrier and retried on its own.
+		o := e.Legs.Hosts.Send(ctx, fmt.Sprintf("seq %d", seq), e.topic, beef, 0)
+		if err := o.Err(); err != nil {
+			return fmt.Errorf("seq %d: publish: %w; the carrier is persisted and a later run publishes it", seq, err)
+		}
+		if !resumed {
+			for _, h := range nothingAdmitted(o) {
+				e.note("seq %d: host %s admitted nothing: it holds this carrier already, or refused it", seq, h)
+			}
+		}
+		return nil
+	}
 	var err error
 	for i := 0; ; i++ {
 		var res publish.Result
@@ -419,6 +445,19 @@ func (e *Engine) publishCarrier(ctx context.Context, seq uint64, beef []byte, re
 		}
 	}
 	return fmt.Errorf("seq %d: publish: %w; the carrier is persisted and a later run publishes it", seq, err)
+}
+
+// nothingAdmitted are the hosts that answered with nothing admitted: they
+// hold the object already, or their topic manager refused it. The answer is
+// the same for both, so a producer cannot tell them apart.
+func nothingAdmitted(o unicast.Outcome) []string {
+	var hs []string
+	for _, r := range o.Results {
+		if r.Took() && len(r.Result.Admitted) == 0 {
+			hs = append(hs, r.Host)
+		}
+	}
+	return hs
 }
 
 // Unanchored is how many batches no published anchor covers yet.
@@ -587,13 +626,24 @@ func (e *Engine) advance(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	res, err := e.Legs.Facade.Submit(ctx, e.topic, beef)
-	if err != nil {
-		e.note("anchor interval %d: publish failed (%v); published on the next tick", inf.Interval, err)
-		return nil
-	}
-	if res.Duplicate {
-		e.note("anchor interval %d: the host admitted nothing: it holds the anchor already, or does not yet hold what it spends", inf.Interval)
+	if e.Legs.Hosts != nil {
+		o := e.Legs.Hosts.Send(ctx, fmt.Sprintf("anchor interval %d", inf.Interval), e.topic, beef, 0)
+		if err := o.Err(); err != nil {
+			e.note("anchor interval %d: publish failed (%v); published on the next tick", inf.Interval, err)
+			return nil
+		}
+		for _, h := range nothingAdmitted(o) {
+			e.note("anchor interval %d: host %s admitted nothing: it holds the anchor already, or does not yet hold what it spends", inf.Interval, h)
+		}
+	} else {
+		res, err := e.Legs.Facade.Submit(ctx, e.topic, beef)
+		if err != nil {
+			e.note("anchor interval %d: publish failed (%v); published on the next tick", inf.Interval, err)
+			return nil
+		}
+		if res.Duplicate {
+			e.note("anchor interval %d: the host admitted nothing: it holds the anchor already, or does not yet hold what it spends", inf.Interval)
+		}
 	}
 	st.Anchor, st.Inflight = inf, nil
 	st.Unanchored = st.Unanchored[inf.Count:]

@@ -12,12 +12,16 @@ import (
 	"github.com/lightwebinc/blogs/internal/logrec"
 )
 
-// Backfill fills holes in one host (To) from a sibling (From): the anchor
-// tokens of intervals 1 to Intervals and the batches at Seqs, each asked of
-// To first and fetched from From only when To holds nothing, checked, and
-// submitted to To's submit route (docs/spec.md section 12, Archive).
+// Backfill fills holes in one host (To) from its siblings (From): the
+// anchor tokens of intervals 1 to Intervals and the batches at Seqs, each
+// asked of To first and fetched from the first sibling that holds it only
+// when To holds nothing, checked, and submitted to To's submit route
+// (docs/spec.md section 12, Archive). It is also how a host that missed a
+// unicast producer's submissions is repaired from the hosts that took them.
 type Backfill struct {
-	From, To string
+	// From are the siblings, asked in order.
+	From     []string
+	To       string
 	Stream   string
 	Producer []byte
 	// Intervals, when above zero, backfills the anchor chain 1 to
@@ -146,13 +150,31 @@ func (c *Client) fill(ctx context.Context, b Backfill, to *publish.Facade, topic
 		note("%s: held", what)
 		return nil
 	}
-	got, err := c.Ask(ctx, b.From, q)
-	if err != nil {
-		return fmt.Errorf("%s: asking %s: %w", what, b.From, err)
+	var got []Answer
+	var askErr error
+	source := ""
+	for _, from := range b.From {
+		if from == b.To {
+			continue
+		}
+		as, err := c.Ask(ctx, from, q)
+		if err != nil {
+			// A sibling that cannot be asked is skipped; the others may
+			// hold the position.
+			askErr = fmt.Errorf("%s: asking %s: %w", what, from, err)
+			continue
+		}
+		if len(as) > 0 {
+			got, source = as, from
+			break
+		}
 	}
 	if len(got) == 0 {
+		if askErr != nil {
+			return askErr
+		}
 		r.Missing++
-		note("%s: MISSING: the sibling holds nothing either", what)
+		note("%s: MISSING: no sibling holds it either", what)
 		return nil
 	}
 	admitted := 0
@@ -163,7 +185,7 @@ func (c *Client) fill(ctx context.Context, b Backfill, to *publish.Facade, topic
 		}
 		if !ok {
 			r.Refused++
-			note("%s: the sibling's answer is REFUSED: %s", what, why)
+			note("%s: the sibling %s answered something REFUSED: %s", what, source, why)
 			continue
 		}
 		res, err := to.Submit(ctx, topic, a.Beef)
@@ -187,10 +209,10 @@ func (c *Client) fill(ctx context.Context, b Backfill, to *publish.Facade, topic
 	}
 	if admitted == 0 {
 		r.Missing++
-		note("%s: MISSING: fetched from the sibling, not admitted", what)
+		note("%s: MISSING: fetched from the sibling %s, not admitted", what, source)
 		return nil
 	}
 	r.Filled++
-	note("%s: filled from the sibling", what)
+	note("%s: filled from the sibling %s", what, source)
 	return nil
 }

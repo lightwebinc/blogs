@@ -8,7 +8,7 @@
 #
 #	make test NODE=/path/to/node24
 
-.PHONY: verify test go-test ts-test ts-check ts-build module node-check vet fmt-check deps-check vectors vectors-check e2e e2e-client blogs
+.PHONY: verify test go-test ts-test ts-check ts-build module node-check vet fmt-check deps-check vectors vectors-check e2e e2e-client e2e-unicast blogs
 
 NODE ?= node
 TSC := $(NODE) node_modules/typescript/bin/tsc
@@ -86,7 +86,17 @@ e2e: ts-build
 e2e-client: ts-build
 	@test -n "$(REFERENCE_HOST)" || { echo "set REFERENCE_HOST=/path/to/reference-host"; exit 1; }
 	BLOGS_E2E_REFERENCE_HOST=$(abspath $(REFERENCE_HOST)) BLOGS_E2E_NODE=$(NODE) \
-		GOWORK=off go test -tags e2e -count=1 -v -run TestClientE2E ./cmd/blogs/
+		GOWORK=off go test -tags e2e -count=1 -v -run 'TestClientE2E$$' ./cmd/blogs/
+
+# The same in mode unicast: no plane and no facade; the producer submits
+# every object to both hosts itself, a host that was down is repaired by
+# backfill, and both hosts' archives agree.
+#
+#	make e2e-unicast REFERENCE_HOST=/path/to/reference-host
+e2e-unicast: ts-build
+	@test -n "$(REFERENCE_HOST)" || { echo "set REFERENCE_HOST=/path/to/reference-host"; exit 1; }
+	BLOGS_E2E_REFERENCE_HOST=$(abspath $(REFERENCE_HOST)) BLOGS_E2E_NODE=$(NODE) \
+		GOWORK=off go test -tags e2e -count=1 -v -run 'TestClientE2EUnicast$$' ./cmd/blogs/
 
 # Write both vector sets: the Go codec's under testdata/vectors, the
 # TypeScript codec's under testdata/ts. A change to either is a change to

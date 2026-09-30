@@ -65,3 +65,42 @@ func TestPath(t *testing.T) {
 		t.Error(Path("", get))
 	}
 }
+
+func TestModeAndQuorum(t *testing.T) {
+	c := Defaults()
+	if c.Mode != ModePlane || c.Quorum != QuorumAll {
+		t.Fatalf("defaults: mode %q quorum %q", c.Mode, c.Quorum)
+	}
+	c, err := c.Apply(map[string]string{"mode": "unicast", "quorum": "majority"})
+	if err != nil || c.Mode != ModeUnicast || c.Quorum != QuorumMajority {
+		t.Fatalf("%v %+v", err, c)
+	}
+	for k, v := range map[string]string{"mode": "multicast", "quorum": "most"} {
+		if _, err := Defaults().Apply(map[string]string{k: v}); err == nil {
+			t.Errorf("%s = %s applied", k, v)
+		}
+	}
+	for _, q := range []string{"0", "-1", "two"} {
+		if _, err := Defaults().Apply(map[string]string{"quorum": q}); err == nil {
+			t.Errorf("quorum %s applied", q)
+		}
+	}
+	for _, tc := range []struct {
+		q    string
+		n    int
+		need int
+	}{
+		{"all", 3, 3}, {"majority", 1, 1}, {"majority", 2, 2}, {"majority", 3, 2}, {"majority", 4, 3},
+		{"one", 5, 1}, {"2", 3, 2}, {"3", 3, 3},
+	} {
+		if got, err := Need(tc.q, tc.n); err != nil || got != tc.need {
+			t.Errorf("Need(%s, %d) = %d, %v; want %d", tc.q, tc.n, got, err, tc.need)
+		}
+	}
+	if _, err := Need("4", 3); err == nil {
+		t.Error("a quorum above the host count is accepted")
+	}
+	if _, err := Need("all", 0); err == nil {
+		t.Error("no hosts is accepted")
+	}
+}

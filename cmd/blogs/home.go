@@ -15,9 +15,11 @@ import (
 	"github.com/lightwebinc/bcommon/nodeapi"
 	"github.com/lightwebinc/bcommon/publish"
 
+	"github.com/lightwebinc/blogs/internal/config"
 	"github.com/lightwebinc/blogs/internal/logrec"
 	"github.com/lightwebinc/blogs/internal/produce"
 	"github.com/lightwebinc/blogs/internal/state"
+	"github.com/lightwebinc/blogs/internal/unicast"
 )
 
 // openWallet opens the home's embedded wallet.
@@ -65,10 +67,26 @@ func (g *global) legs() (produce.Legs, error) {
 		return l, err
 	}
 	l.Asset = asset
-	if g.cfg.Facade == "" {
-		return l, usage("facade must be configured (config key facade): the overlay host a producer publishes to")
+	switch g.cfg.Mode {
+	case config.ModeUnicast:
+		if g.cfg.Facade != "" {
+			return l, usage("facade is for mode plane; mode unicast submits to every host in hosts, so leave facade unset")
+		}
+		if len(g.cfg.Hosts) == 0 {
+			return l, usage("hosts must be configured (config key hosts, or -hosts): mode unicast submits to each of them")
+		}
+		need, err := config.Need(g.cfg.Quorum, len(g.cfg.Hosts))
+		if err != nil {
+			return l, usage("%v (config key quorum)", err)
+		}
+		l.Hosts = &unicast.Set{Hosts: g.cfg.Hosts, Need: need, Retries: produce.Retries, HTTP: httpClient,
+			Note: g.say, Verbose: g.verbose}
+	default:
+		if g.cfg.Facade == "" {
+			return l, usage("facade must be configured (config key facade): the overlay host a producer publishes to (or set mode = unicast to submit to every host in hosts)")
+		}
+		l.Facade = &publish.Facade{Base: g.cfg.Facade}
 	}
-	l.Facade = &publish.Facade{Base: g.cfg.Facade}
 	kind, addr, _ := strings.Cut(g.cfg.Settle, ":")
 	switch kind {
 	case "tcp":
@@ -364,9 +382,22 @@ func cmdDoctor(ctx context.Context, g *global, args []string) error {
 			fmt.Fprintf(out, "headers     %s tip %d\n", g.cfg.HeaderURL, n)
 		}
 	}
-	if g.cfg.Facade != "" {
+	switch {
+	case g.cfg.Mode == config.ModeUnicast:
+		need, err := config.Need(g.cfg.Quorum, len(g.cfg.Hosts))
+		if err != nil {
+			fmt.Fprintf(out, "mode        unicast: %v\n", err)
+		} else {
+			fmt.Fprintf(out, "mode        unicast: every object to each of %d host(s), published once %d take it (quorum %s)\n", len(g.cfg.Hosts), need, g.cfg.Quorum)
+		}
+		if g.cfg.Facade != "" {
+			fmt.Fprintf(out, "facade      %s IGNORED: mode unicast submits to hosts, and produce refuses a facade\n", g.cfg.Facade)
+		}
+	case g.cfg.Facade != "":
+		fmt.Fprintf(out, "mode        plane\n")
 		fmt.Fprintf(out, "facade      %s\n", g.cfg.Facade)
-	} else {
+	default:
+		fmt.Fprintf(out, "mode        plane\n")
 		fmt.Fprintln(out, "facade      not configured")
 	}
 	if kind, addr, _ := strings.Cut(g.cfg.Settle, ":"); kind == "arcade" {

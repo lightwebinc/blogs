@@ -111,17 +111,18 @@ func (h *refHost) stop() {
 	h.proc = nil
 }
 
-func TestClientE2E(t *testing.T) {
+// refHosts stages the bundle as a deployment places it (in a modules/
+// directory whose only node_modules is the reference host's), starts one
+// MySQL and a reference host per name, each admitting only this producer on
+// the stream, and returns them by name. It skips the test when no
+// reference host is configured.
+func refHosts(t *testing.T, chainURL, stream, producer string, names ...string) map[string]*refHost {
+	t.Helper()
 	dir := os.Getenv("BLOGS_E2E_REFERENCE_HOST")
-	if dir == "" {
-		t.Skip("set BLOGS_E2E_REFERENCE_HOST (make e2e-client REFERENCE_HOST=...)")
-	}
 	node := os.Getenv("BLOGS_E2E_NODE")
 	if node == "" {
 		node = "node"
 	}
-	// The bundle, staged as a deployment places it: in a modules/ directory
-	// whose only node_modules is the reference host's.
 	bundle, err := filepath.Abs("../../host/bundle/blogs-module.js")
 	if err != nil {
 		t.Fatal(err)
@@ -141,21 +142,9 @@ func TestClientE2E(t *testing.T) {
 	if err := os.WriteFile(module, raw, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	old := produce.Retries
-	produce.Retries = []time.Duration{50 * time.Millisecond}
-	defer func() { produce.Retries = old }()
-
 	db := mysql(t)
-	// The harness's chain is the one both hosts check proofs against; its
-	// stand-in host is not used.
-	h := newHarness(t)
-	chainS := h.chainS
-	stream, producer := h.producer()
-	step := func(what string) { t.Logf("ok  %s", what) }
-	step("init, fund and stream new " + stream)
-
 	hosts := map[string]*refHost{}
-	for _, name := range []string{"a", "b"} {
+	for _, name := range names {
 		port := freePort(t)
 		rh := &refHost{t: t, dir: dir, node: node, name: name, port: port, db: db, url: fmt.Sprintf("http://127.0.0.1:%d", port)}
 		rh.env = []string{
@@ -164,15 +153,41 @@ func TestClientE2E(t *testing.T) {
 			"OVERLAY_MODULES=" + module,
 			"BLOGS_STREAMS=" + stream + "=" + producer,
 			fmt.Sprintf("OVERLAY_KNEX_URL=mysql://root:%s@127.0.0.1:%d/overlay_%s", e2ePassword, db, name),
-			"OVERLAY_CHAIN_TRACKER_URL=" + chainS.URL,
+			"OVERLAY_CHAIN_TRACKER_URL=" + chainURL,
 			"OVERLAY_ADMIN_TOKEN=blogs-e2e",
 			"OVERLAY_LISTEN=127.0.0.1",
 			"OVERLAY_PORT=" + strconv.Itoa(port),
 		}
 		rh.start()
-		defer rh.stop()
+		t.Cleanup(rh.stop)
 		hosts[name] = rh
 	}
+	return hosts
+}
+
+// e2eSetup skips without a reference host, and otherwise shortens the
+// publish retries for the test.
+func e2eSetup(t *testing.T) {
+	t.Helper()
+	if os.Getenv("BLOGS_E2E_REFERENCE_HOST") == "" {
+		t.Skip("set BLOGS_E2E_REFERENCE_HOST (make e2e-client REFERENCE_HOST=...)")
+	}
+	old := produce.Retries
+	produce.Retries = []time.Duration{50 * time.Millisecond}
+	t.Cleanup(func() { produce.Retries = old })
+}
+
+func TestClientE2E(t *testing.T) {
+	e2eSetup(t)
+	// The harness's chain is the one both hosts check proofs against; its
+	// stand-in host is not used.
+	h := newHarness(t)
+	chainS := h.chainS
+	stream, producer := h.producer()
+	step := func(what string) { t.Logf("ok  %s", what) }
+	step("init, fund and stream new " + stream)
+
+	hosts := refHosts(t, chainS.URL, stream, producer, "a", "b")
 	a, b := hosts["a"], hosts["b"]
 	h.env["BLOGS_FACADE"], h.env["BLOGS_HOSTS"] = a.url, a.url
 	if !strings.Contains(a.out.String(), "blogs module mounted") || !strings.Contains(a.out.String(), "@lightwebinc/bcommon") {
@@ -299,4 +314,98 @@ func TestClientE2E(t *testing.T) {
 	}
 	step("doctor")
 	t.Log("e2e client: PASS")
+}
+
+// The client end to end in unicast mode: no plane and no facade. The
+// producer submits every carrier, tree and anchor to both reference hosts
+// itself, and readers ask the hosts directly.
+//
+//	make e2e-unicast REFERENCE_HOST=/path/to/reference-host NODE=/path/to/node24
+func TestClientE2EUnicast(t *testing.T) {
+	e2eSetup(t)
+	h := newHarness(t)
+	stream, producer := h.producer()
+	step := func(what string) { t.Logf("ok  %s", what) }
+	step("init, fund and stream new " + stream)
+	hosts := refHosts(t, h.chainS.URL, stream, producer, "a", "b")
+	a, b := hosts["a"], hosts["b"]
+	delete(h.env, "BLOGS_FACADE")
+	h.env["BLOGS_MODE"] = "unicast"
+	h.env["BLOGS_HOSTS"] = a.url + "," + b.url
+	step("two reference hosts; mode unicast, hosts a and b, no facade")
+
+	// Interval 1, quorum all: both hosts take every object.
+	r := h.produce(linesOf(0, 12), stream, "-max-lines", "4", "-poll", "50ms")
+	if !strings.Contains(r.stdout, "published seq 1 to 3") || !strings.Contains(r.stdout, "anchored to seq 3: interval 1") ||
+		!strings.Contains(r.stdout, "host "+a.url+": took") || !strings.Contains(r.stdout, "host "+b.url+": took") ||
+		strings.Contains(r.stdout, "missed 1") || strings.Contains(r.stderr, "admitted nothing") {
+		t.Fatalf("produce 1:\n%s\n%s", r.stdout, r.stderr)
+	}
+	step("produce: 3 batches and interval 1, every object submitted to both hosts, none missed")
+	for _, host := range []*refHost{a, b} {
+		r = h.must("", "-hosts", host.url, "read", stream, producer)
+		if r.stdout != linesOf(0, 12) {
+			t.Fatalf("read at %s: %q", host.name, r.stdout)
+		}
+		if r = h.must("", "-hosts", host.url, "verify-interval", stream, producer, "1"); !strings.Contains(r.stdout, "VERIFIED interval 1") {
+			t.Fatalf("verify at %s:\n%s", host.name, r.stdout)
+		}
+	}
+	step("read and verify-interval 1 at each host alone: VERIFIED at a and at b")
+
+	// b goes down. Quorum all: the carrier is persisted, not published.
+	b.stop()
+	h.want(h.run("x\n", append([]string{"produce", stream}, fast...)...), exitUsage, "1 of 2 host(s) took it and the quorum is 2")
+	step("b down, quorum all: exit 2, the carrier persisted, b named")
+
+	// Quorum one: the persisted carrier and interval 2 go to a alone, and
+	// the run names what b missed and the backfill that repairs it.
+	r = h.must(linesOf(100, 4), append([]string{"-quorum", "one", "produce", stream, "-max-lines", "2"}, fast...)...)
+	if !strings.Contains(r.stderr, "seq 4: publishing the carrier a previous run persisted") || !strings.Contains(r.stdout, "anchored to seq 6: interval 2") {
+		t.Fatalf("quorum one:\n%s\n%s", r.stdout, r.stderr)
+	}
+	m := repairLine.FindStringSubmatch(r.stdout)
+	if m == nil || !strings.Contains(r.stdout, "host "+b.url+": took 0 object(s), missed") {
+		t.Fatalf("no tally or repair line:\n%s", r.stdout)
+	}
+	step("b down, quorum one: published at a, interval 2 anchored; b's misses listed with the repair command")
+
+	// b is back, without what it missed; the printed command repairs it.
+	b.start()
+	h.want(h.run("", "-hosts", b.url, "verify-interval", stream, producer, "2"), exitIncomplete, "INCOMPLETE")
+	r = h.must("", strings.Fields(m[1])...)
+	if !strings.Contains(r.stdout, "backfill "+stream+" to "+b.url+": ") || !strings.Contains(r.stdout, "0 missing, 0 refused") {
+		t.Fatalf("repair:\n%s", r.stdout)
+	}
+	if r = h.must("", "-hosts", b.url, "verify-interval", stream, producer, "2"); !strings.Contains(r.stdout, "VERIFIED interval 2") {
+		t.Fatalf("verify at b after the repair:\n%s", r.stdout)
+	}
+	step("b back: INCOMPLETE at b, then the printed backfill; verify-interval 2 VERIFIED at b")
+
+	// Both copies archived hold the same proof of every interval.
+	dirA, dirB := t.TempDir(), t.TempDir()
+	ra := h.must("", "archive", stream, producer, "-dir", dirA, "-host", a.url)
+	rb := h.must("", "archive", stream, producer, "-dir", dirB, "-host", b.url)
+	la, lb := latestLine.FindStringSubmatch(ra.stdout), latestLine.FindStringSubmatch(rb.stdout)
+	if la == nil || lb == nil || la[1] != "2" || la[0] != lb[0] {
+		t.Fatalf("archives:\n%s\n%s\n%s\n%s", ra.stdout, ra.stderr, rb.stdout, rb.stderr)
+	}
+	step("archive: a's and b's copies prove intervals 1 and 2 with the same roots")
+
+	// A retraction reaches both hosts.
+	r = h.must("", "sweep", stream, "-retract-seqs", "2", "-yes", "-poll", "50ms")
+	if !strings.Contains(r.stderr, "seqs 2 retracted") {
+		t.Fatalf("sweep:\n%s\n%s", r.stdout, r.stderr)
+	}
+	for _, host := range []*refHost{a, b} {
+		h.want(h.run("", "-hosts", host.url, "read", stream, producer, "-from", "2", "-to", "2"), exitIncomplete, "seq 2: MISSING")
+	}
+	step("sweep: seq 2 retracted at both hosts")
+
+	r = h.must("", "doctor")
+	if !strings.Contains(r.stdout, "mode        unicast") || !strings.Contains(r.stdout, "host        "+b.url+" answering") {
+		t.Fatalf("doctor:\n%s", r.stdout)
+	}
+	step("doctor")
+	t.Log("e2e unicast: PASS")
 }

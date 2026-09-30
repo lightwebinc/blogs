@@ -34,8 +34,10 @@ outputs cannot pay the fee is left and named.
 Without -yes it prints what it would sweep and changes nothing. Each sweep
 is written to the stream's state before it is settled; a sweep in flight is
 finished (settled, waited for, pooled, published) by the next sweep run,
-with or without flags, before anything new is built. Needs facade, settle
-and asset; -retract-seqs needs hosts.`
+with or without flags, before anything new is built. Needs what produce
+needs; -retract-seqs needs hosts. In mode unicast a sweep counts as
+published only when every host took it, whatever the quorum, because no
+backfill can carry a sweep to a host that missed it.`
 
 func cmdSweep(ctx context.Context, g *global, args []string) error {
 	fs := g.flagSet("sweep", sweepHelp)

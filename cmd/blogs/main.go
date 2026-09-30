@@ -55,8 +55,9 @@ reader commands (no home needed):
   read <stream> <producer>     fetch, verify and print a stream's batches
   verify-interval <stream> <producer> <n>
                                audit interval n: the anchor chain, its proof, its root
-  backfill <stream> <producer> -from URL -to URL
-                               fill a host's holes from a sibling host
+  backfill <stream> <producer> [-from URL] [-to URL]
+                               fill a host's holes from its siblings; with
+                               neither flag, bring the configured hosts into step
   archive <stream> <producer> -dir DIR [-host URL]
                                keep a host's copy of a stream, with interval
                                proofs, in local files
@@ -67,10 +68,15 @@ global flags:
   -config PATH        config file (default $BLOGS_HOME/config,
                       $XDG_CONFIG_HOME/blogs/config, ~/.blogs/config)
   -home DIR           producer home (default ~/.blogs)
-  -hosts URLS         overlay hosts a reader asks, comma separated
+  -hosts URLS         overlay hosts, comma separated: the hosts a reader
+                      asks, and in mode unicast every host a producer submits to
   -header-url SOURCE  header source: a bridge URL, woc:main, woc:test or
                       chaintracks:URL; required to verify, no default
+  -mode MODE          plane (submit once to facade; the default) or unicast
+                      (submit to each of hosts)
   -network NET        main, test or regtest (default main)
+  -quorum Q           mode unicast: hosts that must take an object for it to
+                      count as published: all (default), majority, one or N
   -timeout DUR        per request (default 15s)
   -v                  verbose
   -version            print the version and exit
@@ -162,7 +168,9 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		home      = fs.String("home", "", "")
 		hosts     = fs.String("hosts", "", "")
 		headerURL = fs.String("header-url", "", "")
+		mode      = fs.String("mode", "", "")
 		network   = fs.String("network", "", "")
+		quorum    = fs.String("quorum", "", "")
 		timeout   = fs.String("timeout", "", "")
 		verbose   = fs.Bool("v", false, "")
 		showVer   = fs.Bool("version", false, "")
@@ -202,7 +210,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return exitUsage
 	}
 	over := map[string]string{}
-	for k, v := range map[string]string{"home": *home, "hosts": *hosts, "header_url": *headerURL, "network": *network, "timeout": *timeout} {
+	for k, v := range map[string]string{"home": *home, "hosts": *hosts, "header_url": *headerURL, "mode": *mode, "network": *network, "quorum": *quorum, "timeout": *timeout} {
 		if v != "" {
 			over[k] = v
 		}
