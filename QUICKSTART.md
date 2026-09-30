@@ -111,6 +111,7 @@ and let the producer publish with only one host taking each object:
 ```console
 $ docker compose stop host-b
 $ seq 41 50 | sed 's/^/hello from blogs, line /' | blogs -quorum one produce $STREAM
+warning: a quorum of 1 of 2 hosts is below a majority: an object counts as published while most hosts lack it, until a backfill (docs/limits.md)
 seq 5: host http://host-b:8080 MISSED it after 4 tries: ...
 ...
 host http://host-a:8080: took 2 object(s), missed 0
@@ -122,7 +123,8 @@ interval 1  token 0cead…52dc  height 804  seqs 1 to 4
 INCOMPLETE interval 2: no host answered; an empty answer proves nothing
 $ blogs backfill $STREAM $PRODUCER -seqs 5-5 -anchors 2
 ...
-backfill app_yuqhfqxzfo to http://host-b:8080: 1 held, 2 filled, 0 missing, 0 refused, 0 retracted
+backfill app_yuqhfqxzfo to http://host-b:8080: 1 held, 2 filled, 0 missing, 0 refused, 0 unserved, 0 sweep(s) carried
+note: backfill carried batches and anchors, not sweeps: ...
 $ blogs -hosts http://host-b:8080 verify-interval $STREAM $PRODUCER 2
 VERIFIED interval 2 of app_yuqhfqxzfo ...
 ```
@@ -173,7 +175,9 @@ minted before the current one runs out. `blogs doctor` shows the pool, and
 ## Next
 
 - [docs/usage.md](docs/usage.md): every command, flag, setting, exit code and message
+- [docs/user-guide.md](docs/user-guide.md): the guide: concepts, producing, reading, auditing, archiving, sweeping, troubleshooting
 - [docs/unicast.md](docs/unicast.md): unicast mode, quorums, retries and repair
+- [docs/limits.md](docs/limits.md): every default and cap, and why
 - [docs/self-host.md](docs/self-host.md): a host other people reach
 - [docs/spec.md](docs/spec.md): the record formats and the rules every host and reader applies
 - Stuck? `blogs doctor` reports the home, the pool, the streams, and whether every configured endpoint answers.

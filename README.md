@@ -41,8 +41,10 @@ stream, and a verified interval in about five minutes, with no coin.
 | If you want to | Read |
 | --- | --- |
 | Try it in five minutes | [QUICKSTART.md](QUICKSTART.md) |
+| Learn what it is for and how to use it, end to end | [docs/user-guide.md](docs/user-guide.md) |
 | Look up a command, flag, setting, exit code or message | [docs/usage.md](docs/usage.md) |
 | Run without the multicast plane, and repair a host | [docs/unicast.md](docs/unicast.md) |
+| Know the defaults and caps, and why each is set where it is | [docs/limits.md](docs/limits.md) |
 | Run a host other people reach | [docs/self-host.md](docs/self-host.md) |
 | Load the module into an overlay host you already run | [docs/host.md](docs/host.md) |
 | Implement a compatible producer, reader or host | [docs/spec.md](docs/spec.md) (the specification), [docs/frozen.md](docs/frozen.md) |

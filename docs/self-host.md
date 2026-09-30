@@ -114,7 +114,11 @@ $ blogs -hosts https://logs.example.com,https://other-host.example.net \
 GASP (`SYNC_PEERS`, then `POST /admin/startGASPSync` from inside the
 project) also catches a host up, but it carries unspent outputs only, so an
 anchor reaches a host that way only once the host holds what the anchor
-spends; `backfill` is the complete path ([host.md](host.md#limits)).
+spends; `backfill` is the complete path ([host.md](host.md#limits)). A
+host that was down when the producer swept batches still serves them: add
+`-sweeps` (with `asset` or `tx_source`), which finds each held batch's
+sweep on chain and submits it. A producer on the plane that lists your
+host in its `hosts` also sends you every sweep directly.
 
 ## 5. Building the image
 

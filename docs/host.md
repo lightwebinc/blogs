@@ -152,6 +152,12 @@ Every counter is preset at start.
 - GASP catch-up between hosts carries unspent outputs; an anchor token
   reaches a host that way only if the host already holds what it spends.
   The interval class is the catch-up path for anchors.
+- No lookup class serves a sweep. A host receives one from the plane, from
+  a producer that names it in `hosts`, or from `blogs backfill -sweeps`;
+  until then it keeps serving the batches the sweep retracted.
+- The index is in memory and restore reads every unspent output of the
+  module's topics, so a host's memory and start time grow with what it
+  keeps ([limits.md](limits.md)).
 - An engine's unproven eviction, if an operator runs it, removes carriers,
   and the index follows it. The specification forbids evicting carriers.
 

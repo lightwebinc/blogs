@@ -51,8 +51,8 @@ asset      = http://192.0.2.10:8090
 | Key | Flag | Default | Meaning |
 | --- | --- | --- | --- |
 | `mode` | `-mode` | `plane` | `plane` submits once to `facade`; `unicast` submits to each of `hosts` |
-| `hosts` | `-hosts` | none | the hosts, comma separated: every host a unicast producer submits to, and the hosts a reader asks, in order |
-| `quorum` | `-quorum` | `all` | how many hosts must take an object for it to count as published: `all`, `majority` (more than half), `one`, or a number from 1 to the host count |
+| `hosts` | `-hosts` | none | the hosts, comma separated, at most 16: every host a unicast producer submits to, and the hosts a reader asks, in order. Above 5 the producer warns: its upload per object is better done by the plane |
+| `quorum` | `-quorum` | `all` | how many hosts must take an object for it to count as published: `all`, `majority` (more than half), `one`, or a number from 1 to the host count. Below a majority the producer warns |
 
 In unicast mode `facade` must be unset (the producer refuses one, so a
 configuration cannot mean both), and `hosts` must name at least one host.
@@ -82,9 +82,12 @@ The object is **published** once at least `quorum` hosts took it. Then:
   carries the tree it spends. A host that misses an anchor fee tree is
   given it by `backfill` (from `asset` or `tx_source`) before the anchor.
 - **A sweep** (a retraction or a retirement) needs every host, whatever the
-  quorum, because no lookup class serves a sweep and so no backfill can
-  carry one to a host that missed it. Below all hosts, `sweep` stops with the
-  sweep mined and persisted, and the next `sweep` run sends it to every host.
+  quorum, because no lookup class serves a sweep: a backfill of batches
+  cannot carry one, and only `backfill -sweeps`, which finds the mined spend
+  of each held batch's funding output, can give it to a host later. Below
+  all hosts, `sweep` stops with the sweep mined and persisted, and the next
+  `sweep` run sends it to every host. The same rule holds on the plane for
+  the hosts in `hosts` other than the facade ([usage.md](usage.md#sweeping)).
 
 `all` is the default because it keeps every host complete without a
 backfill. `majority` or `one` keep producing while a host is down, at the
@@ -94,6 +97,10 @@ price of a backfill afterwards.
 
 Each host is retried on its own, with the waits 1s, 2s and 4s between four
 tries, all hosts at once, so one slow host does not delay another's answer.
+The tries and waits are fixed; each try is bounded by `timeout` (1s to 5m),
+so the longest a host can hold up one object is four timeouts and 7s. One
+object is in flight per stream at a time, so a producer has at most one
+request open per host.
 A host that fails every try **missed** the object. Its misses are listed as
 they happen:
 
@@ -127,7 +134,9 @@ blogs backfill app_qzxkvbmwtr 02c0ffee... -seqs 12-13 -anchors 4
 host only. Nothing needs the producer's home, so an archive operator can
 repair their own host. When in doubt about what a host missed, repair the
 whole stream: positions a host holds are reported `held` and cost one
-question each. `-seqs` takes at most 65536 seqs per run.
+question each. `-seqs` takes at most 65536 seqs per run. A host that was
+down during a `sweep` also needs `-sweeps`, which carries the sweeps it
+missed (one spend read per held batch).
 
 ```bash
 blogs stream list                                   # seq S, anchored to interval K
@@ -137,6 +146,19 @@ blogs backfill <stream> <producer> -seqs 1-S -anchors K
 A backfill cannot repair what no host holds. Every published object was
 taken by at least one host, so a full repair completes as long as the hosts
 that took each object still hold it.
+
+## Limits
+
+What differs from the plane, in brief ([limits.md](limits.md) has every
+limit and its reason):
+
+- batches can be larger: `-max-bytes` defaults to the record's 256 KiB
+  carried bound for full-bytes lines (1 MiB of lines for gzip), because
+  each host takes an object over HTTP and TCP repairs loss, where the plane
+  cuts it into 1128-byte fragments that each need repair;
+- the cost of a batch is multiplied by the host count: a producer at
+  `-max-rate` R sends R times the number of hosts objects a second, which
+  is why `hosts` is capped at 16 and a warning starts above 5.
 
 ## Trying it
 

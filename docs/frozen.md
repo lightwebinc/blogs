@@ -118,3 +118,5 @@ accepts.
   a later version may raise.
 - The lookup service's answer order.
 - Anything the spec marks as a host's or a producer's choice.
+- The limits of [limits.md](limits.md): batch sizes, rates, anchor
+  cadence, host counts and read budgets are producer and reader policy.

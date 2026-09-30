@@ -365,6 +365,16 @@ only the unused outputs; that retracts nothing.
 
 Retraction removes bytes, not positions: section 8.4.
 
+A host learns of a sweep only by receiving it: no question class serves one
+(section 7.2), so no lookup and no backfill of batches carries it. On the
+plane every subscribed host receives it from the plane; a host off the plane
+receives it only when it is submitted to that host directly. A producer
+therefore also submits a sweep, after it mines, directly to every host it
+names (a host on the plane then holds it twice over, which it answers as a
+duplicate: both copies are mined and carry the proof). A host that still
+missed a sweep keeps serving the batches it retracts until someone who finds
+the mined spend (section 8.4) submits it.
+
 ## 7. Topics and lookup
 
 ### 7.1 Stream identifiers and topics
@@ -701,6 +711,15 @@ archive reports that interval as complete except for those retracted
 positions, and any archive that held the receipts proves the interval,
 because a receipt carries `C` and its `prev`.
 
+Only a reader that has found the mined spend names a position retracted.
+A host serves nothing for a retracted batch and nothing for a batch it never
+received, and a lookup answers both alike, so a reader that recovers a
+commitment from the next batch's `prev` without that evidence (an auditor,
+section 13, or a backfill) reports the position **unserved** (retracted, or
+not delivered to the hosts asked), never retracted. The proof of the
+interval's root is the same either way; what differs is only the claim about
+why the bytes are absent.
+
 ### 8.5 Restore
 
 The engine does not replay admissions. On start the service rebuilds its
@@ -769,6 +788,11 @@ a record bound, which is a coordinated change of producers, hosts and
 readers; it never lowers one, so a record published under a bound stays
 readable. Content larger than the decoded bound belongs to a later profile
 that names a chunked store (BRC-167).
+
+Below these bounds, what a producer sends and what a reader asks for are
+policy: [limits.md](limits.md) sets the blogs command's defaults and caps
+(batch sizes per mode, rates, anchor cadence, host counts, an archive's
+recheck budget), none of which a reader relies on.
 
 ## 12. Repair and lateness
 
@@ -846,10 +870,12 @@ below.
    elsewhere, it checks the path's shape for that index in a tree of `count`
    leaves. A `seq` no host serves takes its commitment from the next
    batch's `prev`, exactly as an archive recovers a retracted batch's
-   (section 8.4), and the auditor reports that `seq` retracted; the root
-   still proves every other `C` of the interval. Hosts serve nothing for a
-   retracted batch, so the auditor cannot tell a retraction from a batch no
-   host it asked received; the report names the position, not the cause. A
+   (section 8.4), and the auditor reports that `seq` unserved (retracted,
+   or not delivered); the root still proves every other `C` of the
+   interval. Hosts serve nothing for a retracted batch, so the auditor
+   cannot tell a retraction from a batch no host it asked received; the
+   report names the position, not the cause, and only an archive that
+   found the mined spend calls it retracted. A
    `seq` whose commitment nothing names (the interval's last, or the first
    of two in a row) leaves the audit incomplete;
 4. for a digest-only batch, the fetched bytes against the locator.
@@ -912,6 +938,15 @@ batches.
    itself (section 8.4); an archive that held the receipts can.
 9. **Auditing one record** costs a batch question per batch of its interval
    until an archive contract serves inclusion paths.
+10. **An auditor cannot say why a position is empty.** A lookup answers a
+    retracted batch and an undelivered one alike, so an auditor proves the
+    interval across the position and reports it unserved; whether it was
+    retracted is shown only by the mined spend of its funding output, which
+    an archive checks (section 8.4).
+11. **No question class serves a sweep.** A host that was not subscribed
+    when a sweep was published, and was not sent it directly, keeps serving
+    the batches it retracts until someone who finds the mined spend submits
+    the sweep to it (section 6.4).
 
 ## 16. Vectors
 

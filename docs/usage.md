@@ -17,6 +17,7 @@ against block headers it chooses, before it prints a line.
   ────────────────
   read, verify-interval ◀── ls_log answers ── hosts;  proofs checked against header_url
   backfill: ls_log answers of the siblings ─▶ submit route of each host being filled
+            (-sweeps: sweeps found by the mined spend ─▶ the same submit route)
   archive:  ls_log answers of one host ─▶ files: batches, anchors, interval proofs
 ```
 
@@ -48,8 +49,8 @@ variables.
 | `doctor` | optional | nothing | the home's state and whether the node, headers, facade and hosts answer; reads only |
 | `read <stream> <producer>` | no | `hosts`, `header_url` | verifies and prints a stream's batches |
 | `verify-interval <stream> <producer> <n>` | no | `hosts`, `header_url`; `asset` or `tx_source` for fee trees | the auditor's check of interval n |
-| `sweep <stream>` | yes | as `produce`; `hosts` for `-retract-seqs` | retracts batches by sweeping their funding outputs, or retires unused funding outputs to the pool |
-| `backfill <stream> <producer>` | no | `-from` and `-to`, or two or more `hosts`; `asset` or `tx_source` for fee trees | fills a host's holes from its siblings, or brings every configured host into step |
+| `sweep <stream>` | yes | as `produce`; `hosts` for `-retract-seqs`, and to reach hosts off the plane | retracts batches by sweeping their funding outputs, or retires unused funding outputs to the pool |
+| `backfill <stream> <producer>` | no | `-from` and `-to`, or two or more `hosts`; `asset` or `tx_source` for fee trees and for `-sweeps` | fills a host's holes from its siblings, or brings every configured host into step; `-sweeps` also carries sweeps |
 | `archive <stream> <producer>` | no | `-dir`, a host, `header_url`, `asset` or `tx_source` | keeps one host's copy of a stream, with each interval's proof, in local files |
 | `version` | no | nothing | prints the version |
 
@@ -73,17 +74,21 @@ define, a key given twice, or a line without `=` is an error, never ignored.
 | `facade` | none | mode `plane`: the overlay host or bridge a producer publishes to (its `/submit` route), from which the plane delivers to every subscribed host. Refused in mode `unicast` |
 | `header_url` | none | the header source every proof is checked against: an overlay bridge's base URL (native `/v1/root/<height>` and `/v1/tip`), `woc:main`, `woc:test` or `chaintracks:URL` |
 | `home` | `~/.blogs` | the producer home |
-| `hosts` | none | the overlay hosts, comma separated: the hosts a reader asks, in order, and in mode `unicast` every host a producer submits to |
+| `hosts` | none | the overlay hosts, comma separated, at most 16: the hosts a reader asks, in order; in mode `unicast` every host a producer submits to; in mode `plane` the hosts other than `facade` every sweep is also sent to directly |
 | `mode` | `plane` | `plane` or `unicast`: how a producer's objects reach the hosts ([unicast.md](unicast.md)) |
 | `network` | `main` | `main`, `test` or `regtest`: the fund address prefix and the header source's proof-of-work floor |
-| `object_bound` | `1048576` | the plane's object bound in bytes; a carrier whose BEEF is larger is not published |
+| `object_bound` | `1048576` | the plane's object bound in bytes, at most 8388608; a carrier whose BEEF is larger is not published |
 | `originator` | `blogs` | the BRC-100 originator presented to the wallet |
 | `quorum` | `all` | mode `unicast`: how many hosts must take an object for it to count as published: `all`, `majority`, `one`, or a number up to the host count. A sweep always needs every host |
 | `rpc` | none | the node's JSON-RPC URL (`fund`) |
 | `rpc_pass`, `rpc_user` | `bitcoin` | the node's basic auth, also for `settle = rpc:` |
 | `settle` | none | the settlement leg: `tcp:<host:port>` (bare EF to an ingress), `rpc:<url>` (a node's `sendrawtransaction`) or `arcade:<url>` |
-| `timeout` | `15s` | bounds each request |
+| `timeout` | `15s` | bounds each request; `1s` to `5m` |
 | `tx_source` | none | `woc:main` or `woc:test`: where a reader with no node (`asset` unset) reads the funding trees an anchor spends, and `fund -txid` reads a payment. Its answers are held to the txid and, with a proof, to the header source |
+
+Every limit on these settings and on the flags below, with its reason, is in
+[limits.md](limits.md). A hard cap is refused with exit 2 and a message
+naming the limit; a recommendation passed prints `warning: ...` and goes on.
 
 The addresses have no default on purpose: a default would send a producer's
 objects, or a reader's questions, to a server nobody configured. A command
@@ -164,7 +169,7 @@ blogs produce app_qzxkvbmwtr -file /var/log/app.log -follow
 
 `stream new` prints the line a host operator adds to `BLOGS_STREAMS`
 ([host.md](host.md)) to admit only this producer on the stream, and the
-topic to add to `OVERLAY_TOPICS`.
+topic to add to `OVERLAY_TOPICS`. A home holds at most 64 streams.
 
 ### Batches
 
@@ -181,20 +186,25 @@ as several lines, and a last line without an LF gets one.
 | `-encoding` | `lines` | `lines` or `gzip` (one gzip member, no time, no name) |
 | `-content-dir DIR` | none | `digest` only: where content files are written; serve them yourself |
 | `-url PREFIX` | none | `digest` only, up to 4: an `https://` prefix the digest's hex is appended to, a fetch hint in the locator |
-| `-max-bytes N` | 262144 for `full` `lines`, else 1048576 | bytes of lines per batch |
-| `-max-lines N` | 10000 | lines per batch |
-| `-max-wait DUR` | `1s` | the latency floor: a batch is published at most this long after its first line |
+| `-max-bytes N` | by mode: `full` `lines` 49152 on the plane, 262144 in unicast; `gzip` 262144 on the plane, 1048576 in unicast; `digest` 1048576 | bytes of lines per batch; at most 262144 for `full` `lines` (the record's bound), 16777216 otherwise |
+| `-max-lines N` | 10000 | lines per batch, at most 65536 |
+| `-max-wait DUR` | `1s` | the latency floor: a batch is published at most this long after its first line; `10ms` to `1h` |
+| `-max-rate R` | 2 | batches a second, at most 50; a batch cut sooner waits, and the input waits with it |
 | `-unsafe` | `warn` | lines holding control characters, escape sequences other than colour, or zero-width and bidirectional characters (`termsafe.Validate`): `warn` publishes them and counts them at exit, `drop` does not publish them |
 
 A batch whose encoding is over the record's bound (256 KiB carried, 16 MiB
 located) is split at a line boundary into several batches. A carrier whose
-BEEF is over `object_bound` is not published and the run stops.
+BEEF is over `object_bound` is not published and the run stops. On the
+plane, a carrier over 64 packets (72192 bytes) is published with a warning,
+once per run: large objects are lost far more often under loss and
+distance ([limits.md](limits.md)).
 
 ### Anchors
 
-Once `-interval` (default `10m`) has passed since the last anchor and a
-published batch is unanchored, `produce` builds the next anchor over every
-unanchored batch (at most 65536), hands it to the settlement leg, and
+Once `-interval` (default `10m`, from `1m` to `24h`) has passed since the
+last anchor and a published batch is unanchored, or `-anchor-batches`
+(default 4096, at most 65536) batches are unanchored, `produce` builds the
+next anchor over the unanchored batches (at most `-anchor-batches`), hands it to the settlement leg, and
 publishes it to the facade once it has mined, with its proof. Nothing is
 anchored while an anchor is in flight: the next one waits for it and covers
 what arrived meanwhile. At the end of the input, `produce` anchors what is
@@ -215,7 +225,7 @@ tree running out does not stop the stream for a block.
 
 | Flag | Default | |
 | --- | --- | --- |
-| `-tree-count` | 100 | outputs per batch tree. Each carrier's BEEF carries its tree, so this is per-batch overhead |
+| `-tree-count` | 100 | outputs per batch tree, at most 1000. Each carrier's BEEF carries its tree, about 49 bytes an output, so this is per-batch overhead |
 | `-tree-sats` | 1 | satoshis per batch output. A carrier carries its output's whole value and is never mined, so this value stays with the batch until a sweep |
 | `-ahead` | 25 | mint the next batch tree at this many outputs left |
 | `-anchor-tree-count` | 8 | outputs per anchor fee tree |
@@ -274,7 +284,9 @@ prints its lines, each filtered for the terminal (`termsafe`: controls,
 escape sequences, zero-width and bidirectional characters removed; a line
 longer than 512 columns is wrapped, not cut). Without `-to` it stops at the
 first `seq` no host holds, which is the end of what the hosts hold or a
-hole; an empty answer proves nothing.
+hole; an empty answer proves nothing. One read covers at most 65536 seqs:
+a longer `-from`/`-to` range is refused, and without `-to` the read stops
+there and names the `-from` to continue with.
 
 | Flag | |
 | --- | --- |
@@ -321,9 +333,9 @@ The auditor's check of specification section 13, needing no producer home:
    fork candidates by `prev` and trying each at the last `seq`, to equal the
    token's root. A `seq` no host serves takes its commitment from the next
    batch's `prev`, as an archive proves an interval across a retraction
-   (specification section 8.4), and is reported retracted. The `seq` before
-   such a hole must then have a single candidate, since nothing names its
-   commitment.
+   (specification section 8.4), and is reported **unserved** (retracted, or
+   not delivered). The `seq` before such a hole must then have a single
+   candidate, since nothing names its commitment.
 
 It prints each interval's canonical token, each batch, and one verdict line:
 
@@ -337,11 +349,13 @@ VERIFIED interval 2 of app_qzxkvbmwtr by 02c0ffee...: seqs 6 to 8, root 5d1e...,
 ```
 
 After seq 7 is retracted, the same audit prints seqs 6 and 8, then
-`retracted seqs 7: no host serves them; each commitment is the next
-batch's prev`, then the same VERIFIED line with the same root. A host
-serves nothing for a retracted batch, so the auditor cannot tell a
-retraction from a batch no host asked ever received; a backfill fills the
-second kind.
+`unserved seqs 7: no host serves them (retracted, or not delivered); each
+commitment is the next batch's prev`, then the same VERIFIED line with the
+same root. A host serves nothing for a retracted batch and nothing for one
+it never received, and the auditor checks no chain for a sweep, so it
+names the position and not the cause. An archive, which finds the mined
+spend, is what says `retracted`; a backfill fills a batch that was only
+undelivered.
 
 `REFUSED interval n: <reason>` (exit 1) names the rule broken, for example
 `anchor-join` or `root-mismatch`. `INCOMPLETE interval n: <reason>` (exit 3)
@@ -357,6 +371,7 @@ the way are listed on stderr.
 blogs backfill app_qzxkvbmwtr 02c0ffee... \
   -from https://archive-a.example.com -to https://archive-b.example.com -interval 3
 blogs backfill app_qzxkvbmwtr 02c0ffee... -seqs 1-120 -anchors 3   # every configured host, from the others
+blogs backfill app_qzxkvbmwtr 02c0ffee... -seqs 1-120 -sweeps       # and carry the sweeps a host missed
 ```
 
 Each position is asked of the host being filled first, and fetched from the
@@ -376,13 +391,25 @@ class serves a funding tree, so when a host does not admit a token,
 `backfill` reads the funding trees its inputs spend from `asset` (or
 `tx_source`), with their proofs, submits them, and offers the token again.
 One line per position (`held`, `filled from the sibling URL`, `MISSING`,
-`REFUSED`), then a count per host filled. A `seq` that neither the host
-nor any sibling serves is missing, unless the `seq` after it is held or
-filled: that batch's `prev` names its commitment, as for a retracted
-batch, so it is counted `retracted` rather than missing and does not fail
-the run (the interval is proven across it, as `verify-interval` and
-`archive` do). A host that cannot be asked is reported and the others are
-still filled.
+`REFUSED`), then a count per host filled:
+`backfill S to URL: H held, F filled, M missing, R refused, U unserved, W
+sweep(s) carried`. A `seq` that neither the host nor any sibling serves is
+missing, unless the `seq` after it is held or filled: that batch's `prev`
+names its commitment, as for a retracted batch, so it is counted
+`unserved` (retracted, or not delivered to any host asked) rather than
+missing and does not fail the run (the interval is proven across it, as
+`verify-interval` and `archive` do). A host that cannot be asked is
+reported and the others are still filled.
+
+No lookup class serves a sweep, so a host that missed one keeps serving the
+batches it retracted, and a backfill of batches cannot tell. `-sweeps`
+carries them: for every `seq` the host holds, each carrier it serves is
+checked for a mined spend of its funding output by another transaction
+(named by `asset` or `tx_source` and checked against `header_url`, as an
+archive checks), and a sweep found is submitted to the host, which then
+stops serving the batch. It costs one spend read per held carrier, so it is
+asked for, not done by default; a backfill without it ends with
+`note: backfill carried batches and anchors, not sweeps: ...`.
 
 ## Sweeping
 
@@ -429,10 +456,18 @@ Without `-yes` a sweep prints its plan (`retract seqs 7: tree T outputs
 nothing. With it, each sweep is written to the stream's state before it is
 settled and the swept outputs are marked used, so no later carrier or
 anchor spends them; the run then settles it, waits up to `-wait` (default
-`10m`) for it to mine, pools its change and publishes it. In mode unicast a
-sweep is published only when every host took it, whatever `quorum` says:
-no lookup class serves a sweep, so no backfill could carry it to a host
-that missed it. A sweep in flight
+`10m`) for it to mine, pools its change and publishes it.
+
+Where a sweep goes. No lookup class serves a sweep, so a host receives one
+only when it is submitted to it. In mode plane a sweep goes to `facade`,
+which the plane carries to every subscribed host, and directly to every
+other host in `hosts`, so a host off the plane receives it too; with no
+other host configured, the run says the sweep went to the facade only. In
+mode unicast it goes to every host in `hosts`. Either way it is published
+only when every host named took it, whatever `quorum` says; below that
+the run stops with the sweep mined and persisted, and the next `sweep`
+sends it again. A host that was named nowhere is given it later by
+`backfill -sweeps`. A sweep in flight
 when a run stops is finished by the next `sweep` run, with or without
 flags, before anything new is built. `sweep` holds the home's lock, like
 `produce`.
@@ -454,10 +489,15 @@ canonical anchor token (held to the anchor rules, its fee tree read from
 writes the interval's proof. `-follow` repeats the pass every `-poll`.
 `-content-dir` and `-allow-host` find digest-only content as for `read`.
 
-Each pass first asks the host again for every `seq` it has stored. A
-stored carrier the host no longer serves is checked for a retraction: a
-mined transaction other than the carrier that spends the carrier's funding
-output. The spender is named by `asset` (the node's UTXO view) or
+Each pass first asks the host again about the seqs it has stored, at most
+`-recheck` of them (default 1024, at most 65536; `0` asks about none). It
+goes on after the last seq the previous pass asked about and wraps to the
+first, so the seqs asked about longest ago come first and a stream of S
+stored seqs is covered every S / `-recheck` passes; `-recheck-all` asks
+about every one in this pass. The archive prints `rechecked N of M stored
+seq(s)`. A stored carrier the host no longer serves is checked for a
+retraction: a mined transaction other than the carrier that spends the
+carrier's funding output. The spender is named by `asset` (the node's UTXO view) or
 `tx_source` (WhatsOnChain), fetched with its proof, and checked against
 `header_url`: that it spends the output and is mined. When it holds, the
 archive writes a receipt and the sweep under `retracted/` and then drops
@@ -467,13 +507,13 @@ The receipt keeps the position: it completes the interval's root, and its
 `prev` lets a proof continue past it, so an archive holding the receipt of
 an interval's last `seq` still proves that interval. A carrier the host
 stops serving with no such spend is kept and noted: an empty answer proves
-nothing. Every stored `seq` is asked once per pass.
+nothing.
 
 The layout, under `DIR/<stream>/<producer>/`:
 
 | Path | What |
 | --- | --- |
-| `archive.json` | the cursor: the next `seq` to walk to, the last interval proven, the hosts followed |
+| `archive.json` | the cursor: the next `seq` to walk to, the last interval proven, the hosts followed, and `rechecked`, the last stored `seq` asked about again |
 | `batches/<seq>-<carrier>.beef` | each verified carrier's BEEF as the host answered it; it carries the funding tree the carrier spends and the tree's proof |
 | `batches/<seq>-<carrier>.json` | what was read from it: `seq`, `prev`, `timestamp`, `count`, `encoding`, `profile`, `size`, the funding outpoint, the host, and `content` (`ok`, `pending`, `unsupported`, `invalid`) |
 | `content/<seq>-<carrier>.log` | the decoded lines, as the producer wrote them (not filtered for a terminal), when the content was read |
@@ -537,10 +577,19 @@ Results go to stdout; progress and errors to stderr, errors as one line
 | `seq N: <CODE> <reason>` | `read`: a refused answer (`REFUSED-SEQ`, `REFUSED-KEY`, `REFUSED-SIG`, `REFUSED-BUMP`, `REFUSED-DECODE`, ...) |
 | `seq N: FORK: ...`, `seq N: BROKEN LINK: ...`, `seq N: MISSING: ...` | `read` |
 | `VERIFIED interval ...`, `REFUSED interval N: ...`, `INCOMPLETE interval N: ...` | `verify-interval`, on stdout |
+| `unserved seqs N: no host serves them (retracted, or not delivered); each commitment is the next batch's prev` | `verify-interval`, on stdout, before VERIFIED |
 | `sweep TXID: mined at height H and published; seqs ... retracted` | a retraction done |
 | `retire <kind> tree T: left: ...` | a tree whose unused outputs cannot pay the fee |
 | `latest interval K root R token T` | `archive`, on stdout |
-| `backfill S to URL: H held, F filled, M missing, R refused, T retracted` | `backfill`, on stdout, one per host filled |
+| `retracted seqs N: receipt and sweep kept in retracted/, bytes dropped` | `archive`, on stdout: the mined sweep was found |
+| `rechecked N of M stored seq(s)` | `archive`, on stdout |
+| `backfill S to URL: H held, F filled, M missing, R refused, U unserved, W sweep(s) carried` | `backfill`, on stdout, one per host filled |
+| `seq N: served by no host (retracted, or not delivered); seq N+1's prev names it: unserved` | `backfill`, on stdout |
+| `note: backfill carried batches and anchors, not sweeps: ...` | `backfill` without `-sweeps` |
+| `note: sweep TXID goes to the facade only: ...` | mode plane, a sweep with no host but the facade configured |
+| `sweep TXID: published to the facade, but not to every host directly: ...` | mode plane, a host in `hosts` did not take a sweep, exit 2 |
+| `warning: ...` | a setting past a recommended limit ([limits.md](limits.md)); the run goes on |
+| `blogs: <setting> V is over (or under) the limit of L: <why> (docs/limits.md)` | a setting past a hard cap, exit 2 |
 | `imported N of M output(s) paying ADDR, S sat, mined at height H; pool ...` | `fund -txid` |
 
 ## Testing
@@ -559,16 +608,19 @@ crash resumption, both profiles and gzip, a followed file with rotation,
 hostile answers, terminal filtering, forks and equivocation, backfill and
 the audit's refusals, retraction and retirement, archives with and without
 holes, an archive's receipts of retracted batches (including an interval's
-last), the audit across a retracted seq, a payment imported by `fund -txid`, and mode unicast with a host
-down under each quorum, its repair, and a retraction that waits for every
-host.
+last) and its recheck budget, the audit across an unserved seq, a payment
+imported by `fund -txid`, mode unicast with a host down under each quorum,
+its repair, and a retraction that waits for every host, a sweep on the
+plane reaching a host off it directly and by `backfill -sweeps`, and every
+hard cap and warning of [limits.md](limits.md).
 
 `make e2e-client` runs the command against two reference overlay hosts
 loading the bundle, over the same local chain serving the node's API and
 the header source: two produce runs and a digest-only one, read,
 verify-interval, a backfill of the second host from the first, a host
 restart, a publish that fails and is resumed, archives of both hosts
-agreeing on every interval, and a retraction the host module applies,
+agreeing on every interval, and a retraction the host module applies at
+the facade's host and at the host off the plane (sent to it directly),
 which the archive that stored the batch then records and the audit proves
 across.
 `make e2e-unicast` runs a producer in mode unicast against two reference
