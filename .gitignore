@@ -3,3 +3,6 @@
 go.work
 go.work.sum
 /bin/
+
+# The demo script's local configuration: it holds real endpoints.
+/scripts/lab-demo.env
