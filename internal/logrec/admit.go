@@ -327,6 +327,25 @@ func readToken(s []byte) (*Anchor, []byte, []byte, *ec.PublicKey, error) {
 	return a, pd.fields[1], pd.fields[2], key, nil
 }
 
+// DecodeToken reads the anchor record of a transaction that claims an
+// anchor, and the claiming output's index, without the admission rules: a
+// reader walking the anchor chain uses it to choose the candidates it then
+// holds to Admit, once it has the outputs they spend.
+func DecodeToken(tx *transaction.Transaction) (*Anchor, int, error) {
+	kind, at, err := Classify(tx)
+	if err != nil {
+		return nil, -1, err
+	}
+	if kind != KindAnchor {
+		return nil, -1, fmt.Errorf("%w: no output claims an anchor", ErrAnchorShape)
+	}
+	a, _, _, _, err := readToken(*tx.Outputs[at].LockingScript)
+	if err != nil && a == nil {
+		return nil, -1, err
+	}
+	return a, at, nil
+}
+
 // checkToken is the anchor token's rules 1 to 9.
 func checkToken(ctx context.Context, tx *transaction.Transaction, at int, coins Coins, h Host) (*Token, error) {
 	out := tx.Outputs[at]
