@@ -5,8 +5,8 @@
  * sweep rule. A transaction is refused for the first rule it breaks, with
  * the same reason label in both languages.
  */
-import { Beef, PublicKey, Transaction, type ChainTracker } from '@bsv/sdk'
-import { LockTime, MaxSequence, readerLockingKey, unlockingRefusal, verifyFieldSignature } from '@lightwebinc/bcommon'
+import { PublicKey, Transaction, type ChainTracker } from '@bsv/sdk'
+import { mineableRefusal, readerLockingKey, unlockingRefusal, verifyFieldSignature } from '@lightwebinc/bcommon'
 import {
   KeyAnchor,
   KeyBatch,
@@ -20,7 +20,7 @@ import {
   type Anchor,
   type Batch,
 } from './logrec.js'
-import { bytesEq, canonicalUnlock, fundingScript, isFundingShape, pushDropScript, readPushDrop, strictSignature } from './script.js'
+import { bytesEq, fundingScript, isFundingShape, pushDropScript, readPushDrop, strictSignature } from './script.js'
 
 /**
  * A host's producer policy for one stream: open, or a set of compressed
@@ -63,6 +63,34 @@ export interface Host {
   headers?: ChainTracker
 }
 
+/**
+ * An output the topic holds, as the overlay engine hands it to the topic
+ * manager for an input that spends it (BRC-22's previous coins).
+ */
+export interface Coin {
+  lockingScript: Uint8Array
+  satoshis: number
+}
+
+/**
+ * The previous coins of one transaction, keyed by outpoint (outpointKey):
+ * every output the topic holds that one of its inputs spends. An input
+ * whose outpoint is absent spends something the topic does not hold.
+ */
+export type Coins = ReadonlyMap<string, Coin>
+
+/** The key of an outpoint in Coins: the txid in display hex, a dot, the output index. */
+export const outpointKey = (txid: string, vout: number): string => `${txid}.${vout}`
+
+/** The coin input i spends, when the topic holds it. */
+function spentCoin(tx: Transaction, i: number, coins: Coins): { coin: Coin; txid: string } | undefined {
+  const input = tx.inputs[i]!
+  const txid = input.sourceTXID ?? input.sourceTransaction?.id('hex')
+  if (txid === undefined) return undefined
+  const coin = coins.get(outpointKey(txid, input.sourceOutputIndex))
+  return coin === undefined ? undefined : { coin, txid }
+}
+
 export interface Admission {
   kind: Kind
   carrier?: Carrier
@@ -78,26 +106,7 @@ function script(s: { toBinary(): number[] }): Uint8Array {
   return Uint8Array.from(s.toBinary())
 }
 
-/**
- * The subject transaction of a BEEF with each input wired to its source
- * transaction when the BEEF holds it. The SDK stops wiring at a proven
- * transaction, but admission reads the outputs a mined anchor token's
- * inputs spend, so the direct parents are wired here from the BEEF itself.
- */
-export function txFromBEEF(beef: Uint8Array | number[]): Transaction {
-  const bytes = Array.from(beef)
-  const tx = Transaction.fromBEEF(bytes)
-  const b = Beef.fromBinary(bytes)
-  for (const input of tx.inputs) {
-    if (input.sourceTransaction === undefined && input.sourceTXID !== undefined) {
-      const parent = b.findTxid(input.sourceTXID)?.tx
-      if (parent !== undefined) input.sourceTransaction = parent
-    }
-  }
-  return tx
-}
-
-/** The spent output, from the BEEF. */
+/** The spent output, from the carrier's BEEF. */
 function spent(tx: Transaction, i: number): { satoshis: number; script: Uint8Array; txid: Uint8Array } | undefined {
   const input = tx.inputs[i]
   const src = input?.sourceTransaction
@@ -164,19 +173,18 @@ function checkCarrier(tx: Transaction, h: Host): Carrier {
   // 3. stream; 4. producer-policy.
   if (b.stream !== h.stream) throw new Refusal('stream', "not this topic's stream")
   if (!admits(h.policy, b.producer)) throw new Refusal('producer-policy')
-  // 5. mineable.
-  if (tx.lockTime < LockTime || (tx.inputs[0]!.sequence ?? MaxSequence) === MaxSequence) throw new Refusal('mineable')
-  // 6. lock.
+  // 5. mineable; 6. unlock: bcommon's checks, in carrier.Validate's order.
+  if (mineableRefusal(tx) !== undefined) throw new Refusal('mineable')
+  if (unlockingRefusal(tx) !== undefined) throw new Refusal('unlock')
+  // 7. lock.
   const key = derived(KeyBatch, b.producer)
   if (pd.fields.length !== 2) throw new Refusal('lock', 'want the record and a signature')
   const sig = pd.fields[1]!
   if (!bytesEq(lock, pushDropScript(key, [record], sig))) throw new Refusal('lock')
-  // 7. signature.
+  // 8. signature.
   if (!verifyField(key, record, sig)) throw new Refusal('signature')
-  // 8. funding.
+  // 9. funding.
   if (!bytesEq(src.script, fundingScript(key))) throw new Refusal('funding')
-  // 9. unlock, bcommon's check.
-  if (unlockingRefusal(tx) !== undefined) throw new Refusal('unlock')
   return {
     batch: b,
     record,
@@ -199,20 +207,29 @@ function readToken(s: Uint8Array): Anchor | undefined {
   return bytesEq(s, pushDropScript(key, [TagAnchor, pd.fields[1]!], pd.fields[2]!)) ? a : undefined
 }
 
-function anchorInput(tx: Transaction, a: Anchor): boolean {
-  const funding = a.interval === 1 ? fundingScript(derived(KeyBatch, a.producer)) : undefined
+/**
+ * Rule 7. Every input spends a coin the topic holds: for interval k > 1 the
+ * anchor token of k - 1 in transaction prev, or a funding output of the
+ * producer; for interval 1 a funding output of the producer. Interval
+ * k > 1 spends its predecessor, and interval 1 a funding output.
+ */
+function anchorInput(tx: Transaction, a: Anchor, coins: Coins): boolean {
+  const funding = fundingScript(derived(KeyBatch, a.producer))
+  const prev = toHex(Uint8Array.from(a.prev).reverse())
+  let found = false
   for (let i = 0; i < tx.inputs.length; i++) {
-    const src = spent(tx, i)
-    if (src === undefined) continue
-    if (funding !== undefined) {
-      if (bytesEq(src.script, funding)) return true
+    const spent = spentCoin(tx, i, coins)
+    if (spent === undefined) return false
+    if (bytesEq(spent.coin.lockingScript, funding)) {
+      found ||= a.interval === 1
       continue
     }
-    if (!bytesEq(src.txid, a.prev)) continue
-    const p = readToken(src.script)
-    if (p !== undefined && bytesEq(p.producer, a.producer) && p.stream === a.stream && p.interval === a.interval - 1) return true
+    if (a.interval === 1 || spent.txid !== prev) return false
+    const p = readToken(spent.coin.lockingScript)
+    if (p === undefined || !bytesEq(p.producer, a.producer) || p.stream !== a.stream || p.interval !== a.interval - 1) return false
+    found = true
   }
-  return false
+  return found
 }
 
 /** Whether tx carries a proof that verifies against the headers. */
@@ -225,7 +242,7 @@ export async function mined(tx: Transaction, headers?: ChainTracker): Promise<bo
   }
 }
 
-async function checkToken(tx: Transaction, at: number, h: Host): Promise<Token> {
+async function checkToken(tx: Transaction, at: number, coins: Coins, h: Host): Promise<Token> {
   const out = tx.outputs[at]!
   const lock = script(out.lockingScript)
   const pd = readPushDrop(lock)!
@@ -248,15 +265,12 @@ async function checkToken(tx: Transaction, at: number, h: Host): Promise<Token> 
   signed.set(record, TagAnchor.length)
   if (!verifyField(key, signed, sig)) throw new Refusal('signature')
   // 7. anchor-input.
-  if (!anchorInput(tx, a)) throw new Refusal('anchor-input')
+  if (!anchorInput(tx, a, coins)) throw new Refusal('anchor-input')
   // 8. unmined.
   if (!(await mined(tx, h.headers))) throw new Refusal('unmined')
-  // 9. unlock.
+  // 9. unlock: each input as bcommon checks a carrier's one input.
   tx.inputs.forEach((input, i) => {
-    const src = spent(tx, i)
-    if (input.unlockingScript === undefined || src === undefined || !canonicalUnlock(script(input.unlockingScript), src.script)) {
-      throw new Refusal('unlock', `input ${i}`)
-    }
+    if (unlockingRefusal(new Transaction(tx.version, [input], [], 0)) !== undefined) throw new Refusal('unlock', `input ${i}`)
   })
   return { anchor: a, record, outputIndex: at, txid: Uint8Array.from(tx.hash() as number[]) }
 }
@@ -271,11 +285,15 @@ async function fundingOutputs(tx: Transaction, headers?: ChainTracker): Promise<
 }
 
 /**
- * Applies spec section 8.1 to tx, whose inputs carry their source
- * transactions from the BEEF (txFromBEEF). SPV of the BEEF is the engine's.
- * Throws a Refusal for the first rule broken.
+ * Applies spec section 8.1 to tx, read from its BEEF (Transaction.fromBEEF),
+ * given the previous coins the engine hands the topic manager for its
+ * inputs. A carrier's funding output comes from the carrier's own BEEF,
+ * which carries its unmined ancestry; an anchor token's spent outputs come
+ * only from coins, because a mined transaction's BEEF carries no parents.
+ * SPV of the BEEF is the engine's. Throws a Refusal for the first rule
+ * broken.
  */
-export async function admit(tx: Transaction, h: Host): Promise<Admission> {
+export async function admit(tx: Transaction, coins: Coins, h: Host): Promise<Admission> {
   validatePolicy(h.policy)
   try {
     checkStream(h.stream)
@@ -284,6 +302,6 @@ export async function admit(tx: Transaction, h: Host): Promise<Admission> {
   }
   const { kind, at } = classify(tx)
   if (kind === 'batch') return { kind, carrier: checkCarrier(tx, h), funding: [] }
-  if (kind === 'anchor') return { kind, token: await checkToken(tx, at, h), funding: [] }
+  if (kind === 'anchor') return { kind, token: await checkToken(tx, at, coins, h), funding: [] }
   return { kind, funding: await fundingOutputs(tx, h.headers) }
 }

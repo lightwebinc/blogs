@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"math/big"
@@ -14,8 +13,8 @@ import (
 	"github.com/bsv-blockchain/go-sdk/script"
 	"github.com/bsv-blockchain/go-sdk/spv"
 	"github.com/bsv-blockchain/go-sdk/transaction"
+	sighash "github.com/bsv-blockchain/go-sdk/transaction/sighash"
 	"github.com/bsv-blockchain/go-sdk/transaction/template/p2pkh"
-	"github.com/bsv-blockchain/go-sdk/util"
 	"github.com/bsv-blockchain/go-sdk/wallet"
 
 	"github.com/lightwebinc/bcommon/carrier"
@@ -86,6 +85,8 @@ type txEnv struct {
 	producer *ec.PublicKey
 	other    []byte
 	feeKey   *ec.PrivateKey
+	batchKey *ec.PrivateKey
+	held     logrec.Coins
 	feeLock  *script.Script
 	c        *chain
 	coin     *transaction.Transaction
@@ -123,8 +124,12 @@ func newTxEnv() (*txEnv, error) {
 	if err != nil {
 		return nil, err
 	}
+	batchKey, err := wallet.NewKeyDeriver(priv).DerivePrivateKey(logrec.Protocol, logrec.KeyBatch, pushdrop.Anyone())
+	if err != nil {
+		return nil, err
+	}
 	e := &txEnv{
-		ctx: ctx, w: w, producer: priv.PubKey(), other: otherPriv.PubKey().Compressed(),
+		ctx: ctx, w: w, producer: priv.PubKey(), other: otherPriv.PubKey().Compressed(), batchKey: batchKey,
 		feeKey: feeKey, feeLock: feeLock, c: &chain{height: 800, headers: Headers{}},
 		params: carrier.Params{
 			Derivation: logrec.BatchDerivation, FundingTag: logrec.TagFunding,
@@ -176,7 +181,7 @@ func (e *txEnv) build() error {
 	}
 	e.c.mine(e.coin)
 
-	// The funding tree: four outputs of 1000.
+	// The funding tree: five outputs of 1000.
 	flock, err := carrier.FundingLock(e.ctx, e.w, originator, e.params)
 	if err != nil {
 		return err
@@ -184,21 +189,21 @@ func (e *txEnv) build() error {
 	if !bytes.Equal(*flock, logrec.FundingScript(mustKey(logrec.BatchDerivation, e.producer))) {
 		return fmt.Errorf("bcommon's funding lock is not the funding script")
 	}
-	if e.tree, err = mint.FundingTree(flock, 4, 1000, e.fee(0), e.feeLock, mint.DefaultFees); err != nil {
+	if e.tree, err = mint.FundingTree(flock, 5, 1000, e.fee(0), e.feeLock, mint.DefaultFees); err != nil {
 		return err
 	}
 	e.c.mine(e.tree)
 
 	// misc: a mined parent of outputs a producer does not fund carriers
-	// from: a funding-shaped output under the anchor key, a fee-key P2PKH,
-	// and an anyone-can-spend OP_1.
+	// from: a funding-shaped output under the anchor key and a bare
+	// pay-to-public-key under the batch key, each spent by one signature.
 	e.misc = transaction.NewTransaction()
 	e.misc.AddInputFromTx(e.coin, 3, e.feeUnlocker())
 	wrong := logrec.FundingScript(mustKey(logrec.AnchorDerivation, e.producer))
 	e.misc.AddOutput(&transaction.TransactionOutput{Satoshis: 1000, LockingScript: (*script.Script)(&wrong)})
-	e.misc.AddOutput(&transaction.TransactionOutput{Satoshis: 1000, LockingScript: e.feeLock})
-	e.misc.AddOutput(&transaction.TransactionOutput{Satoshis: 1000, LockingScript: &script.Script{script.Op1}})
-	e.misc.AddOutput(&transaction.TransactionOutput{Satoshis: 46000, LockingScript: e.feeLock})
+	bare := script.Script(append(append([]byte{33}, mustKey(logrec.BatchDerivation, e.producer).Compressed()...), script.OpCHECKSIG))
+	e.misc.AddOutput(&transaction.TransactionOutput{Satoshis: 1000, LockingScript: &bare})
+	e.misc.AddOutput(&transaction.TransactionOutput{Satoshis: 47000, LockingScript: e.feeLock})
 	if err := e.misc.Sign(); err != nil {
 		return err
 	}
@@ -234,21 +239,38 @@ func (e *txEnv) build() error {
 	}
 
 	// Interval 1 covers seq 1 and 2 and spends tree output 3; interval 2
-	// covers seq 3 and spends interval 1's token.
+	// covers seq 3 and spends interval 1's token and tree output 4 for its
+	// fee. An anchor spends nothing but coins the topic holds.
 	a1 := e.anchorRecord(1, [32]byte{}, 1, 2, t0+60000)
-	t1, err := e.token(a1, &mint.Input{Tx: e.tree, Vout: 3, Unlocker: e.batchUnlocker()}, 1)
+	t1, err := e.token(a1, nil, 3)
 	if err != nil {
 		return err
 	}
 	e.c.mine(t1)
 	a2 := e.anchorRecord(2, [32]byte(*t1.TxID()), 3, 1, t0+120000)
-	t2, err := e.token(a2, &mint.Input{Tx: t1, Vout: 0, Unlocker: e.anchorUnlocker()}, 2)
+	t2, err := e.token(a2, &mint.Input{Tx: t1, Vout: 0, Unlocker: e.anchorUnlocker()}, 4)
 	if err != nil {
 		return err
 	}
 	e.c.mine(t2)
 	e.anchors = []*transaction.Transaction{t1, t2}
 	e.anchorAs = []*logrec.Anchor{a1, a2}
+
+	// What the topic holds once all of the above is admitted: the funding
+	// tree's funding outputs, the carriers' record outputs and both tokens.
+	e.held = logrec.Coins{}
+	hold := func(tx *transaction.Transaction, vouts ...uint32) {
+		for _, v := range vouts {
+			o := tx.Outputs[v]
+			e.held[transaction.Outpoint{Txid: *tx.TxID(), Index: v}] = logrec.Coin{LockingScript: *o.LockingScript, Satoshis: o.Satoshis}
+		}
+	}
+	hold(e.tree, 0, 1, 2, 3, 4)
+	for _, k := range e.carriers {
+		hold(k, 0)
+	}
+	hold(t1, 0)
+	hold(t2, 0)
 	return nil
 }
 
@@ -269,15 +291,38 @@ func (e *txEnv) anchorRecord(interval uint64, prev [32]byte, first, count uint64
 		First: first, Count: count, Root: logrec.IntervalRoot(cs), Timestamp: ts}
 }
 
-// token builds an anchor token for a, spending prev (when not nil) and the
-// fee coin's output feeVout, signed through the wallet.
-func (e *txEnv) token(a *logrec.Anchor, prev *mint.Input, feeVout uint32) (*transaction.Transaction, error) {
+// token builds an anchor token for a, spending prev (when not nil) and
+// funding-tree output fundVout for the fee, signed through the wallet.
+func (e *txEnv) token(a *logrec.Anchor, prev *mint.Input, fundVout uint32) (*transaction.Transaction, error) {
 	rec, err := a.Encode()
 	if err != nil {
 		return nil, err
 	}
-	return mint.Transition(e.lock(logrec.AnchorDerivation, logrec.TagAnchor, rec), 1, prev, e.fee(feeVout), e.feeLock, mint.DefaultFees)
+	fund := mint.Input{Tx: e.tree, Vout: fundVout, Unlocker: e.batchUnlocker()}
+	return mint.Transition(e.lock(logrec.AnchorDerivation, logrec.TagAnchor, rec), 1, prev, fund, e.feeLock, mint.DefaultFees)
 }
+
+// flagUnlocker signs a lock-before PushDrop or pay-to-public-key input with
+// key under a sighash type other than the one a producer uses.
+type flagUnlocker struct {
+	key  *ec.PrivateKey
+	flag sighash.Flag
+}
+
+func (u flagUnlocker) Sign(tx *transaction.Transaction, i uint32) (*script.Script, error) {
+	d, err := tx.CalcInputSignatureHash(i, u.flag)
+	if err != nil {
+		return nil, err
+	}
+	sig, err := u.key.Sign(d)
+	if err != nil {
+		return nil, err
+	}
+	s := script.Script(push(append(sig.Serialize(), byte(u.flag))))
+	return &s, nil
+}
+
+func (u flagUnlocker) EstimateLength(*transaction.Transaction, uint32) uint32 { return 74 }
 
 // resign signs every input of tx again after a change to it.
 func resign(tx *transaction.Transaction) *transaction.Transaction {
@@ -401,6 +446,9 @@ type txJSON struct {
 	Txid   string `json:"txid"`
 	RawTx  string `json:"rawTx"`
 	BEEF   string `json:"beef"`
+	// Coins are the previous coins the case is admitted with: the held
+	// outputs its inputs spend, in input order.
+	Coins []coinJSON `json:"previousCoins"`
 	// Scripts says whether every input of the transaction itself passes
 	// the script interpreter: a refusal whose scripts verify is one only
 	// the topic manager's rules catch.
@@ -410,75 +458,45 @@ type txJSON struct {
 	Admits  *admitJSON `json:"admits,omitempty"`
 }
 
+type coinJSON struct {
+	Txid          string `json:"txid"`
+	Vout          uint32 `json:"vout"`
+	LockingScript string `json:"lockingScript"`
+	Satoshis      uint64 `json:"satoshis"`
+}
+
+// coinsJSON lists coins in tx's input order, the txid in display order as
+// the engine names an outpoint.
+func coinsJSON(tx *transaction.Transaction, coins logrec.Coins) []coinJSON {
+	out := []coinJSON{}
+	for _, in := range tx.Inputs {
+		o := transaction.Outpoint{Txid: *in.SourceTXID, Index: in.SourceTxOutIndex}
+		if c, ok := coins[o]; ok {
+			out = append(out, coinJSON{Txid: o.Txid.String(), Vout: o.Index, LockingScript: h(c.LockingScript), Satoshis: c.Satoshis})
+		}
+	}
+	return out
+}
+
+// coinsFor is the previous coins the engine hands the topic manager for
+// tx: each output an input spends that the topic holds, less those drop
+// names.
+func (e *txEnv) coinsFor(tx *transaction.Transaction, drop func(transaction.Outpoint) bool) logrec.Coins {
+	coins := logrec.Coins{}
+	for _, in := range tx.Inputs {
+		o := transaction.Outpoint{Txid: *in.SourceTXID, Index: in.SourceTxOutIndex}
+		if c, ok := e.held[o]; ok && (drop == nil || !drop(o)) {
+			coins[o] = c
+		}
+	}
+	return coins
+}
+
 type txCase struct {
 	name, note, rule string
 	tx               *transaction.Transaction
 	policy           logrec.Policy
 	reason           string // "" admits
-}
-
-// beefOf is the BEEF a producer publishes. For an unmined transaction it is
-// the usual one, the ancestry down to proven transactions. A mined
-// transaction's BEEF would stop at its own proof, but admission reads the
-// outputs its inputs spend (the anchor rules 7 and 9), so the BEEF of a
-// mined transaction also carries the transactions it spends, each with
-// its own proof or ancestry.
-func beefOf(tx *transaction.Transaction) ([]byte, error) {
-	if tx.MerklePath == nil {
-		return tx.BEEF()
-	}
-	// Parents before children, each once, in input order: the order is
-	// fixed so the bytes are.
-	var order []*transaction.Transaction
-	seen := map[chainhash.Hash]bool{}
-	var visit func(t *transaction.Transaction, root bool)
-	visit = func(t *transaction.Transaction, root bool) {
-		id := *t.TxID()
-		if seen[id] {
-			return
-		}
-		if root || t.MerklePath == nil {
-			for _, in := range t.Inputs {
-				if in.SourceTransaction != nil {
-					visit(in.SourceTransaction, false)
-				}
-			}
-		}
-		seen[id] = true
-		order = append(order, t)
-	}
-	visit(tx, true)
-	var bumps []*transaction.MerklePath
-	at := map[uint32]int{}
-	for _, t := range order {
-		if t.MerklePath == nil {
-			continue
-		}
-		if i, ok := at[t.MerklePath.BlockHeight]; ok {
-			if err := bumps[i].Combine(t.MerklePath); err != nil {
-				return nil, err
-			}
-			continue
-		}
-		at[t.MerklePath.BlockHeight] = len(bumps)
-		bumps = append(bumps, t.MerklePath)
-	}
-	b := binary.LittleEndian.AppendUint32(nil, transaction.BEEF_V1)
-	b = append(b, util.VarInt(len(bumps)).Bytes()...)
-	for _, m := range bumps {
-		b = append(b, m.Bytes()...)
-	}
-	b = append(b, util.VarInt(len(order)).Bytes()...)
-	for _, t := range order {
-		b = append(b, t.Bytes()...)
-		if t.MerklePath == nil {
-			b = append(b, 0)
-			continue
-		}
-		b = append(b, 1)
-		b = append(b, util.VarInt(at[t.MerklePath.BlockHeight]).Bytes()...)
-	}
-	return b, nil
 }
 
 // scriptsVerify runs the interpreter over tx's own inputs.
@@ -524,6 +542,9 @@ func transactionVectors() (map[string]any, error) {
 
 	var cases []txCase
 	add := func(c txCase) { cases = append(cases, c) }
+	// given overrides a case's previous coins, which are otherwise every
+	// held output its inputs spend.
+	given := map[string]logrec.Coins{}
 
 	// Admitted.
 	for i, k := range e.carriers {
@@ -533,9 +554,9 @@ func transactionVectors() (map[string]any, error) {
 			"a batch carrier: digest-only, spending funding-tree output 2; prev is carrier-seq-2's commitment",
 		}[i], "", k, open, ""})
 	}
-	add(txCase{"anchor-interval-1", "the anchor token of interval 1 (seq 1 to 2), spending funding-tree output 3 and a fee coin; mined", "", t1, open, ""})
-	add(txCase{"anchor-interval-2", "the anchor token of interval 2 (seq 3), spending interval 1's token and a fee coin; mined", "", t2, open, ""})
-	add(txCase{"funding-tree", "a mined funding tree: outputs 0 to 3 are funding outputs and are admitted; output 4 is change", "", e.tree, open, ""})
+	add(txCase{"anchor-interval-1", "the anchor token of interval 1 (seq 1 to 2), spending funding-tree output 3; mined", "", t1, open, ""})
+	add(txCase{"anchor-interval-2", "the anchor token of interval 2 (seq 3), spending interval 1's token and funding-tree output 4 for its fee; mined", "", t2, open, ""})
+	add(txCase{"funding-tree", "a mined funding tree: outputs 0 to 4 are funding outputs and are admitted; output 5 is change", "", e.tree, open, ""})
 	unminedTree := cloneTx(e.tree)
 	unminedTree.MerklePath = nil
 	add(txCase{"funding-tree-unmined", "the same funding tree with no proof: it claims nothing and admits nothing", "", unminedTree, open, ""})
@@ -577,6 +598,30 @@ func transactionVectors() (map[string]any, error) {
 	final := carrierFrom(e.tree, 0, e.batchUnlocker(), out(1000, lock1))
 	final.Inputs[0].SequenceNumber = transaction.MaxTxInSequenceNum
 	add(txCase{"carrier-final-input", "the input's nSequence is 0xFFFFFFFF", "carrier shape", resign(final), open, "mineable"})
+	add(txCase{"carrier-mineable-before-unlock", "nLockTime one second before 2100 and the signature pushed by OP_PUSHDATA1: refused as mineable", "carrier shape",
+		rewriteUnlock(resign(lowLock), 0, func(s []byte, _ [][]byte) []byte {
+			return append([]byte{script.OpPUSHDATA1, byte(len(s))}, s...)
+		}), open, "mineable"})
+
+	// Unlocking, after finality and before the lock, as bcommon
+	// carrier.Validate orders them.
+	add(txCase{"carrier-unlock-high-s", "carrier-seq-1 with its input signature's high-S twin: another txid, same record", "signatures",
+		rewriteUnlock(k1, 0, func(s []byte, _ [][]byte) []byte {
+			return push(append(highS(s[:len(s)-1]), s[len(s)-1]))
+		}), open, "unlock"})
+	add(txCase{"carrier-unlock-pushdata1", "carrier-seq-1 with its signature pushed by OP_PUSHDATA1", "carrier shape",
+		rewriteUnlock(k1, 0, func(s []byte, _ [][]byte) []byte {
+			return append([]byte{script.OpPUSHDATA1, byte(len(s))}, s...)
+		}), open, "unlock"})
+	add(txCase{"carrier-unlock-extra-push", "carrier-seq-1 with OP_0 pushed before its signature", "carrier shape",
+		rewriteUnlock(k1, 0, func(s []byte, _ [][]byte) []byte { return append([]byte{script.Op0}, push(s)...) }), open, "unlock"})
+
+	add(txCase{"carrier-unlock-sighash-single", "a carrier whose input is signed SIGHASH_SINGLE|FORKID (0x43), which verifies: another txid, same record", "carrier shape",
+		carrierFrom(e.tree, 0, flagUnlocker{e.batchKey, sighash.SingleForkID}, out(1000, lock1)), open, "unlock"})
+	add(txCase{"carrier-unlock-before-lock", "breaks the lock rule (record output locked under the anchor key) and the unlock rule (signature pushed by OP_PUSHDATA1): refused for the unlocking script", "carrier shape",
+		rewriteUnlock(carrierFrom(e.tree, 0, e.batchUnlocker(), out(1000, e.lock(logrec.AnchorDerivation, rec1))), 0, func(s []byte, _ [][]byte) []byte {
+			return append([]byte{script.OpPUSHDATA1, byte(len(s))}, s...)
+		}), open, "unlock"})
 
 	// Script canonicality.
 	add(txCase{"carrier-lock-anchor-key", "the record output locked and signed under the anchor key", "script canonicality",
@@ -608,109 +653,107 @@ func transactionVectors() (map[string]any, error) {
 		carrierFrom(e.tree, 0, e.batchUnlocker(), out(1000, fieldSig(lock1, bkey, 1, other))), open, "signature"})
 
 	// Funding.
-	add(txCase{"carrier-funding-p2pkh", "spends a fee-key P2PKH output instead of a funding output", "carrier shape",
-		carrierFrom(e.misc, 1, e.feeUnlocker(), out(1000, lock1)), open, "funding"})
+	add(txCase{"carrier-funding-bare-p2pk", "spends a bare pay-to-public-key output under the producer's batch key instead of a funding output", "carrier shape",
+		carrierFrom(e.misc, 1, e.batchUnlocker(), out(1000, lock1)), open, "funding"})
 	add(txCase{"carrier-funding-anchor-key", "spends a funding-shaped output locked to the producer's anchor key", "carrier shape",
 		carrierFrom(e.misc, 0, e.anchorUnlocker(), out(1000, lock1)), open, "funding"})
 
-	// Unlocking.
-	add(txCase{"carrier-unlock-high-s", "carrier-seq-1 with its input signature's high-S twin: another txid, same record", "signatures",
-		rewriteUnlock(k1, 0, func(s []byte, _ [][]byte) []byte {
-			return push(append(highS(s[:len(s)-1]), s[len(s)-1]))
-		}), open, "unlock"})
-	add(txCase{"carrier-unlock-pushdata1", "carrier-seq-1 with its signature pushed by OP_PUSHDATA1", "carrier shape",
-		rewriteUnlock(k1, 0, func(s []byte, _ [][]byte) []byte {
-			return append([]byte{script.OpPUSHDATA1, byte(len(s))}, s...)
-		}), open, "unlock"})
-	add(txCase{"carrier-unlock-extra-push", "carrier-seq-1 with OP_0 pushed before its signature", "carrier shape",
-		rewriteUnlock(k1, 0, func(s []byte, _ [][]byte) []byte { return append([]byte{script.Op0}, push(s)...) }), open, "unlock"})
-
 	// Anchor tokens. Each is mined unless the case is about that.
 	mined := func(tx *transaction.Transaction) *transaction.Transaction { e.c.mine(tx); return tx }
-	tokenWith := func(outs []*transaction.TransactionOutput, prev *mint.Input, feeVout uint32) *transaction.Transaction {
+	tokenWith := func(outs []*transaction.TransactionOutput, ins ...*mint.Input) *transaction.Transaction {
 		tx := transaction.NewTransaction()
-		if prev != nil {
-			tx.AddInputFromTx(prev.Tx, prev.Vout, prev.Unlocker)
+		var total uint64
+		for _, in := range ins {
+			tx.AddInputFromTx(in.Tx, in.Vout, in.Unlocker)
+			total += in.Tx.Outputs[in.Vout].Satoshis
 		}
-		tx.AddInputFromTx(e.coin, feeVout, e.feeUnlocker())
 		for _, o := range outs {
 			tx.AddOutput(o)
+			total -= o.Satoshis
 		}
-		tx.AddOutput(out(40000, e.feeLock))
+		tx.AddOutput(out(total-300, e.feeLock))
 		return mined(resign(tx))
 	}
 	treeIn := &mint.Input{Tx: e.tree, Vout: 3, Unlocker: e.batchUnlocker()}
+	tree4 := &mint.Input{Tx: e.tree, Vout: 4, Unlocker: e.batchUnlocker()}
+	t1In := &mint.Input{Tx: t1, Vout: 0, Unlocker: e.anchorUnlocker()}
+	feeIn := &mint.Input{Tx: e.coin, Vout: 1, Unlocker: e.feeUnlocker()}
 	t1lock := t1.Outputs[0].LockingScript
-	add(txCase{"anchor-two-token-outputs", "two outputs claim an anchor", "anchor token",
-		tokenWith([]*transaction.TransactionOutput{out(1, t1lock), out(1, t1lock)}, treeIn, 1), open, "anchor-shape"})
-	add(txCase{"anchor-two-satoshis", "the token output holds 2 satoshis", "anchor token",
-		tokenWith([]*transaction.TransactionOutput{out(2, t1lock)}, treeIn, 1), open, "anchor-shape"})
+	add(txCase{name: "anchor-two-token-outputs", note: "two outputs claim an anchor", rule: "anchor token",
+		tx: tokenWith([]*transaction.TransactionOutput{out(1, t1lock), out(1, t1lock)}, treeIn), policy: open, reason: "anchor-shape"})
+	add(txCase{name: "anchor-two-satoshis", note: "the token output holds 2 satoshis", rule: "anchor token",
+		tx: tokenWith([]*transaction.TransactionOutput{out(2, t1lock)}, treeIn), policy: open, reason: "anchor-shape"})
 	unsignedTok := script.Script(logrec.PushDropScript(akey, [][]byte{logrec.TagAnchor, a1rec}, nil))
-	add(txCase{"anchor-unsigned", "the tag and the record with no field signature", "anchor token",
-		tokenWith([]*transaction.TransactionOutput{out(1, &unsignedTok)}, treeIn, 1), open, "anchor-shape"})
+	add(txCase{name: "anchor-unsigned", note: "the tag and the record with no field signature", rule: "anchor token",
+		tx: tokenWith([]*transaction.TransactionOutput{out(1, &unsignedTok)}, treeIn), policy: open, reason: "anchor-shape"})
 	badA := enc1(set(validAnchorMap(e.producer.Compressed()), 6, uint64(0)))
-	add(txCase{"anchor-record-refused", "the anchor record has count 0", "",
-		tokenWith([]*transaction.TransactionOutput{out(1, e.lock(logrec.AnchorDerivation, logrec.TagAnchor, badA))}, treeIn, 1), open, "range"})
+	add(txCase{name: "anchor-record-refused", note: "the anchor record has count 0",
+		tx: tokenWith([]*transaction.TransactionOutput{out(1, e.lock(logrec.AnchorDerivation, logrec.TagAnchor, badA))}, treeIn), policy: open, reason: "range"})
 	otherA := *e.anchorAs[0]
 	otherA.Stream = OtherStream
 	otherArec, _ := otherA.Encode()
-	add(txCase{"anchor-other-stream", "a well-formed token whose record names another stream", "",
-		tokenWith([]*transaction.TransactionOutput{out(1, e.lock(logrec.AnchorDerivation, logrec.TagAnchor, otherArec))}, treeIn, 1), open, "stream"})
-	add(txCase{"anchor-producer-policy", "anchor-interval-1 under a closed policy that does not name its producer", "", t1, closed, "producer-policy"})
-	add(txCase{"anchor-lock-batch-key", "the token locked and signed under the batch key", "script canonicality",
-		tokenWith([]*transaction.TransactionOutput{out(1, e.lock(logrec.BatchDerivation, logrec.TagAnchor, a1rec))}, treeIn, 1), open, "lock"})
+	add(txCase{name: "anchor-other-stream", note: "a well-formed token whose record names another stream",
+		tx: tokenWith([]*transaction.TransactionOutput{out(1, e.lock(logrec.AnchorDerivation, logrec.TagAnchor, otherArec))}, treeIn), policy: open, reason: "stream"})
+	add(txCase{name: "anchor-producer-policy", note: "anchor-interval-1 under a closed policy that does not name its producer", tx: t1, policy: closed, reason: "producer-policy"})
+	add(txCase{name: "anchor-lock-batch-key", note: "the token locked and signed under the batch key", rule: "script canonicality",
+		tx: tokenWith([]*transaction.TransactionOutput{out(1, e.lock(logrec.BatchDerivation, logrec.TagAnchor, a1rec))}, treeIn), policy: open, reason: "lock"})
 	ch, _ := t1lock.Chunks()
 	asig := ch[4].Data
 	wideTok := script.Script(append(append(append([]byte{33}, akey.Compressed()...), script.OpCHECKSIG, script.OpPUSHDATA1, 3),
 		append(append(append(append([]byte{}, logrec.TagAnchor...), push(a1rec)...), push(asig)...), script.Op2DROP, script.OpDROP)...))
-	add(txCase{"anchor-lock-non-minimal-push", "the tag pushed with OP_PUSHDATA1 where a direct push is minimal", "script canonicality",
-		tokenWith([]*transaction.TransactionOutput{out(1, &wideTok)}, treeIn, 1), open, "lock"})
-	add(txCase{"anchor-field-signature-high-s", "the field signature's high-S twin", "signatures",
-		tokenWith([]*transaction.TransactionOutput{out(1, fieldSig(t1lock, akey, 2, highS))}, treeIn, 1), open, "signature"})
-	add(txCase{"anchor-interval-1-no-funding", "interval 1 spending only a fee coin", "anchor token",
-		tokenWith([]*transaction.TransactionOutput{out(1, t1lock)}, nil, 1), open, "anchor-input"})
-	add(txCase{"anchor-interval-2-spends-funding", "interval 2 naming interval 1's txid but spending a funding output instead of its token", "anchor token",
-		tokenWith([]*transaction.TransactionOutput{out(1, t2.Outputs[0].LockingScript)}, treeIn, 2), open, "anchor-input"})
+	add(txCase{name: "anchor-lock-non-minimal-push", note: "the tag pushed with OP_PUSHDATA1 where a direct push is minimal", rule: "script canonicality",
+		tx: tokenWith([]*transaction.TransactionOutput{out(1, &wideTok)}, treeIn), policy: open, reason: "lock"})
+	add(txCase{name: "anchor-field-signature-high-s", note: "the field signature's high-S twin", rule: "signatures",
+		tx: tokenWith([]*transaction.TransactionOutput{out(1, fieldSig(t1lock, akey, 2, highS))}, treeIn), policy: open, reason: "signature"})
+	add(txCase{name: "anchor-interval-1-no-funding", note: "interval 1 spending only a fee coin, which the topic does not hold", rule: "anchor token",
+		tx: tokenWith([]*transaction.TransactionOutput{out(1, t1lock)}, feeIn), policy: open, reason: "anchor-input"})
+	add(txCase{name: "anchor-interval-1-unheld-fee-input", note: "interval 1 spending its funding output and also a fee coin the topic does not hold", rule: "anchor token",
+		tx: tokenWith([]*transaction.TransactionOutput{out(1, t1lock)}, treeIn, feeIn), policy: open, reason: "anchor-input"})
+	add(txCase{name: "anchor-interval-1-funding-not-held", note: "anchor-interval-1 given no previous coins: the topic does not hold the funding output it spends", rule: "anchor token",
+		tx: t1, policy: open, reason: "anchor-input"})
+	given["anchor-interval-1-funding-not-held"] = logrec.Coins{}
+	add(txCase{name: "anchor-interval-2-spends-funding", note: "interval 2 naming interval 1's txid but spending a funding output instead of its token", rule: "anchor token",
+		tx: tokenWith([]*transaction.TransactionOutput{out(1, t2.Outputs[0].LockingScript)}, tree4), policy: open, reason: "anchor-input"})
+	add(txCase{name: "anchor-interval-2-token-not-held", note: "anchor-interval-2 given only its funding input's coin: the topic does not hold interval 1's token", rule: "anchor token",
+		tx: t2, policy: open, reason: "anchor-input"})
+	given["anchor-interval-2-token-not-held"] = e.coinsFor(t2, func(o transaction.Outpoint) bool { return o.Txid == *t1.TxID() })
 	a2x := *e.anchorAs[1]
 	a2x.Prev = anchorTxid(1)
 	a2xrec, _ := a2x.Encode()
-	add(txCase{"anchor-interval-2-prev-mismatch", "interval 2 spending interval 1's token while prev names another txid", "anchor token",
-		tokenWith([]*transaction.TransactionOutput{out(1, e.lock(logrec.AnchorDerivation, logrec.TagAnchor, a2xrec))},
-			&mint.Input{Tx: t1, Vout: 0, Unlocker: e.anchorUnlocker()}, 2), open, "anchor-input"})
+	add(txCase{name: "anchor-interval-2-prev-mismatch", note: "interval 2 spending interval 1's token while prev names another txid", rule: "anchor token",
+		tx: tokenWith([]*transaction.TransactionOutput{out(1, e.lock(logrec.AnchorDerivation, logrec.TagAnchor, a2xrec))}, t1In, tree4), policy: open, reason: "anchor-input"})
 	a3 := *e.anchorAs[1]
 	a3.Interval = 3
 	a3rec, _ := a3.Encode()
-	add(txCase{"anchor-interval-3-spends-interval-1", "interval 3 spending interval 1's token, skipping interval 2", "anchor token",
-		tokenWith([]*transaction.TransactionOutput{out(1, e.lock(logrec.AnchorDerivation, logrec.TagAnchor, a3rec))},
-			&mint.Input{Tx: t1, Vout: 0, Unlocker: e.anchorUnlocker()}, 2), open, "anchor-input"})
+	add(txCase{name: "anchor-interval-3-spends-interval-1", note: "interval 3 spending interval 1's token, skipping interval 2", rule: "anchor token",
+		tx: tokenWith([]*transaction.TransactionOutput{out(1, e.lock(logrec.AnchorDerivation, logrec.TagAnchor, a3rec))}, t1In, tree4), policy: open, reason: "anchor-input"})
 	unminedT1 := cloneTx(t1)
 	unminedT1.MerklePath = nil
-	add(txCase{"anchor-unmined", "anchor-interval-1 with no proof", "anchor token", unminedT1, open, "unmined"})
+	add(txCase{name: "anchor-unmined", note: "anchor-interval-1 with no proof", rule: "anchor token", tx: unminedT1, policy: open, reason: "unmined"})
 	strayT1 := cloneTx(t1)
 	strayT1.MerklePath = transaction.NewMerklePath(unproven, t1.MerklePath.Path)
-	add(txCase{"anchor-proof-unknown-height", "anchor-interval-1 with a proof at a height the headers do not hold", "anchor token", strayT1, open, "unmined"})
-	add(txCase{"anchor-unlock-fee-high-s", "anchor-interval-1 with its fee input's signature rewritten to high S; mined as rewritten", "anchor token",
-		mined(rewriteUnlock(t1, 1, func(s []byte, rest [][]byte) []byte {
-			return append(push(append(highS(s[:len(s)-1]), s[len(s)-1])), push(rest[0])...)
-		})), open, "unlock"})
-	add(txCase{"anchor-unlock-token-pushdata1", "anchor-interval-2 with its token input's signature pushed by OP_PUSHDATA1; mined as rewritten", "anchor token",
-		mined(rewriteUnlock(t2, 0, func(s []byte, _ [][]byte) []byte {
+	add(txCase{name: "anchor-proof-unknown-height", note: "anchor-interval-1 with a proof at a height the headers do not hold", rule: "anchor token", tx: strayT1, policy: open, reason: "unmined"})
+	add(txCase{name: "anchor-unlock-funding-high-s", note: "anchor-interval-1 with its funding input's signature rewritten to high S; mined as rewritten", rule: "signatures",
+		tx: mined(rewriteUnlock(t1, 0, func(s []byte, _ [][]byte) []byte {
+			return push(append(highS(s[:len(s)-1]), s[len(s)-1]))
+		})), policy: open, reason: "unlock"})
+	add(txCase{name: "anchor-unlock-token-pushdata1", note: "anchor-interval-2 with its token input's signature pushed by OP_PUSHDATA1; mined as rewritten", rule: "anchor token",
+		tx: mined(rewriteUnlock(t2, 0, func(s []byte, _ [][]byte) []byte {
 			return append([]byte{script.OpPUSHDATA1, byte(len(s))}, s...)
-		})), open, "unlock"})
-	odd := transaction.NewTransaction()
-	odd.AddInputFromTx(e.tree, 3, e.batchUnlocker())
-	odd.AddInputFromTx(e.coin, 1, e.feeUnlocker())
-	odd.AddInput(&transaction.TransactionInput{SourceTXID: e.misc.TxID(), SourceTxOutIndex: 2, SourceTransaction: e.misc,
-		UnlockingScript: &script.Script{0x02, 0xab, 0xcd}, SequenceNumber: transaction.MaxTxInSequenceNum})
-	odd.AddOutput(out(1, t1lock))
-	odd.AddOutput(out(40000, e.feeLock))
-	add(txCase{"anchor-unlock-unknown-template", "anchor-interval-1's token with a third input spending an OP_1 output: push-only, but which pushes are signatures cannot be told from the spent script", "anchor token",
-		mined(resign(odd)), open, "unlock"})
+		})), policy: open, reason: "unlock"})
+	add(txCase{name: "anchor-unlock-sighash-anyonecanpay", note: "interval 1's token with its funding input signed SIGHASH_ALL|ANYONECANPAY|FORKID (0xc1), which verifies", rule: "anchor token",
+		tx: tokenWith([]*transaction.TransactionOutput{out(1, t1lock)},
+			&mint.Input{Tx: e.tree, Vout: 3, Unlocker: flagUnlocker{e.batchKey, sighash.AllForkID | sighash.AnyOneCanPay}}), policy: open, reason: "unlock"})
 
 	var outList []txJSON
 	for _, c := range cases {
-		a, err := logrec.Admit(e.ctx, c.tx, logrec.Host{Stream: Stream, Policy: c.policy, Headers: e.c.headers})
-		j := txJSON{Name: c.name, Note: c.note, Rule: c.rule, Txid: c.tx.TxID().String(), RawTx: c.tx.Hex(), Scripts: scriptsVerify(e.ctx, c.tx)}
+		coins, ok := given[c.name]
+		if !ok {
+			coins = e.coinsFor(c.tx, nil)
+		}
+		a, err := logrec.Admit(e.ctx, c.tx, coins, logrec.Host{Stream: Stream, Policy: c.policy, Headers: e.c.headers})
+		j := txJSON{Name: c.name, Note: c.note, Rule: c.rule, Txid: c.tx.TxID().String(), RawTx: c.tx.Hex(),
+			Coins: coinsJSON(c.tx, coins), Scripts: scriptsVerify(e.ctx, c.tx)}
 		if c.policy.Open {
 			j.Policy = "open"
 		} else {
@@ -720,7 +763,7 @@ func transactionVectors() (map[string]any, error) {
 			}
 			j.Policy = ks
 		}
-		beef, berr := beefOf(c.tx)
+		beef, berr := c.tx.BEEF()
 		if berr != nil {
 			return nil, fmt.Errorf("%s: beef: %w", c.name, berr)
 		}
@@ -750,7 +793,7 @@ func transactionVectors() (map[string]any, error) {
 		headers = append(headers, map[string]any{"height": ht, "merkleRoot": e.c.headers[ht].String()})
 	}
 	return map[string]any{
-		"description":      "Transactions admitted or refused by the topic manager's rules (docs/spec.md section 8.1), in the order given there. Each case is the transaction as raw hex and as BEEF with its ancestry; the BEEF of a mined transaction also carries the transactions its inputs spend, because the anchor rules read their outputs; admission runs against the headers below, the topic's stream, and the case's producer policy. scriptsVerify says whether the transaction's own inputs pass the script interpreter: the refusals where it is true are spends anyone could make without the key, which only these rules catch. rule names the frozen-list row a refusal exercises. Signatures are deterministic (RFC 6979), so the bytes are reproducible.",
+		"description":      "Transactions admitted or refused by the topic manager's rules (docs/spec.md section 8.1), in the order given there. Each case is the transaction as raw hex and as BEEF (an unmined transaction's with its ancestry, a mined transaction's with its own proof and no parents), and the previous coins it is admitted with: the outputs the topic holds that its inputs spend, in input order, each with its outpoint (txid in display order), locking script and satoshis, as the overlay engine hands them to the topic manager. A carrier's funding output is read from its BEEF; an anchor token's spent outputs only from its previous coins. Admission runs against the headers below, the topic's stream, and the case's producer policy. scriptsVerify says whether the transaction's own inputs pass the script interpreter: the refusals where it is true are spends anyone could make without the key, which only these rules catch. rule names the frozen-list row a refusal exercises. Signatures are deterministic (RFC 6979), so the bytes are reproducible.",
 		"privateKey":       h(FixedKey),
 		"identityKey":      h(e.producer.Compressed()),
 		"otherIdentityKey": h(e.other),

@@ -7,7 +7,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
-import { Hash, type ChainTracker } from '@bsv/sdk'
+import { Hash, Transaction, type ChainTracker } from '@bsv/sdk'
 import { encode, readerLockingKey } from '@lightwebinc/bcommon'
 import {
   KeyAnchor,
@@ -33,7 +33,7 @@ import {
   splitStream,
   topic,
 } from './logrec.js'
-import { admit, fromHex, toHex, txFromBEEF, type Policy } from './admit.js'
+import { admit, fromHex, outpointKey, toHex, type Coin, type Policy } from './admit.js'
 import { checkFetched, expand } from './content.js'
 import { intervalRoot, leafHash, pathIndex, prove, verifyBatch, type Step } from './merkle.js'
 import { fundingScript } from './script.js'
@@ -256,6 +256,7 @@ interface TxVector {
   txid: string
   rawTx: string
   beef: string
+  previousCoins: Array<{ txid: string; vout: number; lockingScript: string; satoshis: number }>
   verdict: 'admit' | 'refuse'
   reason?: string
   admits?: {
@@ -290,13 +291,16 @@ test('every transaction is admitted or refused as the Go codec does', async () =
   let admitted = 0
   let refused = 0
   for (const t of v.transactions) {
-    const tx = txFromBEEF(fromHex(t.beef))
+    const tx = Transaction.fromBEEF(Array.from(fromHex(t.beef)))
     assert.equal(tx.id('hex'), t.txid, t.name)
     assert.equal(tx.toHex(), t.rawTx, t.name)
     const policy: Policy = t.policy === 'open' ? { open: true } : { producers: t.policy.map(fromHex) }
     let got
     try {
-      got = await admit(tx, { stream: v.stream, policy, headers })
+      const coins = new Map<string, Coin>(
+        t.previousCoins.map((c) => [outpointKey(c.txid, c.vout), { lockingScript: fromHex(c.lockingScript), satoshis: c.satoshis }]),
+      )
+      got = await admit(tx, coins, { stream: v.stream, policy, headers })
     } catch (e) {
       if (!(e instanceof Refusal)) throw e
       assert.equal(t.verdict, 'refuse', `${t.name}: refused ${e.reason}: ${e.message}`)

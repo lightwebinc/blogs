@@ -23,7 +23,7 @@ import {
   type Batch,
 } from './logrec.js'
 import { expand } from './content.js'
-import { canonicalUnlock, minimalPush, parseScript, pushDropScript, readPushDrop, strictSignature } from './script.js'
+import { parseScript, pushDropScript, readPushDrop, strictSignature } from './script.js'
 import { admit, fromHex, validatePolicy } from './admit.js'
 import { Transaction } from '@bsv/sdk'
 
@@ -142,33 +142,25 @@ test('gzip content: one member, a matching trailer, nothing after it, bounded ou
   assert.equal(reason(() => expand(b, new TextEncoder().encode('a\nb\nc'))), 'content')
 })
 
-test('script reading: truncation, minimal pushes, strict signatures, unlock templates', () => {
+test('script reading: truncation, canonical PushDrop, strict signatures', () => {
   for (const s of [[0x05, 1, 2], [0x4c], [0x4c, 3, 1], [0x4d, 0xff], [0x4e, 0xff, 0xff, 0xff, 0xff, 0]]) {
     assert.equal(parseScript(Uint8Array.from(s)), undefined)
   }
-  assert.equal(minimalPush({ code: 1, data: Uint8Array.of(5) }), false)
-  assert.equal(minimalPush({ code: 0x4c, data: new Uint8Array(76) }), true)
-  assert.equal(minimalPush({ code: 0x4d, data: new Uint8Array(255) }), false)
   const key = producer
   const s = pushDropScript(key, [Uint8Array.of(0x62, 0x6c, 0x01), new Uint8Array(70000)], new Uint8Array(71))
   const r = readPushDrop(s)
   assert.equal(r?.fields.length, 3)
   assert.equal(r?.fields[1]!.length, 70000)
-  // A go-sdk signature with its sighash byte (from the transaction vectors).
+  // A go-sdk signature (from the transaction vectors).
   const der = fromHex('3045022100d2df9017a11a355caf4102e3645edb48536ec685230bdfc925a17b90b0ef29db02203e989b29d728fbb2abecf85a091411780f6b3214f531d678f0a54f588145fd92')
   assert.ok(strictSignature(der))
-  const push = Uint8Array.from([der.length + 1, ...der, 0x41])
-  const p2pk = Uint8Array.from([33, ...key, 0xac])
-  assert.ok(canonicalUnlock(push, p2pk))
-  assert.ok(!canonicalUnlock(Uint8Array.from([0x4c, der.length + 1, ...der, 0x41]), p2pk))
-  assert.ok(!canonicalUnlock(push, Uint8Array.of(0x51)))
 })
 
 test('a policy is open or names producers, exactly one', async () => {
   validatePolicy({ open: true })
   validatePolicy({ producers: [producer] })
   assert.throws(() => validatePolicy({ producers: [] }))
-  await assert.rejects(admit(new Transaction(), { stream, policy: { producers: [] } }))
+  await assert.rejects(admit(new Transaction(), new Map(), { stream, policy: { producers: [] } }))
   // A value no CBOR item has cannot pass for a map.
   assert.equal(reason(() => decodeBatch(encode(new CborMap([{ key: 'x', val: 1n }])))), 'key-type')
 })

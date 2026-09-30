@@ -60,7 +60,8 @@ func TestDeterministic(t *testing.T) {
 }
 
 // TestTransactionVectorsFromBEEF admits every transaction case from its
-// BEEF bytes, as a host receives it, against the headers the file lists.
+// BEEF bytes, as a host receives it, with the previous coins the case
+// lists, against the headers the file lists.
 func TestTransactionVectorsFromBEEF(t *testing.T) {
 	var f struct {
 		Stream  string `json:"stream"`
@@ -69,12 +70,18 @@ func TestTransactionVectorsFromBEEF(t *testing.T) {
 			Root   string `json:"merkleRoot"`
 		} `json:"headers"`
 		Transactions []struct {
-			Name    string          `json:"name"`
-			Policy  json.RawMessage `json:"policy"`
-			Txid    string          `json:"txid"`
-			BEEF    string          `json:"beef"`
-			Verdict string          `json:"verdict"`
-			Reason  string          `json:"reason"`
+			Name   string          `json:"name"`
+			Policy json.RawMessage `json:"policy"`
+			Txid   string          `json:"txid"`
+			BEEF   string          `json:"beef"`
+			Coins  []struct {
+				Txid          string `json:"txid"`
+				Vout          uint32 `json:"vout"`
+				LockingScript string `json:"lockingScript"`
+				Satoshis      uint64 `json:"satoshis"`
+			} `json:"previousCoins"`
+			Verdict string `json:"verdict"`
+			Reason  string `json:"reason"`
 			Admits  *struct {
 				Kind       string `json:"kind"`
 				Commitment string `json:"commitment"`
@@ -118,7 +125,16 @@ func TestTransactionVectorsFromBEEF(t *testing.T) {
 				pol.Producers = append(pol.Producers, kb)
 			}
 		}
-		a, err := logrec.Admit(context.Background(), tx, logrec.Host{Stream: f.Stream, Policy: pol, Headers: headers})
+		coins := logrec.Coins{}
+		for _, c := range c.Coins {
+			id, err := chainhash.NewHashFromHex(c.Txid)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ls, _ := hex.DecodeString(c.LockingScript)
+			coins[transaction.Outpoint{Txid: *id, Index: c.Vout}] = logrec.Coin{LockingScript: ls, Satoshis: c.Satoshis}
+		}
+		a, err := logrec.Admit(context.Background(), tx, coins, logrec.Host{Stream: f.Stream, Policy: pol, Headers: headers})
 		if c.Verdict == "refuse" {
 			if got := logrec.Reason(err); got != c.Reason {
 				t.Errorf("%s: reason %s, want %s (%v)", c.Name, got, c.Reason, err)

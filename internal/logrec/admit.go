@@ -147,6 +147,28 @@ type Host struct {
 	Headers chaintracker.ChainTracker
 }
 
+// Coin is an output the topic holds, as the overlay engine hands it to the
+// topic manager for an input that spends it (BRC-22's previous coins): its
+// locking script and its value.
+type Coin struct {
+	LockingScript []byte
+	Satoshis      uint64
+}
+
+// Coins are the previous coins of one transaction: every output the topic
+// holds that one of its inputs spends, by outpoint. An input whose outpoint
+// is absent spends something the topic does not hold.
+type Coins map[transaction.Outpoint]Coin
+
+// spentCoin is the coin input in spends, when the topic holds it.
+func (c Coins) spentCoin(in *transaction.TransactionInput) (Coin, bool) {
+	if in == nil || in.SourceTXID == nil {
+		return Coin{}, false
+	}
+	coin, ok := c[transaction.Outpoint{Txid: *in.SourceTXID, Index: in.SourceTxOutIndex}]
+	return coin, ok && coin.LockingScript != nil
+}
+
 // Admission is what a host admits from one transaction: a carrier, a
 // token, or funding outputs. A transaction that claims nothing and admits
 // no funding output has all three empty; whether it spends something the
@@ -160,11 +182,15 @@ type Admission struct {
 	Funding []int
 }
 
-// Admit applies docs/spec.md section 8.1 to tx, whose inputs carry their
-// source transactions from the BEEF. SPV of the BEEF is the engine's and is
-// assumed to have run; Admit checks what the topic manager checks, in the
-// order given, and refuses for the first rule broken.
-func Admit(ctx context.Context, tx *transaction.Transaction, h Host) (*Admission, error) {
+// Admit applies docs/spec.md section 8.1 to tx, read from its BEEF, given
+// the previous coins the engine hands the topic manager for its inputs. A
+// carrier's funding output comes from the carrier's own BEEF, which carries
+// its unmined ancestry; an anchor token's spent outputs come only from
+// coins, because a mined transaction's BEEF carries no parents. SPV of the
+// BEEF is the engine's and is assumed to have run; Admit checks what the
+// topic manager checks, in the order given, and refuses for the first rule
+// broken.
+func Admit(ctx context.Context, tx *transaction.Transaction, coins Coins, h Host) (*Admission, error) {
 	if err := h.Policy.Validate(); err != nil {
 		return nil, err
 	}
@@ -183,7 +209,7 @@ func Admit(ctx context.Context, tx *transaction.Transaction, h Host) (*Admission
 		}
 		return &Admission{Kind: kind, Carrier: c}, nil
 	case KindAnchor:
-		t, err := checkToken(ctx, tx, at, h)
+		t, err := checkToken(ctx, tx, at, coins, h)
 		if err != nil {
 			return nil, err
 		}
@@ -201,7 +227,9 @@ func producerKey(k []byte) *ec.PublicKey {
 	return pub
 }
 
-// checkCarrier is the batch carrier's rules 1 to 9.
+// checkCarrier is the batch carrier's rules 1 to 9. Rules 5 to 8 are
+// bcommon carrier.Validate's order: finality, the unlocking script, the
+// lock, the signature.
 func checkCarrier(tx *transaction.Transaction, at int, h Host) (*Carrier, error) {
 	// 1. carrier-shape.
 	if len(tx.Inputs) != 1 || len(tx.Outputs) != 1 {
@@ -233,7 +261,11 @@ func checkCarrier(tx *transaction.Transaction, at int, h Host) (*Carrier, error)
 	if tx.LockTime < carrier.LockTime || in.SequenceNumber == transaction.MaxTxInSequenceNum {
 		return nil, ErrMineable
 	}
-	// 6. lock.
+	// 6. unlock, bcommon's check.
+	if err := carrier.CheckUnlocking(tx); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrUnlock, err)
+	}
+	// 7. lock.
 	key, err := BatchDerivation.ExpectedLockingKey(producerKey(b.Producer))
 	if err != nil {
 		return nil, err
@@ -245,17 +277,13 @@ func checkCarrier(tx *transaction.Transaction, at int, h Host) (*Carrier, error)
 	if !bytes.Equal(*out.LockingScript, PushDropScript(key, [][]byte{record}, sig)) {
 		return nil, ErrLock
 	}
-	// 7. signature.
+	// 8. signature.
 	if !verifyField(key, record, sig) {
 		return nil, ErrSignature
 	}
-	// 8. funding.
+	// 9. funding.
 	if !bytes.Equal(*src.LockingScript, FundingScript(key)) {
 		return nil, ErrFunding
-	}
-	// 9. unlock, bcommon's check.
-	if err := carrier.CheckUnlocking(tx); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrUnlock, err)
 	}
 	return &Carrier{
 		Batch: b, Record: record, Commitment: carrier.Commitment(tx),
@@ -300,7 +328,7 @@ func readToken(s []byte) (*Anchor, []byte, []byte, *ec.PublicKey, error) {
 }
 
 // checkToken is the anchor token's rules 1 to 9.
-func checkToken(ctx context.Context, tx *transaction.Transaction, at int, h Host) (*Token, error) {
+func checkToken(ctx context.Context, tx *transaction.Transaction, at int, coins Coins, h Host) (*Token, error) {
 	out := tx.Outputs[at]
 	pd, _ := readPushDrop(*out.LockingScript)
 	// 1. anchor-shape.
@@ -337,55 +365,53 @@ func checkToken(ctx context.Context, tx *transaction.Transaction, at int, h Host
 		return nil, ErrSignature
 	}
 	// 7. anchor-input.
-	if !anchorInput(tx, a, producer) {
+	if !anchorInput(tx, a, producer, coins) {
 		return nil, ErrAnchorInput
 	}
 	// 8. unmined.
 	if !Mined(ctx, tx, h.Headers) {
 		return nil, ErrUnmined
 	}
-	// 9. unlock.
+	// 9. unlock: each input as bcommon checks a carrier's one input.
 	for i, in := range tx.Inputs {
-		src := in.SourceTxOutput()
-		if in.UnlockingScript == nil || src == nil || src.LockingScript == nil ||
-			!canonicalUnlock(*in.UnlockingScript, *src.LockingScript) {
-			return nil, fmt.Errorf("%w: input %d", ErrUnlock, i)
+		if err := carrier.CheckUnlocking(&transaction.Transaction{Inputs: []*transaction.TransactionInput{in}}); err != nil {
+			return nil, fmt.Errorf("%w: input %d: %v", ErrUnlock, i, err)
 		}
 	}
 	return &Token{Anchor: a, Record: record, OutputIndex: at, Txid: [32]byte(*tx.TxID())}, nil
 }
 
-// anchorInput is rule 7: interval k > 1 spends the anchor token of k - 1
-// in transaction prev; interval 1 spends a funding output of the producer.
-func anchorInput(tx *transaction.Transaction, a *Anchor, producer *ec.PublicKey) bool {
-	var funding []byte
-	if a.Interval == 1 {
-		key, err := BatchDerivation.ExpectedLockingKey(producer)
-		if err != nil {
+// anchorInput is rule 7. Every input spends a coin the topic holds: for
+// interval k > 1 the anchor token of k - 1 in transaction prev, or a
+// funding output of the producer; for interval 1 a funding output of the
+// producer. Interval k > 1 spends its predecessor, and interval 1 a funding
+// output.
+func anchorInput(tx *transaction.Transaction, a *Anchor, producer *ec.PublicKey, coins Coins) bool {
+	key, err := BatchDerivation.ExpectedLockingKey(producer)
+	if err != nil {
+		return false
+	}
+	funding := FundingScript(key)
+	found := false
+	for _, in := range tx.Inputs {
+		coin, ok := coins.spentCoin(in)
+		if !ok {
 			return false
 		}
-		funding = FundingScript(key)
+		if bytes.Equal(coin.LockingScript, funding) {
+			found = found || a.Interval == 1
+			continue
+		}
+		if a.Interval == 1 || [32]byte(*in.SourceTXID) != a.Prev {
+			return false
+		}
+		p, _, _, _, err := readToken(coin.LockingScript)
+		if err != nil || !bytes.Equal(p.Producer, a.Producer) || p.Stream != a.Stream || p.Interval != a.Interval-1 {
+			return false
+		}
+		found = true
 	}
-	for _, in := range tx.Inputs {
-		src := in.SourceTxOutput()
-		if src == nil || src.LockingScript == nil {
-			continue
-		}
-		if a.Interval == 1 {
-			if bytes.Equal(*src.LockingScript, funding) {
-				return true
-			}
-			continue
-		}
-		if in.SourceTXID == nil || [32]byte(*in.SourceTXID) != a.Prev {
-			continue
-		}
-		p, _, _, _, err := readToken(*src.LockingScript)
-		if err == nil && bytes.Equal(p.Producer, a.Producer) && p.Stream == a.Stream && p.Interval == a.Interval-1 {
-			return true
-		}
-	}
-	return false
+	return found
 }
 
 // Mined reports whether tx carries a proof that verifies against the

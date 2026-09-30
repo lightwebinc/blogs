@@ -29,7 +29,7 @@ func TestPolicyValidate(t *testing.T) {
 			t.Errorf("%+v: %v", c.p, err)
 		}
 	}
-	if _, err := Admit(context.Background(), transaction.NewTransaction(), Host{Stream: "example_app_qzxkvbmwtr"}); !errors.Is(err, ErrPolicy) {
+	if _, err := Admit(context.Background(), transaction.NewTransaction(), nil, Host{Stream: "example_app_qzxkvbmwtr"}); !errors.Is(err, ErrPolicy) {
 		t.Fatalf("an unset policy admitted: %v", err)
 	}
 }
@@ -92,29 +92,6 @@ func TestParseScriptRefusesTruncation(t *testing.T) {
 	}
 }
 
-func TestMinimalPush(t *testing.T) {
-	for _, c := range []struct {
-		o  op
-		ok bool
-	}{
-		{op{code: 0, data: []byte{}}, true},
-		{op{code: 1, data: []byte{0}}, true},
-		{op{code: 1, data: []byte{5}}, false}, // OP_5
-		{op{code: 1, data: []byte{0x81}}, false},
-		{op{code: 75, data: make([]byte, 75)}, true},
-		{op{code: script.OpPUSHDATA1, data: make([]byte, 75)}, false},
-		{op{code: script.OpPUSHDATA1, data: make([]byte, 76)}, true},
-		{op{code: script.OpPUSHDATA2, data: make([]byte, 255)}, false},
-		{op{code: script.OpPUSHDATA2, data: make([]byte, 256)}, true},
-		{op{code: script.OpPUSHDATA4, data: make([]byte, 65535)}, false},
-		{op{code: script.OpPUSHDATA4, data: make([]byte, 65536)}, true},
-	} {
-		if minimalPush(c.o) != c.ok {
-			t.Errorf("code %x len %d", c.o.code, len(c.o.data))
-		}
-	}
-}
-
 func lowSig(t *testing.T) []byte {
 	k, _ := ec.PrivateKeyFromBytes(bytes.Repeat([]byte{0x42}, 32))
 	d := sha256.Sum256([]byte("m"))
@@ -152,35 +129,6 @@ func TestStrictSignature(t *testing.T) {
 	}
 }
 
-func TestCanonicalUnlock(t *testing.T) {
-	der := append(lowSig(t), 0x41)
-	k, _ := ec.PrivateKeyFromBytes(bytes.Repeat([]byte{0x42}, 32))
-	pub := k.PubKey().Compressed()
-	p2pk := append(append([]byte{33}, pub...), script.OpCHECKSIG)
-	p2pkh := append(append([]byte{script.OpDUP, script.OpHASH160, 20}, make([]byte, 20)...), script.OpEQUALVERIFY, script.OpCHECKSIG)
-	sigPush := append([]byte{byte(len(der))}, der...)
-	keyPush := append([]byte{33}, pub...)
-	for _, c := range []struct {
-		name          string
-		unlock, spent []byte
-		ok            bool
-	}{
-		{"p2pk", sigPush, p2pk, true},
-		{"p2pk two pushes", append(append([]byte{}, sigPush...), keyPush...), p2pk, false},
-		{"p2pk pushdata1", append([]byte{script.OpPUSHDATA1, byte(len(der))}, der...), p2pk, false},
-		{"p2pk nop", append(append([]byte{}, sigPush...), script.OpNOP), p2pk, false},
-		{"p2pkh", append(append([]byte{}, sigPush...), keyPush...), p2pkh, true},
-		{"p2pkh sig only", sigPush, p2pkh, false},
-		{"p2pkh sighash 0x01", append(append([]byte{byte(len(der))}, append(der[:len(der)-1:len(der)-1], 0x01)...), keyPush...), p2pkh, false},
-		{"other template", sigPush, []byte{script.Op1}, false},
-		{"empty", nil, p2pk, false},
-	} {
-		if canonicalUnlock(c.unlock, c.spent) != c.ok {
-			t.Errorf("%s: want %v", c.name, c.ok)
-		}
-	}
-}
-
 func TestIsFundingShape(t *testing.T) {
 	k, _ := ec.PrivateKeyFromBytes(bytes.Repeat([]byte{0x42}, 32))
 	f := FundingScript(k.PubKey())
@@ -214,7 +162,7 @@ func FuzzAdmit(f *testing.F) {
 		tx.AddOutput(&transaction.TransactionOutput{Satoshis: 1, LockingScript: (*script.Script)(&s)})
 		us := script.Script(s)
 		tx.Inputs[0].UnlockingScript = &us
-		_, err := Admit(context.Background(), tx, Host{Stream: "example_app_qzxkvbmwtr", Policy: Policy{Open: true}})
+		_, err := Admit(context.Background(), tx, Coins{{Txid: *src.TxID(), Index: 0}: {LockingScript: s, Satoshis: 1}}, Host{Stream: "example_app_qzxkvbmwtr", Policy: Policy{Open: true}})
 		if err != nil && Reason(err) == "other" {
 			t.Fatalf("unlabelled refusal: %v", err)
 		}

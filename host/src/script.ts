@@ -14,9 +14,6 @@ const OP_PUSHDATA4 = 0x4e
 const OP_1NEGATE = 0x4f
 const OP_DROP = 0x75
 const OP_2DROP = 0x6d
-const OP_DUP = 0x76
-const OP_HASH160 = 0xa9
-const OP_EQUALVERIFY = 0x88
 const OP_CHECKSIG = 0xac
 
 /** One parsed script element. */
@@ -178,53 +175,4 @@ export function strictSignature(der: Uint8Array): boolean {
   const R = toBigInt(r)
   const S = toBigInt(s)
   return R > 0n && R < order && S > 0n && S <= order >> 1n
-}
-
-/** Whether a data push uses the shortest opcode for its bytes. */
-export function minimalPush(o: Op): boolean {
-  const d = o.data
-  if (d === undefined) return false
-  const n = d.length
-  if (n === 0) return o.code === OP_0
-  if (n === 1 && ((d[0]! >= 1 && d[0]! <= 16) || d[0] === 0x81)) return false
-  if (n <= 75) return o.code === n
-  if (n <= 255) return o.code === OP_PUSHDATA1
-  if (n <= 65535) return o.code === OP_PUSHDATA2
-  return o.code === OP_PUSHDATA4
-}
-
-function sighashType(b: number): boolean {
-  return b === 0x41 || b === 0x42 || b === 0x43 || b === 0xc1 || b === 0xc2 || b === 0xc3
-}
-
-function signaturePush(d: Uint8Array): boolean {
-  return d.length >= 9 && sighashType(d[d.length - 1]!) && strictSignature(d.subarray(0, d.length - 1))
-}
-
-function isP2PKH(s: Uint8Array): boolean {
-  return s.length === 25 && s[0] === OP_DUP && s[1] === OP_HASH160 && s[2] === 20 && s[23] === OP_EQUALVERIFY && s[24] === OP_CHECKSIG
-}
-
-function isP2PKFirst(s: Uint8Array): boolean {
-  return s.length >= 35 && s[0] === 33 && s[34] === OP_CHECKSIG
-}
-
-/**
- * The spec section 5.3 form of one input's unlocking script, given the
- * locking script it spends: push-only with minimal pushes, and every
- * signature strict low-S DER with a defined sighash byte. A spent script
- * that starts <key> OP_CHECKSIG takes exactly one push, a signature; a P2PKH
- * takes a signature and then a key; any other spent script is refused.
- */
-export function canonicalUnlock(unlocking: Uint8Array, spent: Uint8Array): boolean {
-  const ops = parseScript(unlocking)
-  if (ops === undefined || ops.length === 0) return false
-  for (const o of ops) if (!minimalPush(o)) return false
-  if (isP2PKFirst(spent)) return ops.length === 1 && signaturePush(ops[0]!.data!)
-  if (isP2PKH(spent)) {
-    if (ops.length !== 2 || !signaturePush(ops[0]!.data!)) return false
-    const k = ops[1]!.data!
-    return (k.length === 33 && (k[0] === 0x02 || k[0] === 0x03)) || (k.length === 65 && k[0] === 0x04)
-  }
-  return false
 }
