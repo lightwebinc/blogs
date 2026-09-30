@@ -24,8 +24,14 @@ jobs:
         run: make fmt-check
       - name: vet
         run: make vet
-      - name: go-sdk at the pinned version
+      # The direct dependencies are exactly go-sdk and bcommon, go.mod is
+      # tidy, nothing is replaced, and go-sdk resolves to exactly v1.5.2.
+      - name: dependency set
         run: make deps-check
+      # LICENSE-THIRD-PARTY is generated from what the binaries link, so a
+      # dependency nobody noticed is a licence obligation nobody noticed.
+      - name: third-party licences are current
+        run: make licences
       # Includes the Go side of the cross-language check: the tests decode
       # and rebuild the vectors the TypeScript codec wrote under testdata/ts.
       - name: test
@@ -59,3 +65,17 @@ jobs:
         run: npm test
       - name: vectors match the TypeScript codec
         run: npm run vectors-check
+
+  # The images the quickstart and a deployment run: the command and the
+  # local chain, built as the Dockerfile builds them and smoked with no
+  # network (the command on its own) and on a private network (the command
+  # mining on the local chain, and the chain's journal surviving a restart).
+  # The host image is built on the reference overlay host image, which the
+  # image-publish workflow names; it is smoked locally with
+  # make docker-smoke-host.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: build and smoke the images
+        run: make docker-smoke
