@@ -124,7 +124,9 @@ restart order never change it.
 ## Restore
 
 The index is in memory. On start the host hands `restore` the unspent
-outputs of the module's topics with their BEEF; the service walks from each
+outputs of the module's topics with their BEEF (a host that hands them
+without it, as reference hosts before 0.2.2 do, costs one more storage read
+per row: the service reads each such row again with its BEEF); the service walks from each
 to the outputs its transaction spent, the outputs that spent it, and its
 transaction's other outputs, asking storage for each, so spent anchor tokens
 and spent funding outputs are found too. An output connected to no unspent

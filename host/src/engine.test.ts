@@ -154,7 +154,10 @@ test('scrambled delivery, retraction, and a restore from the engine storage in a
 
   const live = ls.report()
   const rows = await storage.findUTXOsForTopic(topic, undefined, undefined, true)
-  for (const order of [rows, [...rows].reverse()]) {
+  // A host that hands the rows without their BEEF, as an older reference
+  // host does: each is read again from storage.
+  const bare = (await storage.findUTXOsForTopic(topic)).map((o) => ({ ...o, beef: undefined }))
+  for (const order of [rows, [...rows].reverse(), bare]) {
     const host = new FakeHost()
     const again = blogsModule(host, [{ stream: v.stream, policy: { open: true } }]).lookups![LookupService] as LogLookupService
     assert.ok((await again.restore(order, storage)) > 0)

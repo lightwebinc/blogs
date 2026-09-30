@@ -573,7 +573,8 @@ export class LogLookupService implements LookupService {
 
   /**
    * Rebuilds the index from storage (spec section 8.5). The host hands the
-   * unspent outputs of this module's topics, with their BEEF; the index
+   * unspent outputs of this module's topics, with their BEEF (a row handed
+   * without it is read again from storage with it); the index
    * also needs spent ones (each anchor token but the newest is spent by the
    * next, and a carrier's funding output by the carrier and by any sweep),
    * so it walks from every row to the outputs its transaction spent
@@ -613,7 +614,12 @@ export class LogLookupService implements LookupService {
     }
     let indexed = 0
     while (queue.length > 0) {
-      const o = queue.shift()!
+      let o = queue.shift()!
+      if (o.beef === undefined && !txs.has(o.txid)) {
+        // A host that hands its unspent rows without their BEEF (an older
+        // reference host asks storage for none): read the row again with it.
+        o = (await full.findOutput(o.txid, o.outputIndex, o.topic, undefined, true)) ?? o
+      }
       let tx = txs.get(o.txid)
       const first = !txs.has(o.txid)
       if (first) {
