@@ -8,7 +8,7 @@
 #
 #	make test NODE=/path/to/node24
 
-.PHONY: verify test go-test ts-test ts-check ts-build module node-check vet fmt-check deps-check vectors vectors-check e2e
+.PHONY: verify test go-test ts-test ts-check ts-build module node-check vet fmt-check deps-check vectors vectors-check e2e e2e-client blogs
 
 NODE ?= node
 TSC := $(NODE) node_modules/typescript/bin/tsc
@@ -25,8 +25,14 @@ test: go-test ts-test
 go-test:
 	GOWORK=off go test -race -count=2 ./...
 
+# The e2e build tag is vetted too, so the client end to end compiles.
 vet:
 	GOWORK=off go vet ./...
+	GOWORK=off go vet -tags e2e ./cmd/blogs/
+
+# The command, into bin/.
+blogs:
+	GOWORK=off go build -o bin/blogs ./cmd/blogs
 
 fmt-check:
 	@test -z "$$(gofmt -l .)" || { echo "gofmt:"; gofmt -l .; exit 1; }
@@ -63,6 +69,20 @@ ts-test: ts-build
 e2e: ts-build
 	@test -n "$(REFERENCE_HOST)" || { echo "set REFERENCE_HOST=/path/to/reference-host"; exit 1; }
 	cd host && $(NODE) dist/e2e.js $(abspath $(REFERENCE_HOST))
+
+# The blogs command end to end: init, fund, stream, produce (both profiles,
+# gzip, a restart, a publish that fails and is resumed), read,
+# verify-interval and backfill, against two local reference hosts with this
+# module loaded, over a local chain (internal/testchain) serving the node's
+# API and the header source. Not part of verify: it needs Docker (for MySQL)
+# and a reference host directory holding its compiled dist/index.js and its
+# node_modules.
+#
+#	make e2e-client REFERENCE_HOST=/path/to/reference-host
+e2e-client: ts-build
+	@test -n "$(REFERENCE_HOST)" || { echo "set REFERENCE_HOST=/path/to/reference-host"; exit 1; }
+	BLOGS_E2E_REFERENCE_HOST=$(abspath $(REFERENCE_HOST)) BLOGS_E2E_NODE=$(NODE) \
+		GOWORK=off go test -tags e2e -count=1 -v -run TestClientE2E ./cmd/blogs/
 
 # Write both vector sets: the Go codec's under testdata/vectors, the
 # TypeScript codec's under testdata/ts. A change to either is a change to
