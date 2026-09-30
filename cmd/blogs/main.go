@@ -2,7 +2,7 @@
 // producer home and a stream, turns lines from stdin or a followed file into
 // signed batches published on the stream's topic, anchors them in one mined
 // token per interval, retracts batches by sweeping their funding outputs,
-// and reads, audits and backfills streams from overlay hosts,
+// and reads, audits, backfills and archives streams from overlay hosts,
 // checking every answer itself.
 //
 // Exit codes: 0 done or verified; 1 refused (the evidence contradicts what
@@ -57,6 +57,9 @@ reader commands (no home needed):
                                audit interval n: the anchor chain, its proof, its root
   backfill <stream> <producer> -from URL -to URL
                                fill a host's holes from a sibling host
+  archive <stream> <producer> -dir DIR [-host URL]
+                               keep a host's copy of a stream, with interval
+                               proofs, in local files
 
   version                      print the version
 
@@ -137,6 +140,7 @@ func init() {
 		"verify-interval": cmdVerifyInterval,
 		"backfill":        cmdBackfill,
 		"sweep":           cmdSweep,
+		"archive":         cmdArchive,
 	}
 }
 

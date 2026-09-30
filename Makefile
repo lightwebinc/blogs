@@ -76,11 +76,11 @@ e2e: ts-build
 
 # The blogs command end to end: init, fund, stream, produce (both profiles,
 # gzip, a restart, a publish that fails and is resumed), read,
-# verify-interval and backfill, against two local reference
-# hosts loading the bundle, over a local chain (internal/testchain) serving the node's
-# API and the header source. Not part of verify: it needs Docker (for MySQL)
-# and a reference host directory holding its compiled dist/index.js and its
-# node_modules.
+# verify-interval, backfill, archive and sweep, against two local reference
+# hosts loading the bundle, over a local chain (internal/testchain) serving
+# the node's API and the header source. Not part of verify: it needs Docker
+# (for MySQL) and a reference host directory holding its compiled
+# dist/index.js and its node_modules.
 #
 #	make e2e-client REFERENCE_HOST=/path/to/reference-host
 e2e-client: ts-build

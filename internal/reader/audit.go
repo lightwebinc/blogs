@@ -306,3 +306,68 @@ func choose(held map[uint64][]*Candidate, a *logrec.Anchor) ([]*Candidate, bool)
 	}
 	return nil, false
 }
+
+// Token reads one answered anchor token for interval k of producer's
+// stream: its record, its producer and stream, and a proof the headers
+// hold. why names a refusal; an error means the headers could not be asked.
+func (c *Client) Token(ctx context.Context, a Answer, stream string, producer []byte, k uint64) (t *Token, why string, err error) {
+	if c.Headers == nil {
+		return nil, "", errors.New("no header source: a proof cannot be checked")
+	}
+	return c.candidate(ctx, a, stream, producer, k)
+}
+
+// Next is one step of the walk VerifyInterval makes, for a verifier that
+// keeps the chain between runs: it finds interval k's canonical token among
+// the hosts' answers, given the canonical token of interval k - 1 (nil for
+// k = 1), and holds it to the join and the anchor rules. The outputs its
+// inputs spend are read from prev, from evidence (transactions by txid),
+// or from Asset. An error is no verdict.
+func (c *Client) Next(ctx context.Context, stream string, producer []byte, k uint64, prev *Token, evidence map[string]*transaction.Transaction) (*Token, *Report, error) {
+	if c.Headers == nil {
+		return nil, nil, errors.New("no header source: a proof cannot be checked")
+	}
+	r := &Report{}
+	as, err := c.AskAny(ctx, Query{Stream: stream, Producer: hex.EncodeToString(producer), Interval: k}, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	var cands []*Token
+	for _, a := range as {
+		t, why, err := c.candidate(ctx, a, stream, producer, k)
+		if err != nil {
+			return nil, nil, err
+		}
+		if why != "" {
+			r.Refusals = append(r.Refusals, fmt.Sprintf("interval %d: %s", k, why))
+			continue
+		}
+		cands = append(cands, t)
+	}
+	canon := canonical(cands, prev)
+	switch {
+	case canon == nil && len(as) == 0:
+		return nil, r.incomplete("interval %d: no host answered; an empty answer proves nothing", k), nil
+	case canon == nil:
+		return nil, r.incomplete("interval %d: no answered token continues the chain (%d answered)", k, len(as)), nil
+	case prev != nil && canon.Anchor.First != prev.Anchor.First+prev.Anchor.Count:
+		return nil, r.refuse("interval %d: anchor-join: first %d does not continue interval %d, which ends at seq %d",
+			k, canon.Anchor.First, k-1, prev.Anchor.Last()), nil
+	}
+	if evidence == nil {
+		evidence = map[string]*transaction.Transaction{}
+	}
+	coins, missing, err := c.coins(ctx, canon.Tx, prev, evidence)
+	if err != nil {
+		return nil, nil, err
+	}
+	if missing != "" {
+		return nil, r.incomplete("interval %d: %s", k, missing), nil
+	}
+	if _, err := logrec.Admit(ctx, canon.Tx, coins, logrec.Host{Stream: stream, Policy: logrec.Policy{Producers: [][]byte{producer}}, Headers: c.Headers}); err != nil {
+		return nil, r.refuse("interval %d token %s: %s: %v", k, canon.Txid, logrec.Reason(err), err), nil
+	}
+	r.Chain = []*Token{canon}
+	r.Outcome = Verified
+	return canon, r, nil
+}

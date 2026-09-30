@@ -120,12 +120,26 @@ func TestClientE2E(t *testing.T) {
 	if node == "" {
 		node = "node"
 	}
-	module, err := filepath.Abs("../../host/dist/module.js")
+	// The bundle, staged as a deployment places it: in a modules/ directory
+	// whose only node_modules is the reference host's.
+	bundle, err := filepath.Abs("../../host/bundle/blogs-module.js")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(module); err != nil {
-		t.Fatalf("the host module is not built: %v", err)
+	raw, err := os.ReadFile(bundle)
+	if err != nil {
+		t.Fatalf("the host module bundle is not built: %v", err)
+	}
+	staging := t.TempDir()
+	if err := os.Symlink(filepath.Join(dir, "node_modules"), filepath.Join(staging, "node_modules")); err != nil {
+		t.Fatal(err)
+	}
+	module := filepath.Join(staging, "modules", "blogs", "blogs-module.js")
+	if err := os.MkdirAll(filepath.Dir(module), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(module, raw, 0o644); err != nil {
+		t.Fatal(err)
 	}
 	old := produce.Retries
 	produce.Retries = []time.Duration{50 * time.Millisecond}
@@ -161,7 +175,10 @@ func TestClientE2E(t *testing.T) {
 	}
 	a, b := hosts["a"], hosts["b"]
 	h.env["BLOGS_FACADE"], h.env["BLOGS_HOSTS"] = a.url, a.url
-	step("two reference hosts with the blogs module, admitting only this producer")
+	if !strings.Contains(a.out.String(), "blogs module mounted") || !strings.Contains(a.out.String(), "@lightwebinc/bcommon") {
+		t.Fatalf("host a did not log the bundle's mount line:\n%s", a.out)
+	}
+	step("two reference hosts loading the bundle, admitting only this producer")
 
 	// Interval 1: full-bytes lines, a hostile line among them.
 	in1 := linesOf(0, 20) + "colour \x1b[31mred\x1b[0m title\x1b]0;owned\x07 end\n"
@@ -251,6 +268,30 @@ func TestClientE2E(t *testing.T) {
 	}
 	h.must("", "verify-interval", stream, producer, "4")
 	step("facade down mid-publish: exit 2 with the carrier persisted; anchor republished it, seq 11 linked, interval 4 VERIFIED")
+
+	// Archives of both hosts hold the same proof of every interval, once b
+	// is filled with interval 4, which only a received.
+	h.must("", "backfill", stream, producer, "-from", a.url, "-to", b.url, "-interval", "4")
+	dirA, dirB := t.TempDir(), t.TempDir()
+	ra := h.must("", "archive", stream, producer, "-dir", dirA, "-host", a.url, "-content-dir", content)
+	rb := h.must("", "archive", stream, producer, "-dir", dirB, "-host", b.url, "-content-dir", content)
+	la, lb := latestLine.FindStringSubmatch(ra.stdout), latestLine.FindStringSubmatch(rb.stdout)
+	if la == nil || lb == nil || la[1] != "4" || la[0] != lb[0] {
+		t.Fatalf("archives:\n%s\n%s\n%s\n%s", ra.stdout, ra.stderr, rb.stdout, rb.stderr)
+	}
+	step("archive: both hosts' copies stored, intervals 1 to 4 proven with the same roots")
+
+	// A retraction on a real host: seq 7 (inside interval 2) swept.
+	r = h.must("", "sweep", stream, "-retract-seqs", "7", "-yes", "-poll", "50ms")
+	if !strings.Contains(r.stderr, "seqs 7 retracted") {
+		t.Fatalf("sweep:\n%s\n%s", r.stdout, r.stderr)
+	}
+	h.want(h.run("", "read", stream, producer, "-from", "7", "-to", "7"), exitIncomplete, "seq 7: MISSING")
+	r = h.must("", "archive", stream, producer, "-dir", t.TempDir(), "-host", a.url, "-content-dir", content)
+	if !strings.Contains(r.stdout, "interval 2  proven-with-holes  seqs 6 to 8") || !strings.Contains(r.stdout, "holes 7") {
+		t.Fatalf("archive after the retraction:\n%s\n%s", r.stdout, r.stderr)
+	}
+	step("sweep: seq 7 retracted at host a; a fresh archive proves interval 2 with the hole the anchor commits")
 
 	r = h.must("", "doctor")
 	if !strings.Contains(r.stdout, "host        "+a.url+" answering") {
