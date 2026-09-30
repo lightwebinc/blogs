@@ -8,3 +8,4 @@ go.work.sum
 # quickstart's .env holds a stream.
 /scripts/*.env
 /deploy/**/.env
+/deploy/quickstart/stream.txt

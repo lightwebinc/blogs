@@ -10,6 +10,7 @@ host/node_modules
 host/dist
 host/bundle
 deploy/**/.env
+deploy/quickstart/stream.txt
 scripts/*.env
 **/*.test
 **/*.out

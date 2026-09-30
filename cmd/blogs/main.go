@@ -42,6 +42,7 @@ const usageText = `usage: blogs [global flags] <command> [flags] [arguments]
 
 producer commands (a producer home):
   init                         create the home: identity key and coin pool
+  fund -txid TXID              import a mined payment to the fund address
   fund [-blocks N]             mine coinbase to the fund address (a chain you run)
   stream new <name>            create a stream: <name>_<random suffix>, and its topic
   stream list                  the streams this home produces
@@ -78,6 +79,8 @@ global flags:
   -quorum Q           mode unicast: hosts that must take an object for it to
                       count as published: all (default), majority, one or N
   -timeout DUR        per request (default 15s)
+  -tx-source SOURCE   woc:main or woc:test: where a reader with no node reads
+                      the funding trees an anchor spends (default: asset)
   -v                  verbose
   -version            print the version and exit
 
@@ -172,6 +175,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		network   = fs.String("network", "", "")
 		quorum    = fs.String("quorum", "", "")
 		timeout   = fs.String("timeout", "", "")
+		txSource  = fs.String("tx-source", "", "")
 		verbose   = fs.Bool("v", false, "")
 		showVer   = fs.Bool("version", false, "")
 	)
@@ -210,7 +214,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return exitUsage
 	}
 	over := map[string]string{}
-	for k, v := range map[string]string{"home": *home, "hosts": *hosts, "header_url": *headerURL, "mode": *mode, "network": *network, "quorum": *quorum, "timeout": *timeout} {
+	for k, v := range map[string]string{"home": *home, "hosts": *hosts, "header_url": *headerURL, "mode": *mode, "network": *network, "quorum": *quorum, "timeout": *timeout, "tx_source": *txSource} {
 		if v != "" {
 			over[k] = v
 		}

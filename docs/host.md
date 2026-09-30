@@ -64,6 +64,17 @@ The tsc tree `host/dist/module.js` loads the same way from inside this
 repository, where `host/node_modules` resolves its imports; the tests use
 it, and deployments use the bundle.
 
+## The image
+
+`host/Dockerfile` builds `ghcr.io/lightwebinc/blogs-host`: a reference
+overlay host image with the bundle at `/app/modules/blogs/blogs-module.js`
+and `OVERLAY_MODULES` naming it. Its entrypoint requires `BLOGS_STREAMS`
+(exit 64 without it), derives `OVERLAY_TOPICS` from it when unset
+(`tm_log_<stream>` per entry), and uses a random `OVERLAY_ADMIN_TOKEN` for
+the run when none is set. [self-host.md](self-host.md) runs it with MySQL
+and a TLS front; `make docker-smoke-host` checks that the bundle imports
+the host's own `@bsv/sdk`.
+
 ## What it exports
 
 | Export | What it is |
