@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -22,9 +23,11 @@ import (
 // engine's SPV and the blogs topic manager (logrec.Admit) over the topic's
 // previous coins, and /lookup answers the two ls_log classes. Refusals the
 // specification says leave no record (anchor-input, unmined) are not
-// recorded, so the same transaction offered again is decided afresh.
-// Retraction, restore and the link statuses are the real host module's and
-// are not modelled.
+// recorded, so the same transaction offered again is decided afresh. A
+// mined transaction admitted here that spends the funding output a held
+// carrier spent retracts that carrier: the batch class stops answering it.
+// Restore and the link statuses are the real host module's and are not
+// modelled.
 type Host struct {
 	mu      sync.Mutex
 	chain   *Chain
@@ -33,14 +36,23 @@ type Host struct {
 	beef    map[string][]byte
 	batches map[string][]answer
 	tokens  map[string][]answer
+	// funded is the batch key and carrier each held carrier's funding
+	// output belongs to.
+	funded map[transaction.Outpoint]funder
 	// Down answers every request with 503.
 	Down bool
 	// Drop, when set, is asked about each submission; true discards it
 	// unseen, as a plane that lost the object would.
 	Drop func(tx *transaction.Transaction) bool
-	// Submits counts submissions; Refused counts refusals by reason.
-	Submits int
-	Refused map[string]int
+	// Submits counts submissions; Refused counts refusals by reason;
+	// Retracted counts carriers retracted.
+	Submits   int
+	Refused   map[string]int
+	Retracted int
+}
+
+type funder struct {
+	key, txid string
 }
 
 type answer struct {
@@ -51,7 +63,8 @@ type answer struct {
 // NewHost is a host whose engine checks proofs against chain.
 func NewHost(chain *Chain) *Host {
 	return &Host{chain: chain, seen: map[string]bool{}, held: map[transaction.Outpoint]logrec.Coin{},
-		beef: map[string][]byte{}, batches: map[string][]answer{}, tokens: map[string][]answer{}, Refused: map[string]int{}}
+		beef: map[string][]byte{}, batches: map[string][]answer{}, tokens: map[string][]answer{}, Refused: map[string]int{},
+		funded: map[transaction.Outpoint]funder{}}
 }
 
 func key(producer []byte, stream string, n uint64) string {
@@ -131,12 +144,24 @@ func (h *Host) submit(w http.ResponseWriter, r *http.Request) {
 		o := tx.Outputs[i]
 		h.held[transaction.Outpoint{Txid: *tx.TxID(), Index: i}] = logrec.Coin{LockingScript: *o.LockingScript, Satoshis: o.Satoshis}
 	}
+	if tx.MerklePath != nil {
+		for _, in := range tx.Inputs {
+			op := transaction.Outpoint{Txid: *in.SourceTXID, Index: in.SourceTxOutIndex}
+			if f, ok := h.funded[op]; ok && f.txid != id {
+				h.batches[f.key] = slices.DeleteFunc(h.batches[f.key], func(a answer) bool { return a.txid == f.txid })
+				delete(h.funded, op)
+				h.Retracted++
+			}
+		}
+	}
 	var admitted []uint32
 	switch adm.Kind {
 	case logrec.KindBatch:
 		b := adm.Carrier.Batch
 		k := key(b.Producer, b.Stream, b.Seq)
 		h.batches[k] = append(h.batches[k], answer{id, 0})
+		in := tx.Inputs[0]
+		h.funded[transaction.Outpoint{Txid: *in.SourceTXID, Index: in.SourceTxOutIndex}] = funder{k, id}
 		hold(0)
 		admitted = []uint32{0}
 	case logrec.KindAnchor:

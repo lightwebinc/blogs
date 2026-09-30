@@ -92,7 +92,10 @@ func (g *global) engine(ctx context.Context, stream string, f *produceFlags, o p
 		}
 		return nil, nil, err
 	}
-	o.Poll, o.ObjectBound, o.Fees, o.Wait = f.poll, g.cfg.ObjectBound, mint.DefaultFees, 10*time.Minute
+	o.Poll, o.ObjectBound, o.Fees = f.poll, g.cfg.ObjectBound, mint.DefaultFees
+	if o.Wait == 0 {
+		o.Wait = 10 * time.Minute
+	}
 	o.TreeCount, o.TreeSats, o.Ahead = f.treeCount, f.treeSats, uint32(f.ahead)
 	o.AnchorTreeCount, o.AnchorTreeSats, o.AnchorAhead = f.anchorTreeCount, f.anchorTreeSats, uint32(f.anchorAhead)
 	e, err := produce.New(st, w.Signer(), w.Pool, legs, o)

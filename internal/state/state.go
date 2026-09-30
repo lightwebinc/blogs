@@ -69,6 +69,11 @@ type Stream struct {
 	AnchorTrees []funding.Tree `json:"anchorTrees,omitempty"`
 	Ahead       []funding.Tree `json:"ahead,omitempty"`
 
+	// Sweeps are the transactions built to spend funding-tree outputs, in
+	// the order they were built: retractions and retirements. One not yet
+	// Done is in flight, and the next sweep resumes it before anything else.
+	Sweeps []Sweep `json:"sweeps,omitempty"`
+
 	// Tail is where a file being followed was read to.
 	Tail *Tail `json:"tail,omitempty"`
 
@@ -90,6 +95,40 @@ type Anchor struct {
 	Height  uint32 `json:"height,omitempty"`
 	// Submitted is set once the settlement leg accepted the token.
 	Submitted bool `json:"submitted,omitempty"`
+}
+
+// The kinds of sweep.
+const (
+	// SweepRetract spends outputs of a batch funding tree, used or not,
+	// with bcommon carrier.Sweep: output 0 is a funding-shaped tombstone,
+	// and every carrier that spent one of the outputs is retracted once it
+	// mines (docs/spec.md section 6.4).
+	SweepRetract = "retract"
+	// SweepRetire spends only unused outputs of a tree no longer in use,
+	// paying their value back to the coin pool. It retracts nothing.
+	SweepRetire = "retire"
+)
+
+// Sweep is one mined transaction spending funding-tree outputs.
+type Sweep struct {
+	Kind  string   `json:"kind"`
+	Tree  string   `json:"tree"`
+	Vouts []uint32 `json:"vouts"`
+	// Seqs are the batches it retracts, when they were named.
+	Seqs   []uint64 `json:"seqs,omitempty"`
+	Txid   string   `json:"txid"`
+	RawHex string   `json:"rawHex"`
+	// BeefHex is kept while it is unmined; BumpHex and Height once it
+	// mined.
+	BeefHex string `json:"beefHex,omitempty"`
+	BumpHex string `json:"bumpHex,omitempty"`
+	Height  uint32 `json:"height,omitempty"`
+	// Publish is set when the hosts hold what it spends, so it goes to the
+	// stream's topic once mined; a tree minted ahead and never published
+	// is retired without it.
+	Publish   bool `json:"publish,omitempty"`
+	Submitted bool `json:"submitted,omitempty"`
+	Done      bool `json:"done,omitempty"`
 }
 
 // Tail is a followed file's position.

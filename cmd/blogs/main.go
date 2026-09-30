@@ -1,8 +1,9 @@
 // Command blogs is a producer and reader of blogs log streams: it creates a
 // producer home and a stream, turns lines from stdin or a followed file into
 // signed batches published on the stream's topic, anchors them in one mined
-// token per interval, and reads, audits and backfills streams from overlay
-// hosts, checking every answer itself.
+// token per interval, retracts batches by sweeping their funding outputs,
+// and reads, audits and backfills streams from overlay hosts,
+// checking every answer itself.
 //
 // Exit codes: 0 done or verified; 1 refused (the evidence contradicts what
 // was asked); 2 usage, configuration, local or transport error; 3
@@ -46,6 +47,8 @@ producer commands (a producer home):
   stream list                  the streams this home produces
   produce <stream>             read lines from stdin or -file, publish batches, anchor intervals
   anchor <stream>              anchor every published batch now and wait for it
+  sweep <stream> (-retract-seqs A-B | -retract-tree TXID | -retire) [-yes]
+                               retract batches, or retire unused funding outputs
   doctor                       local state and reachability; reads only
 
 reader commands (no home needed):
@@ -133,6 +136,7 @@ func init() {
 		"read":            cmdRead,
 		"verify-interval": cmdVerifyInterval,
 		"backfill":        cmdBackfill,
+		"sweep":           cmdSweep,
 	}
 }
 

@@ -138,11 +138,7 @@ func New(st *state.Stream, signer *bwallet.Signer, pool *bwallet.Pool, legs Legs
 	}
 	e := &Engine{St: st, Signer: signer, Pool: pool, Legs: legs, Opts: o, Now: time.Now, topic: topic}
 	e.kept = &producer.Kept{Load: e.load}
-	e.payer = &producer.Payer{
-		Pool: pool, Keys: map[string]*bwallet.Signer{signer.IdentityHex(): signer},
-		Kept: e.kept, Settler: legs.Settler, Asset: legs.Asset, Fees: o.Fees,
-		Timeout: o.Wait, Poll: o.Poll, Note: e.note,
-	}
+	e.payer = e.newPayer()
 	lock := func(ctx context.Context) (*script.Script, error) {
 		return carrier.FundingLock(ctx, signer, signer.Originator, Params)
 	}
@@ -155,6 +151,21 @@ func New(st *state.Stream, signer *bwallet.Signer, pool *bwallet.Pool, legs Legs
 	e.collector = &producer.Collector{Proofs: producer.Proofs{Arcade: legs.Arcade, Asset: legs.Asset},
 		Kept: e.kept, Pool: pool, Save: st.Save, Note: e.note}
 	return e, nil
+}
+
+// newPayer is a Payer over the engine's pool and legs. A sweep takes its
+// fee through a Payer of its own, so that giving back its coin gives back
+// nothing another transaction took.
+func (e *Engine) newPayer() *producer.Payer {
+	p := &producer.Payer{
+		Pool: e.Pool, Keys: map[string]*bwallet.Signer{e.Signer.IdentityHex(): e.Signer},
+		Kept: e.kept, Settler: e.Legs.Settler, Asset: e.Legs.Asset, Fees: e.Opts.Fees,
+		Timeout: e.Opts.Wait, Poll: e.Opts.Poll, Note: e.note,
+	}
+	if e.payer != nil {
+		p.Tip = e.payer.Tip
+	}
+	return p
 }
 
 func (e *Engine) note(format string, args ...any) {
