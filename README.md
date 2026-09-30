@@ -7,8 +7,10 @@ interval's batches, so any archive proves its copy complete and any auditor
 proves time. Batches are never mined: they ride unmined carriers funded from
 a funding tree, and only the anchors are mined.
 
-**Status:** contract. The record formats, the anchor, the topic manager and
-lookup rules, and golden vectors are specified; the command and the host
+**Status:** codecs. The record formats, the anchor, the topic manager and
+lookup rules, and golden vectors are specified; the record codec and the
+topic manager's transaction rules are built in Go (`internal/logrec`) and in
+TypeScript (`host/`), held to the same vectors. The command and the host
 module are not built yet.
 
 ## Documentation
@@ -21,15 +23,24 @@ module are not built yet.
 
 ## Build and test
 
-Go 1.27 or later. Built on [bcommon](https://github.com/lightwebinc/bcommon)
-at an exact tag and github.com/bsv-blockchain/go-sdk at exactly v1.5.2.
+Go 1.27 or later and Node 24. Built on
+[bcommon](https://github.com/lightwebinc/bcommon) at an exact tag, its
+TypeScript package at the same version (vendored under `host/vendor`), and
+github.com/bsv-blockchain/go-sdk at exactly v1.5.2.
 
 ```bash
-GOWORK=off go vet ./...
-GOWORK=off go test -race ./...
-GOWORK=off go run ./cmd/vectors        # regenerate testdata/vectors
-GOWORK=off go run ./cmd/vectors -check # compare, write nothing
+(cd host && npm ci)  # once
+make verify          # gofmt, vet, go-sdk pin, typecheck, vectors, tests
+make test            # Go and TypeScript tests
+make vectors         # regenerate testdata/vectors (Go) and testdata/ts (TypeScript)
+make vectors-check   # compare both, write nothing
 ```
+
+`NODE=/path/to/node` selects a Node 24 binary that is not on `PATH`. To move
+bcommon to another tag, pack its `ts/` package at that tag into
+`host/vendor/lightwebinc-bcommon-<version>.tgz`, point `host/package.json` at
+it and reinstall; a test fails while the Go and TypeScript sides name
+different versions.
 
 ## Licence
 

@@ -812,11 +812,20 @@ them and compares byte for byte, and refuses a file nothing generates.
 | `anchor-v1.json`, `anchor-interval-*.hex` | two consecutive intervals (5 and 3 batches): commitments, leaves, root, every inclusion path, the record, the token's fields and the hash its signature covers |
 | `derivation-v1.json` | the registry values, the keys the fixed test key derives for `batch`, `anchor` and `fund`, and two stream identifiers with one readable part and different suffixes, split, with their topics |
 | `refusal-v1.json` | fifty-three byte strings the record decoder refuses, each with its reason (section 3.2) and what admission does with an output carrying it: refuse, or skip one that does not claim to be a record. Every one is decided by the record alone; a `seq`/`prev` link break is a status (section 8.2), never a refusal, so none is here |
+| `transaction-v1.json` | forty-eight transactions, each as raw hex and as BEEF, with the block headers they are admitted against: three batch carriers, two anchor tokens, a funding tree mined and unmined, a sweep, and a refusal for every rule of section 8.1 in its order, each with its reason. Every refused transaction's own scripts still verify, so each is caught only by the rule it names |
 
 The vectors' stream is `example_app_qzxkvbmwtr`; its suffix is a fixed
 example so that the vectors are reproducible, where a real stream draws its
 suffix at random. Commitments in the anchor vectors are fixed stand-ins,
-`SHA-256("blogs/vector/commitment/<seq>")`; carrier and token transactions,
-and the script and unlocking rules of section 8.1, get their vectors with the
-transaction codec. The test key is 32 bytes of `0x42`, public, and never for real
-use.
+`SHA-256("blogs/vector/commitment/<seq>")`; the transaction vectors use real
+carrier txids. Signatures are deterministic (RFC 6979). The test key is 32
+bytes of `0x42`, and a second key for other-producer cases 32 bytes of `0x43`;
+both are public and never for real use. In the transaction vectors the BEEF of
+a mined transaction also carries the transactions its inputs spend, because
+the anchor rules read their outputs.
+
+The TypeScript codec in `host/` runs every file above and writes
+`testdata/ts/ts-v1.json` (records, a locator, an anchor with its root and a
+path, a stream drawn from fixed random bytes, and a canonical PushDrop
+script), which the Go tests decode and rebuild byte for byte. `make
+vectors-check` regenerates both sets and compares them.
