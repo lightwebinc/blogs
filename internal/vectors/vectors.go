@@ -254,6 +254,15 @@ func Generate() (map[string][]byte, error) {
 	}); err != nil {
 		return nil, err
 	}
+
+	// Transactions.
+	txv, err := transactionVectors()
+	if err != nil {
+		return nil, err
+	}
+	if err := putJSON(files, "transaction-v1.json", txv); err != nil {
+		return nil, err
+	}
 	return files, nil
 }
 
