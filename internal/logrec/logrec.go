@@ -1,8 +1,11 @@
 // Package logrec is the byte-level contract of a blogs log stream: the batch
 // record a carrier holds, the digest-only locator, the interval anchor record
 // a mined token holds, and the RFC 6962 leaf rule an anchor's root is
-// computed by. docs/spec.md is the normative text; this package is the
-// minimal codec that generates the golden vectors under testdata/vectors.
+// computed by, and the topic manager's transaction rules (Admit): which
+// output claims a record, and the carrier, anchor token and funding rules in
+// their refusal order. docs/spec.md is the normative text; this package
+// generates the golden vectors under testdata/vectors, and the TypeScript
+// codec under host/ is held to the same bytes.
 //
 // Every record is canonical CBOR through bcommon's cbor package, so one
 // value has one encoding a reader accepts. Every decoder bounds its input
@@ -187,6 +190,10 @@ func Reason(err error) string {
 		{ErrRange, "range"}, {ErrProducer, "producer"}, {ErrStream, "stream"},
 		{ErrPrev, "prev"}, {ErrProfileShape, "profile-shape"},
 		{ErrLocator, "locator"}, {ErrContent, "content"},
+		{ErrCarrierShape, "carrier-shape"}, {ErrAnchorShape, "anchor-shape"},
+		{ErrProducerPolicy, "producer-policy"}, {ErrMineable, "mineable"},
+		{ErrLock, "lock"}, {ErrSignature, "signature"}, {ErrFunding, "funding"},
+		{ErrUnlock, "unlock"}, {ErrAnchorInput, "anchor-input"}, {ErrUnmined, "unmined"},
 	} {
 		if errors.Is(err, e.err) {
 			return e.s
