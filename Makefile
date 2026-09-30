@@ -8,7 +8,7 @@
 #
 #	make test NODE=/path/to/node24
 
-.PHONY: verify test go-test ts-test ts-check ts-build node-check vet fmt-check deps-check vectors vectors-check
+.PHONY: verify test go-test ts-test ts-check ts-build module node-check vet fmt-check deps-check vectors vectors-check e2e
 
 NODE ?= node
 TSC := $(NODE) node_modules/typescript/bin/tsc
@@ -47,8 +47,22 @@ ts-check: node-check
 ts-build: node-check
 	cd host && $(NODE) -e "require('node:fs').rmSync('dist', { recursive: true, force: true })" && $(TSC)
 
+# The host module a reference overlay host loads: host/dist/module.js, named
+# by absolute path in OVERLAY_MODULES. Its tests (make test) load that file
+# the way the host's loader does and run it inside the overlay engine.
+module: ts-build
+
 ts-test: ts-build
 	cd host && $(NODE) --test "dist/**/*.test.js"
+
+# One publish-and-lookup on a local reference overlay host, with restart and
+# restore. Not part of verify: it needs Docker (for MySQL) and a reference
+# host directory holding its compiled dist/index.js and its node_modules.
+#
+#	make e2e REFERENCE_HOST=/path/to/reference-host
+e2e: ts-build
+	@test -n "$(REFERENCE_HOST)" || { echo "set REFERENCE_HOST=/path/to/reference-host"; exit 1; }
+	cd host && $(NODE) dist/e2e.js $(abspath $(REFERENCE_HOST))
 
 # Write both vector sets: the Go codec's under testdata/vectors, the
 # TypeScript codec's under testdata/ts. A change to either is a change to
