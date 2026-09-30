@@ -520,11 +520,13 @@ func cmdDoctor(ctx context.Context, g *global, args []string) error {
 func ping(ctx context.Context, base string, timeout time.Duration) string {
 	c := readerFor(nil, []string{base}, timeout)
 	_, err := c.Ask(ctx, base, pingQuery)
-	if err == nil {
+	// The question is out of range, so a live ls_log refuses it (4xx): that
+	// is the answer expected. A 5xx is a host that is up and failing.
+	if err == nil || strings.Contains(err.Error(), "status 4") {
 		return "answering"
 	}
-	if strings.Contains(err.Error(), "status 4") || strings.Contains(err.Error(), "status 5") {
-		return "answering (" + firstLine(err.Error()) + ")"
+	if strings.Contains(err.Error(), "status 5") {
+		return "answering with an ERROR (" + firstLine(err.Error()) + ")"
 	}
 	return "NOT ANSWERING: " + firstLine(err.Error())
 }

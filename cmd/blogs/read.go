@@ -333,12 +333,19 @@ func cmdVerifyInterval(ctx context.Context, g *global, args []string) error {
 			n, stream, pos[1], last.Anchor.First, last.Anchor.Last(), hex.EncodeToString(last.Anchor.Root[:]), last.Height)
 		return nil
 	case reader.Refused:
-		fmt.Fprintf(out, "REFUSED interval %d: %s\n", n, termsafe.Text(rep.Reason))
+		fmt.Fprintf(out, "REFUSED interval %d: %s\n", n, termsafe.Text(ownReason(rep.Reason, n)))
 		return &exitError{exitRefused, ""}
 	default:
-		fmt.Fprintf(out, "INCOMPLETE interval %d: %s\n", n, termsafe.Text(rep.Reason))
+		fmt.Fprintf(out, "INCOMPLETE interval %d: %s\n", n, termsafe.Text(ownReason(rep.Reason, n)))
 		return &exitError{exitIncomplete, ""}
 	}
+}
+
+// ownReason drops the interval a reason names when it is the interval
+// audited, so the verdict line names it once. A reason about an earlier
+// interval of the walk keeps its name.
+func ownReason(reason string, n uint64) string {
+	return strings.TrimPrefix(reason, fmt.Sprintf("interval %d: ", n))
 }
 
 func seqList(s []uint64) string {

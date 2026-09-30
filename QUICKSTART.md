@@ -118,7 +118,8 @@ host http://host-b:8080: took 0 object(s), missed 2: seq 5, anchor interval 2
 a host missed objects; once it is back, copy them from the others: blogs backfill app_yuqhfqxzfo 03965f…37ee -seqs 5-5 -anchors 2
 $ docker compose start host-b
 $ blogs -hosts http://host-b:8080 verify-interval $STREAM $PRODUCER 2
-INCOMPLETE interval 2: interval 2: no host answered; an empty answer proves nothing
+interval 1  token 0cead…52dc  height 804  seqs 1 to 4
+INCOMPLETE interval 2: no host answered; an empty answer proves nothing
 $ blogs backfill $STREAM $PRODUCER -seqs 5-5 -anchors 2
 ...
 backfill app_yuqhfqxzfo to http://host-b:8080: 1 held, 2 filled, 0 missing, 0 refused
