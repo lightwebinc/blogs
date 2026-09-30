@@ -94,7 +94,7 @@ func (r *rig) engine(o produce.Options) *produce.Engine {
 }
 
 func (r *rig) reader() *reader.Client {
-	return &reader.Client{Hosts: []string{r.hostS.URL}, Headers: r.chain, Asset: r.asset(), Timeout: 5 * time.Second}
+	return &reader.Client{Hosts: []string{r.hostS.URL}, Headers: r.chain, Txs: reader.AssetSource{Asset: r.asset()}, Timeout: 5 * time.Second}
 }
 
 func lines(n, from int) produce.Batch {

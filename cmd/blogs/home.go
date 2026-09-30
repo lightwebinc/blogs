@@ -336,6 +336,14 @@ func cmdDoctor(ctx context.Context, g *global, args []string) error {
 	} else {
 		fmt.Fprintln(out, "node        not configured (asset)")
 	}
+	switch {
+	case g.cfg.Asset != "":
+		fmt.Fprintln(out, "tx source   the node (asset)")
+	case g.cfg.TxSource != "":
+		fmt.Fprintf(out, "tx source   %s\n", g.cfg.TxSource)
+	default:
+		fmt.Fprintln(out, "tx source   none: verify-interval, archive and backfill cannot read an anchor's fee tree (set asset or tx_source)")
+	}
 	if e, err := g.openWallet(); err != nil {
 		fmt.Fprintf(out, "identity    absent (%v)\n", err)
 	} else {

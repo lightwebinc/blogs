@@ -187,3 +187,12 @@ func TestInitProduceReadVerify(t *testing.T) {
 		t.Fatalf("state: %+v %v", st, err)
 	}
 }
+
+func TestATransactionSourceMustMatchTheNetwork(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.env["BLOGS_TX_SOURCE"] = "woc:main"
+	h.want(h.run("", "doctor"), exitUsage, "tx_source woc:main is the main network but network is regtest")
+	h.env["BLOGS_TX_SOURCE"] = "https://api.example.com"
+	h.want(h.run("", "doctor"), exitUsage, "tx_source must be woc:main or woc:test")
+}

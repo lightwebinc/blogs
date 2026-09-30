@@ -62,6 +62,11 @@ type Config struct {
 	Settle string
 	// Timeout bounds each request to a host, node or header source.
 	Timeout time.Duration
+	// TxSource is where a reader with no node (no Asset) reads the funding
+	// trees an anchor spends: "woc:main" or "woc:test", the public
+	// WhatsOnChain API. Its answers are held to the txid, and a proof to
+	// the header source, so it is trusted with nothing.
+	TxSource string
 }
 
 // DefaultObjectBound is the object bound assumed when none is configured.
@@ -127,7 +132,7 @@ func Defaults() Config {
 // Keys is the file grammar's key list, in lexicographic order. A key not in
 // it is an error: a misspelt key that was silently ignored would leave a
 // setting at its default with no sign that the file was ever read.
-var Keys = []string{"arcade_key", "asset", "facade", "header_url", "home", "hosts", "mode", "network", "object_bound", "originator", "quorum", "rpc", "rpc_pass", "rpc_user", "settle", "timeout"}
+var Keys = []string{"arcade_key", "asset", "facade", "header_url", "home", "hosts", "mode", "network", "object_bound", "originator", "quorum", "rpc", "rpc_pass", "rpc_user", "settle", "timeout", "tx_source"}
 
 // ErrUnknownKey reports a key the grammar does not define.
 var ErrUnknownKey = errors.New("config: unknown key")
@@ -265,6 +270,11 @@ func (c Config) Apply(vals map[string]string) (Config, error) {
 			c.RPCUser = v
 		case "settle":
 			c.Settle = v
+		case "tx_source":
+			if v != "woc:main" && v != "woc:test" {
+				return c, fmt.Errorf("config: tx_source must be woc:main or woc:test, got %q", v)
+			}
+			c.TxSource = v
 		case "timeout":
 			d, err := time.ParseDuration(v)
 			if err != nil || d <= 0 {

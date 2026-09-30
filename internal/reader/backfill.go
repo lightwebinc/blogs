@@ -3,6 +3,7 @@ package reader
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 
 	"github.com/bsv-blockchain/go-sdk/transaction"
@@ -91,7 +92,7 @@ func (c *Client) Run(ctx context.Context, b Backfill) (Result, error) {
 }
 
 // feedFunding submits to the host the funding trees an anchor token's fee
-// inputs spend, read from the node with their proofs, since no lookup class
+// inputs spend, read from Txs with their proofs, since no lookup class
 // serves a funding tree and a host admits an anchor only once it holds the
 // outputs it spends. It reports whether it submitted any.
 func (c *Client) feedFunding(ctx context.Context, to *publish.Facade, topic string, a Answer, note func(string, ...any)) (bool, error) {
@@ -109,21 +110,16 @@ func (c *Client) feedFunding(ctx context.Context, to *publish.Facade, topic stri
 			continue
 		}
 		id := in.SourceTXID.String()
-		if c.Asset == nil {
-			note("interval %d spends funding tree %s, which no lookup class serves; configure asset to read it from a node", an.Interval, id)
+		if c.Txs == nil {
+			note("interval %d spends funding tree %s, which no lookup class serves; configure asset (a node) or tx_source (woc:main or woc:test) to read it", an.Interval, id)
 			continue
 		}
-		raw, err := c.Asset.TxRaw(ctx, id)
+		src, err := c.fetch(ctx, id, true)
+		if errors.Is(err, ErrOtherBytes) {
+			return false, err
+		}
 		if err != nil {
 			note("interval %d: funding tree %s: %v", an.Interval, id, err)
-			continue
-		}
-		src, err := transaction.NewTransactionFromBytes(raw)
-		if err != nil || src.TxID().String() != id {
-			return false, fmt.Errorf("the node answered funding tree %s with other bytes", id)
-		}
-		if src.MerklePath, _, err = c.Asset.Proof(ctx, id); err != nil {
-			note("interval %d: funding tree %s: its proof: %v", an.Interval, id, err)
 			continue
 		}
 		beef, err := src.AtomicBEEF(false)
@@ -133,7 +129,7 @@ func (c *Client) feedFunding(ctx context.Context, to *publish.Facade, topic stri
 		if _, err := to.Submit(ctx, topic, beef); err != nil {
 			return false, fmt.Errorf("submitting funding tree %s: %w", id, err)
 		}
-		note("interval %d: funding tree %s submitted from the node", an.Interval, id)
+		note("interval %d: funding tree %s submitted from %s", an.Interval, id, c.Txs.Name())
 		fed = true
 	}
 	return fed, nil

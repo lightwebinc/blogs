@@ -21,7 +21,6 @@ import (
 
 	"github.com/lightwebinc/bcommon/hostset"
 	"github.com/lightwebinc/bcommon/lookup"
-	"github.com/lightwebinc/bcommon/nodeapi"
 	"github.com/lightwebinc/bcommon/verify"
 
 	"github.com/lightwebinc/blogs/internal/logrec"
@@ -35,9 +34,9 @@ type Client struct {
 	// checks, which only backfill allows: the host it submits to checks
 	// proofs itself.
 	Headers chaintracker.ChainTracker
-	// Asset, when set, answers raw transactions by txid: the funding trees
-	// an anchor's fee inputs spend, which no lookup class serves.
-	Asset *nodeapi.Asset
+	// Txs, when set, answers transactions by txid: the funding trees an
+	// anchor's fee inputs spend, which no lookup class serves.
+	Txs TxSource
 	// Timeout bounds each request; HTTP, when set, is the client used (tests).
 	Timeout time.Duration
 	HTTP    *http.Client

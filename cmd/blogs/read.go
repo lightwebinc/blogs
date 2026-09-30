@@ -28,10 +28,18 @@ var pingQuery = reader.Query{Stream: "doctor_aaaaaaaaaa", Producer: strings.Repe
 // httpClient, when set, is the client every host request uses (tests).
 var httpClient *http.Client
 
+// wocBase is the WhatsOnChain API root; empty is the public one (tests
+// serve their own).
+var wocBase string
+
 func readerFor(g *global, hosts []string, timeout time.Duration) *reader.Client {
 	c := &reader.Client{Hosts: hosts, Timeout: timeout, HTTP: httpClient}
-	if g != nil && g.cfg.Asset != "" {
-		c.Asset = &nodeapi.Asset{Base: g.cfg.Asset, Client: httpClient}
+	switch {
+	case g == nil:
+	case g.cfg.Asset != "":
+		c.Txs = reader.AssetSource{Asset: &nodeapi.Asset{Base: g.cfg.Asset, Client: httpClient}}
+	case g.cfg.TxSource != "":
+		c.Txs = reader.WhatsOnChain{Network: strings.TrimPrefix(g.cfg.TxSource, "woc:"), Base: wocBase, Timeout: timeout, HTTP: httpClient}
 	}
 	return c
 }

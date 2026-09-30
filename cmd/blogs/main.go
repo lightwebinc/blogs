@@ -223,6 +223,10 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		fmt.Fprintln(stderr, "blogs:", err)
 		return exitUsage
 	}
+	if n := strings.TrimPrefix(cfg.TxSource, "woc:"); cfg.TxSource != "" && n != cfg.Network {
+		fmt.Fprintf(stderr, "blogs: tx_source %s is the %s network but network is %s\n", cfg.TxSource, n, cfg.Network)
+		return exitUsage
+	}
 	g := &global{cfg: cfg, verbose: *verbose, stdin: stdin, stdout: stdout, stderr: stderr, getenv: getenv}
 	err = cmd(ctx, g, rest[1:])
 	var ee *exitError

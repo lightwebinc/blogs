@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -153,6 +154,18 @@ func (c *Chain) Tx(txid string) *transaction.Transaction {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.txs[txid]
+}
+
+// Txids are the txids of every transaction the chain holds, sorted.
+func (c *Chain) Txids() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ids := make([]string, 0, len(c.txs))
+	for id := range c.txs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 // Generate mines n blocks whose coinbase pays addr, and returns their

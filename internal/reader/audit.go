@@ -71,7 +71,7 @@ func (r *Report) incomplete(format string, args ...any) *Report {
 // batch class for every seq interval n covers and requires the root over
 // their commitments to equal the token's. The outputs a token's inputs
 // spend are read from the predecessor token's transaction, from the funding
-// trees the interval's carriers carry, or from Asset.
+// trees the interval's carriers carry, or from Txs.
 //
 // An error is no verdict: a host or the header source could not be asked.
 func (c *Client) VerifyInterval(ctx context.Context, stream string, producer []byte, n uint64) (*Report, error) {
@@ -239,7 +239,7 @@ func canonical(cands []*Token, prev *Token) *Token {
 }
 
 // coins are the outputs tx's inputs spend: from the predecessor token's
-// transaction, a transaction in evidence, or Asset. missing names an input
+// transaction, a transaction in evidence, or Txs. missing names an input
 // whose transaction was found nowhere.
 func (c *Client) coins(ctx context.Context, tx *transaction.Transaction, prev *Token, evidence map[string]*transaction.Transaction) (logrec.Coins, string, error) {
 	coins := logrec.Coins{}
@@ -254,18 +254,17 @@ func (c *Client) coins(ctx context.Context, tx *transaction.Transaction, prev *T
 			src = prev.Tx
 		case evidence[id] != nil:
 			src = evidence[id]
-		case c.Asset != nil:
-			raw, err := c.Asset.TxRaw(ctx, id)
-			if err != nil {
-				return nil, fmt.Sprintf("input %d spends %s:%d, whose transaction the node did not answer (%v)", i, id, in.SourceTxOutIndex, err), nil
+		case c.Txs != nil:
+			t, err := c.fetch(ctx, id, false)
+			if errors.Is(err, ErrOtherBytes) {
+				return nil, "", err
 			}
-			t, err := transaction.NewTransactionFromBytes(raw)
-			if err != nil || t.TxID().String() != id {
-				return nil, "", fmt.Errorf("the node answered transaction %s with other bytes", id)
+			if err != nil {
+				return nil, fmt.Sprintf("input %d spends %s:%d, whose transaction %s did not answer (%v)", i, id, in.SourceTxOutIndex, c.Txs.Name(), err), nil
 			}
 			evidence[id], src = t, t
 		default:
-			return nil, fmt.Sprintf("input %d spends %s:%d, a funding tree no answered carrier carries; configure asset to read it from a node", i, id, in.SourceTxOutIndex), nil
+			return nil, fmt.Sprintf("input %d spends %s:%d, a funding tree no answered carrier carries; configure asset (a node) or tx_source (woc:main or woc:test) to read it", i, id, in.SourceTxOutIndex), nil
 		}
 		if int(in.SourceTxOutIndex) >= len(src.Outputs) {
 			return nil, fmt.Sprintf("input %d spends output %d of %s, which has %d", i, in.SourceTxOutIndex, id, len(src.Outputs)), nil
@@ -322,7 +321,7 @@ func (c *Client) Token(ctx context.Context, a Answer, stream string, producer []
 // the hosts' answers, given the canonical token of interval k - 1 (nil for
 // k = 1), and holds it to the join and the anchor rules. The outputs its
 // inputs spend are read from prev, from evidence (transactions by txid),
-// or from Asset. An error is no verdict.
+// or from Txs. An error is no verdict.
 func (c *Client) Next(ctx context.Context, stream string, producer []byte, k uint64, prev *Token, evidence map[string]*transaction.Transaction) (*Token, *Report, error) {
 	if c.Headers == nil {
 		return nil, nil, errors.New("no header source: a proof cannot be checked")

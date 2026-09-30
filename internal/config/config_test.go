@@ -43,7 +43,7 @@ func TestTheGrammarRefuses(t *testing.T) {
 	if _, err := Parse(strings.NewReader("facde = x\n")); !errors.Is(err, ErrUnknownKey) {
 		t.Error("an unknown key is not ErrUnknownKey")
 	}
-	for k, v := range map[string]string{"network": "mainnet", "timeout": "-1s", "object_bound": "0"} {
+	for k, v := range map[string]string{"network": "mainnet", "timeout": "-1s", "object_bound": "0", "tx_source": "woc:regtest"} {
 		if _, err := Defaults().Apply(map[string]string{k: v}); err == nil {
 			t.Errorf("%s = %s applied", k, v)
 		}
