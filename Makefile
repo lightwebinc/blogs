@@ -1,0 +1,63 @@
+# GOWORK=off everywhere on purpose: a workspace would resolve bcommon to a
+# local checkout, so a go.mod skew would stay invisible here. What is tested
+# is what go.mod pins.
+#
+# The TypeScript package under host/ needs Node 24 and its dependencies
+# installed once (cd host && npm ci). The targets run tsc and node directly,
+# so NODE may name a Node 24 binary that is not on PATH:
+#
+#	make test NODE=/path/to/node24
+
+.PHONY: verify test go-test ts-test ts-check ts-build node-check vet fmt-check deps-check vectors vectors-check
+
+NODE ?= node
+TSC := $(NODE) node_modules/typescript/bin/tsc
+SDK := github.com/bsv-blockchain/go-sdk
+SDK_VERSION := v1.5.2
+
+verify: fmt-check vet deps-check ts-check vectors-check test
+
+# Go and TypeScript. The Go tests read the TypeScript-written vectors under
+# testdata/ts, and the TypeScript tests read the Go-generated ones under
+# testdata/vectors: each side decodes the other's bytes.
+test: go-test ts-test
+
+go-test:
+	GOWORK=off go test -race -count=2 ./...
+
+vet:
+	GOWORK=off go vet ./...
+
+fmt-check:
+	@test -z "$$(gofmt -l .)" || { echo "gofmt:"; gofmt -l .; exit 1; }
+
+# go-sdk at exactly the version bcommon pins, which the vectors were made
+# with.
+deps-check:
+	@v=$$(GOWORK=off go list -m -f '{{.Version}}' $(SDK)); \
+	if [ "$$v" != "$(SDK_VERSION)" ]; then echo "$(SDK) is $$v, want exactly $(SDK_VERSION)"; exit 1; fi
+
+node-check:
+	@$(NODE) -e 'process.exit(process.versions.node.split(".")[0] === "24" ? 0 : 1)' || \
+		{ echo "host/ needs Node 24; set NODE=/path/to/node"; exit 1; }
+
+ts-check: node-check
+	cd host && $(TSC) --noEmit
+
+ts-build: node-check
+	cd host && $(NODE) -e "require('node:fs').rmSync('dist', { recursive: true, force: true })" && $(TSC)
+
+ts-test: ts-build
+	cd host && $(NODE) --test "dist/**/*.test.js"
+
+# Write both vector sets: the Go codec's under testdata/vectors, the
+# TypeScript codec's under testdata/ts. A change to either is a change to
+# the contract's goldens.
+vectors: ts-build
+	GOWORK=off go run ./cmd/vectors
+	cd host && $(NODE) dist/tsvectors.js
+
+# Regenerate both in memory and compare byte for byte; write nothing.
+vectors-check: ts-build
+	GOWORK=off go run ./cmd/vectors -check
+	cd host && $(NODE) dist/tsvectors.js -check

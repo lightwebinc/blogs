@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.27.1"
+      - name: gofmt
+        run: make fmt-check
+      - name: vet
+        run: make vet
+      - name: go-sdk at the pinned version
+        run: make deps-check
+      # Includes the Go side of the cross-language check: the tests decode
+      # and rebuild the vectors the TypeScript codec wrote under testdata/ts.
+      - name: test
+        run: make go-test
+      # Regenerates the Go vectors and compares them byte for byte, so a
+      # stale vector or one nothing generates fails here.
+      - name: vectors match the Go codec
+        run: GOWORK=off go run ./cmd/vectors -check
+
+  # The TypeScript package under host/ runs every Go-generated vector and
+  # writes the vectors the Go job reads, so a change that moves the bytes on
+  # one side and not the other fails in one job or the other.
+  ts:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: host
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v7
+        with:
+          # The runtime major the overlay host runs, which package.json also
+          # pins.
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: host/package-lock.json
+      - run: npm ci
+      - name: typecheck
+        run: npm run check
+      - name: test
+        run: npm test
+      - name: vectors match the TypeScript codec
+        run: npm run vectors-check
