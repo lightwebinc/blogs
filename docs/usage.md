@@ -376,8 +376,13 @@ class serves a funding tree, so when a host does not admit a token,
 `backfill` reads the funding trees its inputs spend from `asset` (or
 `tx_source`), with their proofs, submits them, and offers the token again.
 One line per position (`held`, `filled from the sibling URL`, `MISSING`,
-`REFUSED`), then a count per host filled. A host that cannot be asked is
-reported and the others are still filled.
+`REFUSED`), then a count per host filled. A `seq` that neither the host
+nor any sibling serves is missing, unless the `seq` after it is held or
+filled: that batch's `prev` names its commitment, as for a retracted
+batch, so it is counted `retracted` rather than missing and does not fail
+the run (the interval is proven across it, as `verify-interval` and
+`archive` do). A host that cannot be asked is reported and the others are
+still filled.
 
 ## Sweeping
 
@@ -535,7 +540,7 @@ Results go to stdout; progress and errors to stderr, errors as one line
 | `sweep TXID: mined at height H and published; seqs ... retracted` | a retraction done |
 | `retire <kind> tree T: left: ...` | a tree whose unused outputs cannot pay the fee |
 | `latest interval K root R token T` | `archive`, on stdout |
-| `backfill S to URL: H held, F filled, M missing, R refused` | `backfill`, on stdout, one per host filled |
+| `backfill S to URL: H held, F filled, M missing, R refused, T retracted` | `backfill`, on stdout, one per host filled |
 | `imported N of M output(s) paying ADDR, S sat, mined at height H; pool ...` | `fund -txid` |
 
 ## Testing

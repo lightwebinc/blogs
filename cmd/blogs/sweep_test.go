@@ -1,10 +1,12 @@
 package main
 
 import (
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/lightwebinc/blogs/internal/state"
+	"github.com/lightwebinc/blogs/internal/testchain"
 )
 
 func TestSweepRetractsNamedBatchesAndLeavesTheirPositions(t *testing.T) {
@@ -33,6 +35,13 @@ func TestSweepRetractsNamedBatchesAndLeavesTheirPositions(t *testing.T) {
 	h.want(h.run("", "read", stream, producer, "-to", "4"), exitIncomplete, "seq 2: MISSING")
 	if v := h.must("", "verify-interval", stream, producer, "1"); !strings.Contains(v.stdout, "retracted seqs 2") || !strings.Contains(v.stdout, "VERIFIED interval 1") {
 		t.Fatalf("verify-interval:\n%s", v.stdout)
+	}
+	// A sibling filled from this host: seq 2 is served by neither, and
+	// seq 3's prev names it, so the backfill counts it retracted.
+	sibling := httptest.NewServer(testchain.NewHost(h.chain))
+	t.Cleanup(sibling.Close)
+	if b := h.must("", "backfill", stream, producer, "-from", h.hostS.URL, "-to", sibling.URL, "-interval", "1"); !strings.Contains(b.stdout, "0 missing, 0 refused, 1 retracted") {
+		t.Fatalf("backfill across the retraction:\n%s", b.stdout)
 	}
 	// Retracted already: the hosts no longer hold its carrier.
 	h.want(h.run("", append([]string{"sweep", stream, "-retract-seqs", "2", "-yes"}, fast...)...), exitIncomplete, "no host holds its carrier")

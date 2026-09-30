@@ -382,8 +382,13 @@ fee tree the anchor spends, which no lookup class serves, so backfill reads
 it from the node (asset) when a host does not admit a token. Needs no
 producer home.
 
-Exit 0 when every position is held, 1 when a sibling answered something
-refused, 3 when a position is still missing.`
+A seq that neither the host nor any sibling serves is missing, unless the
+seq after it is held or filled: its prev then names the seq's commitment,
+as for a retracted batch, and it is counted retracted instead (as
+verify-interval and archive prove an interval across it).
+
+Exit 0 when every position is held (or retracted), 1 when a sibling
+answered something refused, 3 when a position is still missing.`
 
 func cmdBackfill(ctx context.Context, g *global, args []string) error {
 	fs := g.flagSet("backfill", backfillHelp)
@@ -463,7 +468,7 @@ func cmdBackfill(ctx context.Context, g *global, args []string) error {
 			}
 			continue
 		}
-		fmt.Fprintf(g.stdout, "backfill %s to %s: %d held, %d filled, %d missing, %d refused\n", stream, t, res.Held, res.Filled, res.Missing, res.Refused)
+		fmt.Fprintf(g.stdout, "backfill %s to %s: %d held, %d filled, %d missing, %d refused, %d retracted\n", stream, t, res.Held, res.Filled, res.Missing, res.Refused, res.Retracted)
 		total.Held += res.Held
 		total.Filled += res.Filled
 		total.Missing += res.Missing

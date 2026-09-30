@@ -163,6 +163,10 @@ func TestArchiveProvesAnIntervalWithARetractedHole(t *testing.T) {
 	h.must("", append([]string{"sweep", stream, "-retract-seqs", "8", "-yes"}, fast...)...)
 	h.want(h.run("", "archive", stream, producer, "-dir", t.TempDir()), exitIncomplete, "seq 8, the interval's last, is held by no file")
 	h.want(h.run("", "verify-interval", stream, producer, "2"), exitIncomplete, "cannot be recovered")
+	// Nothing names the interval's last seq, so a backfill finds it missing.
+	sib := httptest.NewServer(testchain.NewHost(h.chain))
+	t.Cleanup(sib.Close)
+	h.want(h.run("", "backfill", stream, producer, "-from", h.hostS.URL, "-to", sib.URL, "-interval", "2"), exitIncomplete, "1 missing, 0 refused, 0 retracted")
 	r = h.must("", "archive", stream, producer, "-dir", held)
 	if !strings.Contains(r.stdout, "retracted seqs 8") {
 		t.Fatalf("recheck of seq 8:\n%s", r.stdout)

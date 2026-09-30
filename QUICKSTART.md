@@ -122,7 +122,7 @@ interval 1  token 0cead…52dc  height 804  seqs 1 to 4
 INCOMPLETE interval 2: no host answered; an empty answer proves nothing
 $ blogs backfill $STREAM $PRODUCER -seqs 5-5 -anchors 2
 ...
-backfill app_yuqhfqxzfo to http://host-b:8080: 1 held, 2 filled, 0 missing, 0 refused
+backfill app_yuqhfqxzfo to http://host-b:8080: 1 held, 2 filled, 0 missing, 0 refused, 0 retracted
 $ blogs -hosts http://host-b:8080 verify-interval $STREAM $PRODUCER 2
 VERIFIED interval 2 of app_yuqhfqxzfo ...
 ```
