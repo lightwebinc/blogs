@@ -1,0 +1,128 @@
+blogs
+Copyright 2026 Lightweb Inc. (https://lightweb.net)
+
+=========================================================================
+
+blogs is distributed logging on the BSV blockchain. A producer appends
+signed, numbered batches of log lines to a stream; overlay hosts keep
+them; and one small mined anchor per interval commits the interval's
+batches, so any host's copy can be proven complete and any auditor can
+prove when a line was committed, against block headers it checks itself.
+
+Batches are never mined. Each rides an unmined carrier transaction whose
+one input spends a mined funding output, so it verifies by SPV without
+paying for block space, and a producer can retract it by spending that
+output. Only the anchors are mined. A host that serves a stream is a
+replica, not an authority: a reader and an auditor verify everything a
+host answers, and a host that edits a batch produces something that
+fails the check.
+
+=========================================================================
+Third-Party Standards
+
+  BRC-22:  Overlay Network Data Synchronization
+  BRC-24:  Overlay Network Lookup Services
+  BRC-26:  Universal Hash Resolution Protocol
+  BRC-42:  BSV Key Derivation Scheme
+  BRC-43:  Security Levels, Protocol IDs, Key IDs and Counterparties
+  BRC-48:  Pay to Push Drop
+  BRC-60:  Hash Chains over Dependent Transactions
+  BRC-62:  Background Evaluation Extended Format
+  BRC-74:  BSV Unified Merkle Path
+  BRC-76:  Graph Aware Sync Protocol
+  BRC-87:  Naming Conventions for Topic Managers and Lookup Services
+  BRC-95:  Atomic BEEF
+  BRC-100: Wallet-to-Application Interface
+  BRC-148: The BEEF Object Plane
+  BSV Blockchain Standards Repository
+  https://github.com/bsv-blockchain/BRCs/
+
+  RFC 6962: Certificate Transparency (Merkle tree construction)
+  https://www.rfc-editor.org/rfc/rfc6962
+  RFC 6979: Deterministic Usage of DSA and ECDSA
+  https://www.rfc-editor.org/rfc/rfc6979
+  RFC 8949: Concise Binary Object Representation (CBOR)
+  https://www.rfc-editor.org/rfc/rfc8949
+
+=========================================================================
+Interoperability
+
+blogs speaks published standards and holds no private protocol. Any
+overlay host that implements BRC-22 and BRC-24 and loads the blogs host
+module can keep a stream and answer for it; any reader that can check a
+BEEF against block headers can verify what a host answers. A stream can
+be delivered by a multicast plane (BRC-148) or submitted to each host
+directly, and the records are the same either way.
+
+=========================================================================
+Third-Party Software
+
+This product includes third-party software, distributed under the terms
+of their respective licenses. Each dependency retains its own copyright;
+this notice does not modify those licenses.
+
+  github.com/bsv-blockchain/go-sdk             Open BSV License Version 5, MIT License
+  github.com/lightwebinc/bcommon               Apache License 2.0
+  github.com/mrz1836/go-whatsonchain           MIT License
+  github.com/pkg/errors                        BSD License
+  github.com/stretchr/testify                  MIT License
+  go.yaml.in/yaml/v3                           MIT License, Apache License 2.0
+  golang.org/x/crypto                          BSD License
+
+Two DIRECT dependencies, github.com/bsv-blockchain/go-sdk and
+github.com/lightwebinc/bcommon, are a rule this repository enforces in
+CI. bcommon is Lightweb Inc.'s library of the generic building blocks
+blogs is made from, published separately under Apache-2.0. go-sdk brings
+the other five with it, and a statically linked binary contains them
+whether they were asked for directly or not.
+
+The overlay host module under host/ is a separate npm package, and what
+is deployed from it is one file, host/bundle/blogs-module.js. That file
+contains the module's own code and the TypeScript code of
+@lightwebinc/bcommon, the npm package of the same library, which is
+Lightweb Inc.'s and Apache-2.0; its attribution notice is the one
+reproduced below for github.com/lightwebinc/bcommon. It contains no other
+third-party code: its build fails if any input lies outside host/src/ and
+that package. @bsv/sdk is not in it. The file imports @bsv/sdk by bare
+specifier from the overlay host's own installation, so the obligation for
+@bsv/sdk belongs to whoever installs it, which is the host operator. The
+host image built from host/Dockerfile adds the file to a reference
+overlay host image, whose own licence files travel in that image.
+
+The npm @bsv packages are under the Open BSV License Version 6, whose
+attribution is "© BSV Association" without the comma, not the Version 5
+line below.
+
+© BSV Association,
+
+The attribution line above is reproduced verbatim as the Open BSV License
+Version 5 requires it, for github.com/bsv-blockchain/go-sdk.
+
+Two terms of that license are worth stating in plain words, because they
+do not match the permissive licenses usually found beside it: the grant
+is made on a revocable basis, and the software it covers, together with
+anything derived from it, must only be used on the BSV Blockchains.
+Non-compliance extinguishes the license. Those terms bind this product's
+use of that dependency. They do not extend to Lightweb Inc.'s own source,
+which is Apache-2.0 as stated in LICENSE.
+
+The full text of every license above is reproduced verbatim in
+LICENSE-THIRD-PARTY, which is GENERATED from what the binaries actually
+link (make licences checks it) rather than maintained by hand. It ships
+with every image.
+
+Section 4(d) of the Apache License asks for more than its text: where a
+module ships a NOTICE file, its attribution notices travel too. Two of
+the modules above ship one, and their attribution notices are these:
+
+  go.yaml.in/yaml/v3
+    Copyright 2011-2016 Canonical Ltd.
+
+  github.com/lightwebinc/bcommon
+    bcommon
+    Copyright 2026 Lightweb Inc. (https://lightweb.net)
+
+bcommon's NOTICE also carries go-sdk's Open BSV attribution line, which
+is reproduced above.
+
+=========================================================================
