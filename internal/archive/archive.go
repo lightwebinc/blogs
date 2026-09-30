@@ -81,6 +81,10 @@ type Cursor struct {
 	Intervals uint64 `json:"intervals"`
 	// Hosts are the hosts this archive has followed, in first-use order.
 	Hosts []string `json:"hosts"`
+	// Rechecked is the last stored seq a pass asked the host about again;
+	// the next pass continues after it, wrapping to the first, so the
+	// seqs asked about longest ago are asked first.
+	Rechecked uint64 `json:"rechecked,omitempty"`
 }
 
 // BatchFile is batches/<seq>-<carrier>.json.
@@ -162,6 +166,11 @@ type Archive struct {
 	Fetch reader.Fetch
 	// Note receives one line per thing done.
 	Note func(format string, args ...any)
+	// Recheck is how many stored seqs a pass asks the host about again,
+	// oldest checked first; zero asks about none. RecheckAll asks about
+	// every stored seq, whatever Recheck says.
+	Recheck    int
+	RecheckAll bool
 }
 
 // Summary is what one pass did.
@@ -178,6 +187,9 @@ type Summary struct {
 	Refused int
 	// Retracted are the seqs whose stored batch this pass found retracted.
 	Retracted []uint64
+	// Rechecked is how many stored seqs this pass asked about again, of
+	// StoredSeqs, the seqs stored when it began.
+	Rechecked, StoredSeqs int
 }
 
 func (a *Archive) note(format string, args ...any) {
@@ -253,7 +265,7 @@ func (a *Archive) Pass(ctx context.Context) (*Summary, error) {
 	one := *a.Client
 	one.Hosts = []string{a.Host}
 	s := &Summary{}
-	if err := a.recheck(ctx, s); err != nil {
+	if err := a.recheck(ctx, cur, s); err != nil {
 		return nil, err
 	}
 	for seq := cur.Next; seq <= logrec.MaxSafe; seq++ {
@@ -585,12 +597,14 @@ func (a *Archive) receipts(seq uint64) []Receipt {
 	return out
 }
 
-// recheck asks the host again for every seq with a stored carrier. A
-// stored carrier the host no longer serves is checked for a retraction
-// (reader.Client.Retraction); when one is proven, retract writes its
-// receipt and drops its bytes. One not proven retracted is kept and noted:
-// an empty answer proves nothing.
-func (a *Archive) recheck(ctx context.Context, s *Summary) error {
+// recheck asks the host again for the seqs with a stored carrier: Recheck
+// of them, continuing after the cursor's Rechecked and wrapping to the
+// first, so each pass takes the ones asked about longest ago; every one
+// with RecheckAll. A stored carrier the host no longer serves is checked
+// for a retraction (reader.Client.Retraction); when one is proven, retract
+// writes its receipt and drops its bytes. One not proven retracted is kept
+// and noted: an empty answer proves nothing.
+func (a *Archive) recheck(ctx context.Context, cur *Cursor, s *Summary) error {
 	names, _ := filepath.Glob(a.path("batches", "*.beef"))
 	seqs := map[uint64]bool{}
 	var order []uint64
@@ -603,9 +617,20 @@ func (a *Archive) recheck(ctx context.Context, s *Summary) error {
 		order = append(order, seq)
 	}
 	sort.Slice(order, func(i, j int) bool { return order[i] < order[j] })
+	s.StoredSeqs = len(order)
+	if n := a.Recheck; !a.RecheckAll && n < len(order) {
+		start := sort.Search(len(order), func(i int) bool { return order[i] > cur.Rechecked })
+		take := make([]uint64, 0, max(n, 0))
+		for i := 0; i < n; i++ {
+			take = append(take, order[(start+i)%len(order)])
+		}
+		order = take
+	}
 	c := *a.Client
 	c.Hosts = []string{a.Host}
 	for _, seq := range order {
+		cur.Rechecked = seq
+		s.Rechecked++
 		stored := a.held(seq)
 		if len(stored) == 0 {
 			continue

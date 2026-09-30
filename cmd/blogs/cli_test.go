@@ -110,7 +110,7 @@ var fast = []string{"-poll", "5ms", "-tree-count", "4", "-ahead", "1", "-anchor-
 
 func (h *harness) produce(stdin, stream string, extra ...string) result {
 	h.t.Helper()
-	return h.must(stdin, append(append([]string{"produce", stream}, fast...), extra...)...)
+	return h.must(stdin, append(append([]string{"produce", stream, "-max-rate", "50"}, fast...), extra...)...)
 }
 
 func linesOf(from, n int) string {

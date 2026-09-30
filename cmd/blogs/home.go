@@ -19,6 +19,7 @@ import (
 	"github.com/lightwebinc/bcommon/termsafe"
 
 	"github.com/lightwebinc/blogs/internal/config"
+	"github.com/lightwebinc/blogs/internal/limits"
 	"github.com/lightwebinc/blogs/internal/logrec"
 	"github.com/lightwebinc/blogs/internal/produce"
 	"github.com/lightwebinc/blogs/internal/reader"
@@ -90,6 +91,19 @@ func (g *global) legs() (produce.Legs, error) {
 			return l, usage("facade must be configured (config key facade): the overlay host a producer publishes to (or set mode = unicast to submit to every host in hosts)")
 		}
 		l.Facade = &publish.Facade{Base: g.cfg.Facade}
+		// Every sweep also goes directly to the hosts other than the
+		// facade, so a host off the plane is not left serving what a
+		// sweep retracted.
+		var direct []string
+		for _, h := range g.cfg.Hosts {
+			if strings.TrimRight(h, "/") != strings.TrimRight(g.cfg.Facade, "/") {
+				direct = append(direct, h)
+			}
+		}
+		if len(direct) > 0 {
+			l.SweepHosts = &unicast.Set{Hosts: direct, Need: len(direct), Retries: produce.Retries, HTTP: httpClient,
+				Note: g.say, Verbose: g.verbose}
+		}
 	}
 	kind, addr, _ := strings.Cut(g.cfg.Settle, ":")
 	switch kind {
@@ -355,6 +369,11 @@ func cmdStream(_ context.Context, g *global, args []string) error {
 	case pos[0] == "new" && len(pos) == 2:
 		if err := logrec.CheckStreamName(pos[1]); err != nil {
 			return usage("stream name %q: 1 to %d lowercase letters and single underscores, starting and ending with a letter", pos[1], logrec.MaxStreamName)
+		}
+		if names, err := state.List(g.cfg.Home); err != nil {
+			return err
+		} else if len(names) >= limits.MaxStreams {
+			return usage("this home holds %d streams, the limit: one produce runs per home at a time, and doctor and stream list read every stream's state (docs/limits.md); give another stream its own home", len(names))
 		}
 		s, err := logrec.NewStream(pos[1], nil)
 		if err != nil {

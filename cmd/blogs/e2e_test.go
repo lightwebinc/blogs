@@ -296,17 +296,23 @@ func TestClientE2E(t *testing.T) {
 	}
 	step("archive: both hosts' copies stored, intervals 1 to 4 proven with the same roots")
 
-	// A retraction on a real host: seq 7 (inside interval 2) swept.
+	// A retraction on a real host: seq 7 (inside interval 2) swept. Host
+	// b is off the plane (it was filled by backfill), and is in hosts, so
+	// the sweep goes to it directly as well as to the facade.
+	h.env["BLOGS_HOSTS"] = a.url + "," + b.url
 	r = h.must("", "sweep", stream, "-retract-seqs", "7", "-yes", "-poll", "50ms")
-	if !strings.Contains(r.stderr, "seqs 7 retracted") {
+	if !strings.Contains(r.stderr, "seqs 7 retracted") || strings.Contains(r.stderr, "MISSED") {
 		t.Fatalf("sweep:\n%s\n%s", r.stdout, r.stderr)
 	}
+	h.env["BLOGS_HOSTS"] = b.url
+	h.want(h.run("", "read", stream, producer, "-from", "7", "-to", "7"), exitIncomplete, "seq 7: MISSING")
+	h.env["BLOGS_HOSTS"] = a.url
 	h.want(h.run("", "read", stream, producer, "-from", "7", "-to", "7"), exitIncomplete, "seq 7: MISSING")
 	r = h.must("", "archive", stream, producer, "-dir", t.TempDir(), "-host", a.url, "-content-dir", content)
 	if !strings.Contains(r.stdout, "interval 2  proven-with-holes  seqs 6 to 8") || !strings.Contains(r.stdout, "holes 7") {
 		t.Fatalf("archive after the retraction:\n%s\n%s", r.stdout, r.stderr)
 	}
-	step("sweep: seq 7 retracted at host a; a fresh archive proves interval 2 with the hole the anchor commits")
+	step("sweep: seq 7 retracted at host a through the facade and at host b (off the plane) directly; a fresh archive proves interval 2 with the hole the anchor commits")
 
 	// The archive that stored seq 7 keeps a receipt and drops its bytes;
 	// the auditor proves interval 2 across the retracted seq.
@@ -318,7 +324,7 @@ func TestClientE2E(t *testing.T) {
 		t.Fatalf("seq 7 bytes kept: %v", got)
 	}
 	r = h.must("", "verify-interval", stream, producer, "2")
-	if !strings.Contains(r.stdout, "retracted seqs 7") || !strings.Contains(r.stdout, "VERIFIED interval 2") {
+	if !strings.Contains(r.stdout, "unserved seqs 7") || !strings.Contains(r.stdout, "VERIFIED interval 2") {
 		t.Fatalf("verify across the retraction:\n%s", r.stdout)
 	}
 	step("archive a marks seq 7 retracted (receipt kept, bytes dropped); verify-interval 2 VERIFIED across it")
@@ -424,7 +430,7 @@ func TestClientE2EUnicast(t *testing.T) {
 			t.Fatalf("archive recheck at %s:\n%s\n%s", host.url, r.stdout, r.stderr)
 		}
 		r = h.must("", "-hosts", host.url, "verify-interval", stream, producer, "1")
-		if !strings.Contains(r.stdout, "retracted seqs 2") || !strings.Contains(r.stdout, "VERIFIED interval 1") {
+		if !strings.Contains(r.stdout, "unserved seqs 2") || !strings.Contains(r.stdout, "VERIFIED interval 1") {
 			t.Fatalf("verify at %s:\n%s", host.url, r.stdout)
 		}
 	}

@@ -104,3 +104,18 @@ func TestModeAndQuorum(t *testing.T) {
 		t.Error("no hosts is accepted")
 	}
 }
+
+func TestLimits(t *testing.T) {
+	many := strings.TrimSuffix(strings.Repeat("http://192.0.2.1:8080,", 17), ",")
+	for k, v := range map[string]string{"hosts": many, "object_bound": "8388609", "timeout": "500ms"} {
+		_, err := Defaults().Apply(map[string]string{k: v})
+		if err == nil || !strings.Contains(err.Error(), "limit") {
+			t.Errorf("%s = %s: %v", k, v, err)
+		}
+	}
+	for k, v := range map[string]string{"object_bound": "8388608", "timeout": "5m"} {
+		if _, err := Defaults().Apply(map[string]string{k: v}); err != nil {
+			t.Errorf("%s = %s at the limit: %v", k, v, err)
+		}
+	}
+}

@@ -348,8 +348,22 @@ func (e *Engine) FinishSweeps(ctx context.Context) error {
 				if err := o.Err(); err != nil {
 					return fmt.Errorf("sweep %s: publish: %w; it is mined and persisted, and the next sweep publishes it to every host", sw.Txid, err)
 				}
-			} else if _, err := e.Legs.Facade.Submit(ctx, e.topic, beef); err != nil {
-				return fmt.Errorf("sweep %s: publish: %w; it is mined and persisted, and the next sweep publishes it", sw.Txid, err)
+			} else {
+				if _, err := e.Legs.Facade.Submit(ctx, e.topic, beef); err != nil {
+					return fmt.Errorf("sweep %s: publish: %w; it is mined and persisted, and the next sweep publishes it", sw.Txid, err)
+				}
+				// The plane carries it to every subscribed host; a host off
+				// the plane receives it only directly, since no lookup
+				// class serves a sweep. Every host named must take it.
+				if d := e.Legs.SweepHosts; d != nil && len(d.Hosts) > 0 {
+					o := d.Send(ctx, "sweep "+sw.Txid, e.topic, beef, len(d.Hosts))
+					if err := o.Err(); err != nil {
+						return fmt.Errorf("sweep %s: published to the facade, but not to every host directly: %w; it is mined and persisted, and the next sweep sends it again", sw.Txid, err)
+					}
+				} else if !e.warnedSweep {
+					e.warnedSweep = true
+					e.note("note: sweep %s goes to the facade only: a host off the plane receives a sweep only when it is in hosts (docs/usage.md, Sweeping)", sw.Txid)
+				}
 			}
 		}
 		sw.Done = true

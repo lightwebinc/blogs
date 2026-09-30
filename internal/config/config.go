@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/lightwebinc/blogs/internal/limits"
 )
 
 // Config is the resolved settings.
@@ -239,6 +241,9 @@ func (c Config) Apply(vals map[string]string) (Config, error) {
 					c.Hosts = append(c.Hosts, h)
 				}
 			}
+			if len(c.Hosts) > limits.MaxHosts {
+				return c, fmt.Errorf("config: hosts names %d hosts, over the limit of %d: a reader or an auditor asks every host for every seq, and a unicast producer uploads every object to each (docs/limits.md)", len(c.Hosts), limits.MaxHosts)
+			}
 		case "mode":
 			if v != ModePlane && v != ModeUnicast {
 				return c, fmt.Errorf("config: mode must be plane or unicast, got %q", v)
@@ -253,6 +258,9 @@ func (c Config) Apply(vals map[string]string) (Config, error) {
 			n, err := strconv.Atoi(v)
 			if err != nil || n < 1 {
 				return c, fmt.Errorf("config: object_bound %q is not a positive number of bytes", v)
+			}
+			if n > limits.MaxObjectBound {
+				return c, fmt.Errorf("config: object_bound %d is over the limit of %d: no plane admits a larger object (BRC-149; docs/limits.md)", n, limits.MaxObjectBound)
 			}
 			c.ObjectBound = n
 		case "originator":
@@ -279,6 +287,9 @@ func (c Config) Apply(vals map[string]string) (Config, error) {
 			d, err := time.ParseDuration(v)
 			if err != nil || d <= 0 {
 				return c, fmt.Errorf("config: timeout %q is not a positive duration", v)
+			}
+			if d < limits.MinTimeout || d > limits.MaxTimeout {
+				return c, fmt.Errorf("config: timeout %s is outside the limits of %s to %s: every request is bounded by it, and a publish tries each host four times (docs/limits.md)", d, limits.MinTimeout, limits.MaxTimeout)
 			}
 			c.Timeout = d
 		}

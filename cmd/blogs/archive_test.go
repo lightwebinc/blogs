@@ -148,9 +148,10 @@ func TestArchiveProvesAnIntervalWithARetractedHole(t *testing.T) {
 	if f.Root != fh.Root || f.Leaves[1].Held || !fh.Leaves[1].Held || f.Leaves[1].Commitment != fh.Leaves[1].Commitment {
 		t.Fatalf("hole: %+v\nheld: %+v", f.Leaves[1], fh.Leaves[1])
 	}
-	// The auditor proves it the same way and names the seq retracted.
+	// The auditor proves it the same way and names the seq unserved: it
+	// cannot tell a retraction from a batch never delivered.
 	v := h.must("", "verify-interval", stream, producer, "1")
-	if !strings.Contains(v.stdout, "retracted seqs 2: no host serves them") || !strings.Contains(v.stdout, "VERIFIED interval 1") || !strings.Contains(v.stdout, "root "+fh.Root) {
+	if !strings.Contains(v.stdout, "unserved seqs 2: no host serves them (retracted, or not delivered)") || !strings.Contains(v.stdout, "VERIFIED interval 1") || !strings.Contains(v.stdout, "root "+fh.Root) {
 		t.Fatalf("verify-interval:\n%s", v.stdout)
 	}
 
@@ -166,7 +167,7 @@ func TestArchiveProvesAnIntervalWithARetractedHole(t *testing.T) {
 	// Nothing names the interval's last seq, so a backfill finds it missing.
 	sib := httptest.NewServer(testchain.NewHost(h.chain))
 	t.Cleanup(sib.Close)
-	h.want(h.run("", "backfill", stream, producer, "-from", h.hostS.URL, "-to", sib.URL, "-interval", "2"), exitIncomplete, "1 missing, 0 refused, 0 retracted")
+	h.want(h.run("", "backfill", stream, producer, "-from", h.hostS.URL, "-to", sib.URL, "-interval", "2"), exitIncomplete, "1 missing, 0 refused, 0 unserved")
 	r = h.must("", "archive", stream, producer, "-dir", held)
 	if !strings.Contains(r.stdout, "retracted seqs 8") {
 		t.Fatalf("recheck of seq 8:\n%s", r.stdout)
@@ -195,4 +196,44 @@ func TestArchiveProvesAnIntervalWithARetractedHole(t *testing.T) {
 	if len(g.Retracted) != 1 || g.Retracted[0] != 8 || !g.Leaves[3].Retracted || g.Leaves[3].Held || len(g.Holes) != 0 {
 		t.Fatalf("interval 2 from the receipt: %+v", g)
 	}
+}
+
+// A pass asks the host again about at most -recheck stored seqs, going on
+// where the last pass stopped, so a retraction is found within a cycle of
+// passes; -recheck-all asks about every one.
+func TestArchiveRechecksIncrementally(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	stream, producer := h.producer()
+	h.produce(linesOf(0, 4), stream, "-max-lines", "1")
+	dir := t.TempDir()
+	h.must("", "archive", stream, producer, "-dir", dir)
+	h.must("", append([]string{"sweep", stream, "-retract-seqs", "4", "-yes"}, fast...)...)
+	pass := func(want string, flags ...string) string {
+		t.Helper()
+		r := h.must("", append([]string{"archive", stream, producer, "-dir", dir}, flags...)...)
+		if !strings.Contains(r.stdout, want) {
+			t.Fatalf("want %q:\n%s\n%s", want, r.stdout, r.stderr)
+		}
+		return r.stdout
+	}
+	if out := pass("rechecked 2 of 4 stored seq(s)", "-recheck", "2"); strings.Contains(out, "retracted seqs") {
+		t.Fatalf("seqs 1 and 2 first:\n%s", out)
+	}
+	if out := pass("rechecked 1 of 4 stored seq(s)", "-recheck", "1"); strings.Contains(out, "retracted seqs") {
+		t.Fatalf("seq 3 next:\n%s", out)
+	}
+	pass("retracted seqs 4: receipt and sweep kept", "-recheck", "1")
+	pass("rechecked 0 of 3 stored seq(s)", "-recheck", "0")
+	pass("rechecked 3 of 3 stored seq(s)", "-recheck", "1", "-recheck-all")
+	// The rotation wrapped: the next single recheck is seq 1 again.
+	cur, err := (&archive.Archive{Dir: dir, Stream: stream, Producer: mustHex(producer)}).LoadCursor()
+	if err != nil || cur.Rechecked != 3 {
+		t.Fatalf("cursor: %+v %v", cur, err)
+	}
+	pass("rechecked 1 of 3 stored seq(s)", "-recheck", "1")
+	if cur, _ = (&archive.Archive{Dir: dir, Stream: stream, Producer: mustHex(producer)}).LoadCursor(); cur.Rechecked != 1 {
+		t.Fatalf("after wrapping: %+v", cur)
+	}
+	h.want(h.run("", "archive", stream, producer, "-dir", dir, "-recheck", "65537"), exitUsage, "outside the limits")
 }

@@ -33,14 +33,14 @@ func TestSweepRetractsNamedBatchesAndLeavesTheirPositions(t *testing.T) {
 	// The seq is a hole the anchor still commits: a reader finds it missing,
 	// and the audit proves the interval across it from seq 3's prev.
 	h.want(h.run("", "read", stream, producer, "-to", "4"), exitIncomplete, "seq 2: MISSING")
-	if v := h.must("", "verify-interval", stream, producer, "1"); !strings.Contains(v.stdout, "retracted seqs 2") || !strings.Contains(v.stdout, "VERIFIED interval 1") {
+	if v := h.must("", "verify-interval", stream, producer, "1"); !strings.Contains(v.stdout, "unserved seqs 2: no host serves them (retracted, or not delivered)") || !strings.Contains(v.stdout, "VERIFIED interval 1") {
 		t.Fatalf("verify-interval:\n%s", v.stdout)
 	}
 	// A sibling filled from this host: seq 2 is served by neither, and
-	// seq 3's prev names it, so the backfill counts it retracted.
+	// seq 3's prev names it, so the backfill counts it unserved.
 	sibling := httptest.NewServer(testchain.NewHost(h.chain))
 	t.Cleanup(sibling.Close)
-	if b := h.must("", "backfill", stream, producer, "-from", h.hostS.URL, "-to", sibling.URL, "-interval", "1"); !strings.Contains(b.stdout, "0 missing, 0 refused, 1 retracted") {
+	if b := h.must("", "backfill", stream, producer, "-from", h.hostS.URL, "-to", sibling.URL, "-interval", "1"); !strings.Contains(b.stdout, "0 missing, 0 refused, 1 unserved") {
 		t.Fatalf("backfill across the retraction:\n%s", b.stdout)
 	}
 	// Retracted already: the hosts no longer hold its carrier.
@@ -109,4 +109,61 @@ func TestSweepRetractTreeAndRetire(t *testing.T) {
 		t.Fatalf("retired twice:\n%s\n%s", r.stdout, r.stderr)
 	}
 	h.produce("still going\n", stream)
+}
+
+// On the plane a sweep goes to the facade, which the plane carries to its
+// subscribers, and directly to every other configured host, so a host off
+// the plane stops serving what it retracts. A host left out of hosts is
+// given the sweep later by backfill -sweeps.
+func TestPlaneSweepReachesHostsOffThePlane(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	stream, producer := h.producer()
+	h.produce(linesOf(0, 4), stream, "-max-lines", "1")
+	off := testchain.NewHost(h.chain)
+	offS := httptest.NewServer(off)
+	t.Cleanup(offS.Close)
+	h.must("", "backfill", stream, producer, "-from", h.hostS.URL, "-to", offS.URL, "-interval", "1")
+
+	// Off the plane and in hosts: the sweep reaches it directly.
+	h.env["BLOGS_HOSTS"] = h.hostS.URL + "," + offS.URL
+	r := h.must("", append([]string{"sweep", stream, "-retract-seqs", "2", "-yes"}, fast...)...)
+	if !strings.Contains(r.stderr, "seqs 2 retracted") || h.host.Retracted != 1 || off.Retracted != 1 {
+		t.Fatalf("sweep: facade host %d, off-plane host %d\n%s\n%s", h.host.Retracted, off.Retracted, r.stdout, r.stderr)
+	}
+
+	// Off the plane and not in hosts: the facade alone takes it, and the
+	// run says so.
+	h.env["BLOGS_HOSTS"] = h.hostS.URL
+	r = h.must("", append([]string{"sweep", stream, "-retract-seqs", "3", "-yes"}, fast...)...)
+	if !strings.Contains(r.stderr, "goes to the facade only") || off.Retracted != 1 {
+		t.Fatalf("facade only: off-plane host %d\n%s", off.Retracted, r.stderr)
+	}
+	// A backfill without -sweeps says it carries none; with it, the sweep
+	// is found from the node and submitted.
+	b := h.must("", "backfill", stream, producer, "-from", h.hostS.URL, "-to", offS.URL, "-seqs", "3-3")
+	if !strings.Contains(b.stderr, "not sweeps") || !strings.Contains(b.stdout, "0 sweep(s) carried") || off.Retracted != 1 {
+		t.Fatalf("backfill without -sweeps:\n%s\n%s", b.stdout, b.stderr)
+	}
+	b = h.must("", "backfill", stream, producer, "-from", h.hostS.URL, "-to", offS.URL, "-seqs", "1-4", "-sweeps")
+	if !strings.Contains(b.stdout, "1 sweep(s) carried") || !strings.Contains(b.stdout, "seq 3: carrier ") || off.Retracted != 2 {
+		t.Fatalf("backfill -sweeps: off-plane host %d\n%s\n%s", off.Retracted, b.stdout, b.stderr)
+	}
+	h.env["BLOGS_HOSTS"] = offS.URL
+	h.want(h.run("", "read", stream, producer, "-from", "3", "-to", "3"), exitIncomplete, "seq 3: MISSING")
+	// -sweeps needs a source that names a spend.
+	delete(h.env, "BLOGS_ASSET")
+	h.want(h.run("", "backfill", stream, producer, "-from", h.hostS.URL, "-to", offS.URL, "-seqs", "1-4", "-sweeps"), exitUsage, "-sweeps needs asset or tx_source")
+	h.env["BLOGS_ASSET"] = h.chainS.URL
+
+	// A host named but down: the sweep is mined and published to the
+	// facade, the run stops, and the next sweep run finishes it.
+	h.env["BLOGS_HOSTS"] = h.hostS.URL + "," + offS.URL
+	off.SetDown(true)
+	h.want(h.run("", append([]string{"sweep", stream, "-retract-seqs", "4", "-yes"}, fast...)...), exitUsage, "not to every host directly")
+	off.SetDown(false)
+	r = h.must("", append([]string{"sweep", stream}, fast...)...)
+	if !strings.Contains(r.stderr, "seqs 4 retracted") || off.Retracted != 3 {
+		t.Fatalf("finish: off-plane host %d\n%s", off.Retracted, r.stderr)
+	}
 }

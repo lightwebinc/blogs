@@ -30,16 +30,25 @@ type Backfill struct {
 	// holds its predecessor.
 	Intervals uint64
 	Seqs      []uint64
+	// Sweeps carries sweeps to To: for each seq To holds, every candidate
+	// it serves is checked for a retraction (Client.Retraction: a mined
+	// spend of its funding output by another transaction, named by Txs,
+	// which must answer spends), and a sweep found is submitted to To. No
+	// lookup class serves a sweep, so this is the only way a backfill can
+	// carry one; it costs one spend read per held carrier.
+	Sweeps bool
 	// Note receives one line per position.
 	Note func(format string, args ...any)
 }
 
-// Result counts what a backfill did. Retracted are seqs no host serves
+// Result counts what a backfill did. Unserved are seqs no host serves
 // whose commitment the next seq filled or held names (its prev), as an
 // archive and verify-interval prove an interval across a retraction
-// (docs/spec.md section 8.4); a missing seq nothing names stays Missing.
+// (docs/spec.md section 8.4): retracted, or never delivered to any host
+// asked, which a lookup cannot tell apart. A missing seq nothing names
+// stays Missing. Sweeps counts sweeps carried to the host (Backfill.Sweeps).
 type Result struct {
-	Held, Filled, Missing, Refused, Retracted int
+	Held, Filled, Missing, Refused, Unserved, Sweeps int
 }
 
 // Run runs the backfill. An error is a transport failure; positions the
@@ -59,7 +68,7 @@ func (c *Client) Run(ctx context.Context, b Backfill) (Result, error) {
 	for k := uint64(1); k <= b.Intervals; k++ {
 		what := fmt.Sprintf("interval %d", k)
 		q := Query{Stream: b.Stream, Producer: p, Interval: k}
-		if _, err := c.fill(ctx, b, to, topic, q, what, &r, note, func(a Answer) (string, bool, error) {
+		if _, _, err := c.fill(ctx, b, to, topic, q, what, &r, note, func(a Answer) (string, bool, error) {
 			_, tx, _, err := transaction.ParseBeef(a.Beef)
 			if err != nil || tx == nil {
 				return "BEEF does not parse", false, nil
@@ -79,12 +88,12 @@ func (c *Client) Run(ctx context.Context, b Backfill) (Result, error) {
 		}
 	}
 	// unserved is the previous seq when no host served it; it is counted
-	// Retracted instead of Missing once the seq after it is in To.
+	// Unserved instead of Missing once the seq after it is in To.
 	var unserved uint64
 	for _, seq := range b.Seqs {
 		what := fmt.Sprintf("seq %d", seq)
 		q := Query{Stream: b.Stream, Producer: p, Seq: seq}
-		st, err := c.fill(ctx, b, to, topic, q, what, &r, note, func(a Answer) (string, bool, error) {
+		st, have, err := c.fill(ctx, b, to, topic, q, what, &r, note, func(a Answer) (string, bool, error) {
 			_, v := c.CheckCarrier(ctx, a, b.Stream, b.Producer, seq)
 			if !v.OK() {
 				return string(v.Code) + " " + v.Reason, false, nil
@@ -94,10 +103,15 @@ func (c *Client) Run(ctx context.Context, b Backfill) (Result, error) {
 		if err != nil {
 			return r, err
 		}
+		if b.Sweeps && st == held {
+			if err := c.carrySweeps(ctx, b, to, topic, seq, have, &r, note); err != nil {
+				return r, err
+			}
+		}
 		if unserved != 0 && unserved+1 == seq && (st == held || st == filled) {
 			r.Missing--
-			r.Retracted++
-			note("seq %d: served by no host; seq %d's prev names it: retracted", unserved, seq)
+			r.Unserved++
+			note("seq %d: served by no host (retracted, or not delivered); seq %d's prev names it: unserved", unserved, seq)
 		}
 		unserved = 0
 		if st == unservedAnywhere {
@@ -105,6 +119,35 @@ func (c *Client) Run(ctx context.Context, b Backfill) (Result, error) {
 		}
 	}
 	return r, nil
+}
+
+// carrySweeps checks each carrier To serves at seq for a retraction and
+// submits the sweep it finds, which To then admits and so stops serving the
+// carrier (docs/spec.md section 8.4).
+func (c *Client) carrySweeps(ctx context.Context, b Backfill, to *publish.Facade, topic string, seq uint64, have []Answer, r *Result, note func(string, ...any)) error {
+	for _, a := range have {
+		cand, v := c.CheckCarrier(ctx, a, b.Stream, b.Producer, seq)
+		if !v.OK() {
+			continue
+		}
+		sweep, _, err := c.Retraction(ctx, cand)
+		if err != nil {
+			return err
+		}
+		if sweep == nil {
+			continue
+		}
+		beef, err := sweep.AtomicBEEF(false)
+		if err != nil {
+			return err
+		}
+		if _, err := to.Submit(ctx, topic, beef); err != nil {
+			return fmt.Errorf("seq %d: submitting sweep %s to %s: %w", seq, sweep.TxID(), b.To, err)
+		}
+		r.Sweeps++
+		note("seq %d: carrier %s was retracted by the mined sweep %s, which the host lacked: sweep submitted", seq, cand.Tx.TxID(), sweep.TxID())
+	}
+	return nil
 }
 
 // feedFunding submits to the host the funding trees an anchor token's fee
@@ -162,15 +205,15 @@ const (
 )
 
 func (c *Client) fill(ctx context.Context, b Backfill, to *publish.Facade, topic string, q Query, what string, r *Result, note func(string, ...any),
-	check func(Answer) (string, bool, error), prepare func(Answer) (bool, error)) (fillStatus, error) {
+	check func(Answer) (string, bool, error), prepare func(Answer) (bool, error)) (fillStatus, []Answer, error) {
 	have, err := c.Ask(ctx, b.To, q)
 	if err != nil {
-		return notFilled, fmt.Errorf("%s: asking %s: %w", what, b.To, err)
+		return notFilled, nil, fmt.Errorf("%s: asking %s: %w", what, b.To, err)
 	}
 	if len(have) > 0 {
 		r.Held++
 		note("%s: held", what)
-		return held, nil
+		return held, have, nil
 	}
 	var got []Answer
 	var askErr error
@@ -193,17 +236,17 @@ func (c *Client) fill(ctx context.Context, b Backfill, to *publish.Facade, topic
 	}
 	if len(got) == 0 {
 		if askErr != nil {
-			return notFilled, askErr
+			return notFilled, nil, askErr
 		}
 		r.Missing++
 		note("%s: MISSING: no sibling holds it either", what)
-		return unservedAnywhere, nil
+		return unservedAnywhere, nil, nil
 	}
 	admitted := 0
 	for _, a := range got {
 		why, ok, err := check(a)
 		if err != nil {
-			return notFilled, err
+			return notFilled, nil, err
 		}
 		if !ok {
 			r.Refused++
@@ -212,16 +255,16 @@ func (c *Client) fill(ctx context.Context, b Backfill, to *publish.Facade, topic
 		}
 		res, err := to.Submit(ctx, topic, a.Beef)
 		if err != nil {
-			return notFilled, fmt.Errorf("%s: submitting to %s: %w", what, b.To, err)
+			return notFilled, nil, fmt.Errorf("%s: submitting to %s: %w", what, b.To, err)
 		}
 		if len(res.Admitted) == 0 && prepare != nil {
 			fed, err := prepare(a)
 			if err != nil {
-				return notFilled, err
+				return notFilled, nil, err
 			}
 			if fed {
 				if res, err = to.Submit(ctx, topic, a.Beef); err != nil {
-					return notFilled, fmt.Errorf("%s: submitting to %s: %w", what, b.To, err)
+					return notFilled, nil, fmt.Errorf("%s: submitting to %s: %w", what, b.To, err)
 				}
 			}
 		}
@@ -232,9 +275,9 @@ func (c *Client) fill(ctx context.Context, b Backfill, to *publish.Facade, topic
 	if admitted == 0 {
 		r.Missing++
 		note("%s: MISSING: fetched from the sibling %s, not admitted", what, source)
-		return notFilled, nil
+		return notFilled, nil, nil
 	}
 	r.Filled++
 	note("%s: filled from the sibling %s", what, source)
-	return filled, nil
+	return filled, nil, nil
 }

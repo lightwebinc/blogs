@@ -17,6 +17,7 @@ import (
 	"github.com/lightwebinc/bcommon/nodeapi"
 	"github.com/lightwebinc/bcommon/termsafe"
 
+	"github.com/lightwebinc/blogs/internal/limits"
 	"github.com/lightwebinc/blogs/internal/logrec"
 	"github.com/lightwebinc/blogs/internal/reader"
 )
@@ -70,7 +71,8 @@ Ask the hosts for the producer's batches from -from on, check each answer
 proof against the header source), follow the prev links, decode the content
 and print its lines, filtered for the terminal. Without -to it reads until
 no host holds the next seq, which may be the stream's end or a hole: an
-empty answer proves nothing. A digest-only batch's content is read from
+empty answer proves nothing. One read covers at most 65536 seqs; without
+-to it stops there and names the -from to continue with. A digest-only batch's content is read from
 -content-dir, or fetched from a locator hint whose host is on -allow-host.
 Needs hosts and header_url.
 
@@ -141,6 +143,9 @@ func cmdRead(ctx context.Context, g *global, args []string) error {
 	if *from < 1 || (*to != 0 && *to < *from) {
 		return usage("-from must be at least 1 and -to, when given, at least -from")
 	}
+	if *to != 0 && *to-*from >= limits.MaxReadBatches {
+		return usage("-from %d -to %d is %d seqs, over the limit of %d per read: each seq is a lookup and a proof check (docs/limits.md); read it in parts", *from, *to, *to-*from+1, limits.MaxReadBatches)
+	}
 	c, err := g.hostsReader()
 	if err != nil {
 		return err
@@ -170,6 +175,10 @@ func cmdRead(ctx context.Context, g *global, args []string) error {
 		return cs, err
 	}
 	for seq := *from; *to == 0 || seq <= *to; seq++ {
+		if *to == 0 && seq-*from >= limits.MaxReadBatches {
+			g.say("read stopped at the limit of %d seqs per read (docs/limits.md); continue with -from %d", limits.MaxReadBatches, seq)
+			break
+		}
 		cands, err := get(seq)
 		if err != nil {
 			return err
@@ -274,8 +283,11 @@ header source; ask the batch class for every seq interval n covers, verify
 each carrier, and require the RFC 6962 root over their commitments to equal
 the token's. A seq no host serves takes its commitment from the next
 batch's prev, as an archive proves across a retraction, and is reported
-retracted; one whose commitment nothing names (the interval's last seq, or
-the first of two in a row) leaves the interval INCOMPLETE. The outputs an anchor's inputs spend are read from the
+unserved (retracted, or not delivered: a host serves nothing for either,
+so the audit names the position, not the cause; an archive that checks
+the chain for the sweep names a retraction). One whose commitment nothing
+names (the interval's last seq, or the first of two in a row) leaves the
+interval INCOMPLETE. The outputs an anchor's inputs spend are read from the
 predecessor token, from the funding trees the interval's carriers carry, or
 from the node (asset), which an anchor's fee tree needs. Needs no producer
 home; needs hosts and header_url.
@@ -321,8 +333,8 @@ func cmdVerifyInterval(ctx context.Context, g *global, args []string) error {
 	for _, b := range rep.Batches {
 		fmt.Fprintf(out, "seq %d  carrier %s  timestamp %d  %d line(s)\n", b.Carrier.Batch.Seq, b.Tx.TxID(), b.Carrier.Batch.Timestamp, b.Carrier.Batch.Count)
 	}
-	if len(rep.Retracted) > 0 {
-		fmt.Fprintf(out, "retracted seqs %s: no host serves them; each commitment is the next batch's prev\n", seqList(rep.Retracted))
+	if len(rep.Unserved) > 0 {
+		fmt.Fprintf(out, "unserved seqs %s: no host serves them (retracted, or not delivered); each commitment is the next batch's prev\n", seqList(rep.Unserved))
 	}
 	if len(rep.Missing) > 0 {
 		fmt.Fprintf(out, "missing seqs %s\n", seqList(rep.Missing))
@@ -362,7 +374,7 @@ func seqList(s []uint64) string {
 	return strings.Join(parts, " ")
 }
 
-const backfillHelp = `usage: blogs backfill <stream> <producer> [-from URL] [-to URL] (-seqs A-B | -interval K | -anchors K)
+const backfillHelp = `usage: blogs backfill <stream> <producer> [-from URL] [-to URL] [-sweeps] (-seqs A-B | -interval K | -anchors K)
 
 Fill holes in a host from its siblings. Each position is asked of the host
 first and fetched from the first sibling that holds it only when the host
@@ -384,10 +396,19 @@ producer home.
 
 A seq that neither the host nor any sibling serves is missing, unless the
 seq after it is held or filled: its prev then names the seq's commitment,
-as for a retracted batch, and it is counted retracted instead (as
-verify-interval and archive prove an interval across it).
+as for a retracted batch, and it is counted unserved instead (retracted,
+or not delivered to any host asked; as verify-interval and archive prove
+an interval across it).
 
-Exit 0 when every position is held (or retracted), 1 when a sibling
+No lookup class serves a sweep, so a host that missed one still serves the
+batches it retracted. -sweeps carries them: every carrier the host holds
+at the seqs filled is checked for a mined spend of its funding output by
+another transaction (asset or tx_source names it; it is checked against
+header_url), and a sweep found is submitted to the host. It costs one
+spend read per held carrier. Without -sweeps, backfill says it carried
+none.
+
+Exit 0 when every position is held (or unserved), 1 when a sibling
 answered something refused, 3 when a position is still missing.`
 
 func cmdBackfill(ctx context.Context, g *global, args []string) error {
@@ -397,6 +418,7 @@ func cmdBackfill(ctx context.Context, g *global, args []string) error {
 	seqs := fs.String("seqs", "", "a seq range A-B, or one seq")
 	interval := fs.Uint64("interval", 0, "fill the anchor chain to interval K and the seqs it covers")
 	anchors := fs.Uint64("anchors", 0, "fill the anchor chain 1 to K")
+	sweeps := fs.Bool("sweeps", false, "carry sweeps: check every held carrier for a mined spend of its funding output, and submit the sweep found (needs asset or tx_source, and header_url)")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -423,6 +445,11 @@ func cmdBackfill(ctx context.Context, g *global, args []string) error {
 	if g.cfg.HeaderURL != "" {
 		if c.Headers, err = g.headerClient(); err != nil {
 			return err
+		}
+	}
+	if *sweeps {
+		if _, ok := c.Txs.(reader.SpendSource); !ok || c.Headers == nil {
+			return usage("-sweeps needs asset or tx_source, to name the transaction that spent a batch's funding output, and header_url, to check it is mined")
 		}
 	}
 	var seqList []uint64
@@ -452,7 +479,7 @@ func cmdBackfill(ctx context.Context, g *global, args []string) error {
 	var runErr error
 	for _, t := range targets {
 		b := reader.Backfill{From: sources, To: t, Stream: stream, Producer: producer, Intervals: max(*anchors, *interval), Seqs: seqList,
-			Note: func(f string, a ...any) { fmt.Fprintf(g.stdout, f+"\n", a...) }}
+			Sweeps: *sweeps, Note: func(f string, a ...any) { fmt.Fprintf(g.stdout, f+"\n", a...) }}
 		if len(targets) > 1 {
 			fmt.Fprintf(g.stdout, "filling %s\n", t)
 		}
@@ -468,11 +495,14 @@ func cmdBackfill(ctx context.Context, g *global, args []string) error {
 			}
 			continue
 		}
-		fmt.Fprintf(g.stdout, "backfill %s to %s: %d held, %d filled, %d missing, %d refused, %d retracted\n", stream, t, res.Held, res.Filled, res.Missing, res.Refused, res.Retracted)
+		fmt.Fprintf(g.stdout, "backfill %s to %s: %d held, %d filled, %d missing, %d refused, %d unserved, %d sweep(s) carried\n", stream, t, res.Held, res.Filled, res.Missing, res.Refused, res.Unserved, res.Sweeps)
 		total.Held += res.Held
 		total.Filled += res.Filled
 		total.Missing += res.Missing
 		total.Refused += res.Refused
+	}
+	if !*sweeps && len(seqList) > 0 {
+		g.say("note: backfill carried batches and anchors, not sweeps: no lookup class serves a sweep, so a host that missed one still serves the batches it retracted; -sweeps checks each held batch and carries the sweep it finds")
 	}
 	switch {
 	case total.Refused > 0:

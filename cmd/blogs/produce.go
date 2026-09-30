@@ -9,11 +9,14 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/lightwebinc/bcommon/mint"
 	"github.com/lightwebinc/bcommon/termsafe"
 
+	"github.com/lightwebinc/blogs/internal/config"
+	"github.com/lightwebinc/blogs/internal/limits"
 	"github.com/lightwebinc/blogs/internal/logrec"
 	"github.com/lightwebinc/blogs/internal/produce"
 	"github.com/lightwebinc/blogs/internal/state"
@@ -50,8 +53,9 @@ type produceFlags struct {
 	file, profile, encoding, contentDir, unsafe string
 	urls                                        repeated
 	follow                                      bool
-	maxBytes, maxLines                          int
+	maxBytes, maxLines, anchorBatches           int
 	maxWait, interval, poll, anchorWait         time.Duration
+	maxRate                                     float64
 	treeCount, anchorTreeCount                  int
 	treeSats, anchorTreeSats                    uint64
 	ahead, anchorAhead                          uint
@@ -59,12 +63,49 @@ type produceFlags struct {
 
 func engineFlags(fs *flag.FlagSet, f *produceFlags) {
 	fs.DurationVar(&f.poll, "poll", 5*time.Second, "how often proofs are asked for")
-	fs.IntVar(&f.treeCount, "tree-count", 100, "outputs per batch funding tree (each carrier's BEEF carries its tree)")
+	fs.IntVar(&f.treeCount, "tree-count", limits.DefaultTreeCount, fmt.Sprintf("outputs per batch funding tree (each carrier's BEEF carries its tree; at most %d)", limits.MaxTreeCount))
 	fs.Uint64Var(&f.treeSats, "tree-sats", 1, "satoshis per batch funding output (a carrier carries its output's value)")
 	fs.UintVar(&f.ahead, "ahead", 25, "mint the next batch tree when this few outputs are left")
 	fs.IntVar(&f.anchorTreeCount, "anchor-tree-count", 8, "outputs per anchor fee tree")
 	fs.Uint64Var(&f.anchorTreeSats, "anchor-tree-sats", 1000, "satoshis per anchor fee output (one pays an anchor's fee)")
 	fs.UintVar(&f.anchorAhead, "anchor-ahead", 2, "mint the next anchor fee tree when this few outputs are left")
+	fs.IntVar(&f.anchorBatches, "anchor-batches", limits.DefaultAnchorBatches, fmt.Sprintf("anchor early once this many batches are unanchored; the most one anchor covers (at most %d)", limits.MaxAnchorBatches))
+}
+
+// checkLimits applies docs/limits.md to a producer's settings: a hard cap
+// is a usage error naming the limit, a recommendation a warning. Settings a
+// command does not take (anchor and sweep read no input) are checked at
+// their defaults.
+func (g *global) checkLimits(f *produceFlags, o produce.Options, legs produce.Legs) error {
+	p := limits.Producer{Plane: legs.Hosts == nil, Digest: o.Profile == logrec.ProfileDigest, Gzip: o.Encoding == logrec.EncodingLinesGzip,
+		MaxBytes: f.maxBytes, MaxLines: f.maxLines, MaxWait: f.maxWait, Interval: f.interval, AnchorBatches: f.anchorBatches,
+		Rate: f.maxRate, TreeCount: f.treeCount, ObjectBound: g.cfg.ObjectBound}
+	if legs.Hosts != nil {
+		p.Hosts, p.Need = len(legs.Hosts.Hosts), legs.Hosts.Need
+	}
+	if p.MaxBytes == 0 {
+		p.MaxBytes = limits.DefaultMaxBytes(p.Plane, p.Digest, p.Gzip)
+	}
+	if p.MaxLines == 0 {
+		p.MaxLines = limits.DefaultMaxLines
+	}
+	if p.MaxWait == 0 {
+		p.MaxWait = limits.DefaultMaxWait
+	}
+	if p.Interval == 0 {
+		p.Interval = limits.DefaultInterval
+	}
+	if p.Rate == 0 {
+		p.Rate = limits.DefaultRate
+	}
+	warnings, err := p.Check()
+	if err != nil {
+		return usage("%v", err)
+	}
+	for _, w := range warnings {
+		g.say("warning: %s", w)
+	}
+	return nil
 }
 
 func (g *global) engine(ctx context.Context, stream string, f *produceFlags, o produce.Options) (*produce.Engine, func(), error) {
@@ -79,6 +120,9 @@ func (g *global) engine(ctx context.Context, stream string, f *produceFlags, o p
 	}
 	legs, err := g.legs()
 	if err != nil {
+		return nil, nil, err
+	}
+	if err := g.checkLimits(f, o, legs); err != nil {
 		return nil, nil, err
 	}
 	w, err := g.openWallet()
@@ -103,6 +147,7 @@ func (g *global) engine(ctx context.Context, stream string, f *produceFlags, o p
 	}
 	o.TreeCount, o.TreeSats, o.Ahead = f.treeCount, f.treeSats, uint32(f.ahead)
 	o.AnchorTreeCount, o.AnchorTreeSats, o.AnchorAhead = f.anchorTreeCount, f.anchorTreeSats, uint32(f.anchorAhead)
+	o.AnchorBatches = f.anchorBatches
 	e, err := produce.New(st, w.Signer(), w.Pool, legs, o)
 	if err != nil {
 		unlock()
@@ -125,10 +170,11 @@ func cmdProduce(ctx context.Context, g *global, args []string) error {
 	fs.StringVar(&f.encoding, "encoding", "lines", "lines or gzip")
 	fs.StringVar(&f.contentDir, "content-dir", "", "digest: where content files are written, named by SHA-256 hex")
 	fs.Var(&f.urls, "url", "digest: an https URL prefix the content's SHA-256 hex is appended to, as a fetch hint (up to 4)")
-	fs.IntVar(&f.maxBytes, "max-bytes", 0, "cut a batch at this many bytes of lines (default 262144 for full lines, 1048576 otherwise)")
-	fs.IntVar(&f.maxLines, "max-lines", 10000, "cut a batch at this many lines")
-	fs.DurationVar(&f.maxWait, "max-wait", time.Second, "cut a batch this long after its first line")
-	fs.DurationVar(&f.interval, "interval", 10*time.Minute, "anchor once this long has passed since the last anchor")
+	fs.IntVar(&f.maxBytes, "max-bytes", 0, "cut a batch at this many bytes of lines (default by mode and profile: docs/limits.md)")
+	fs.IntVar(&f.maxLines, "max-lines", limits.DefaultMaxLines, fmt.Sprintf("cut a batch at this many lines (at most %d)", limits.MaxLines))
+	fs.DurationVar(&f.maxWait, "max-wait", limits.DefaultMaxWait, fmt.Sprintf("cut a batch this long after its first line (%s to %s)", limits.MinMaxWait, limits.MaxMaxWait))
+	fs.Float64Var(&f.maxRate, "max-rate", limits.DefaultRate, fmt.Sprintf("publish at most this many batches a second; a faster input waits (at most %d)", limits.MaxRate))
+	fs.DurationVar(&f.interval, "interval", limits.DefaultInterval, fmt.Sprintf("anchor once this long has passed since the last anchor (%s to %s)", limits.MinInterval, limits.MaxInterval))
 	fs.DurationVar(&f.anchorWait, "anchor-wait", 10*time.Minute, "at the end of the input, wait this long for the last anchor to mine (0: do not anchor at the end)")
 	fs.StringVar(&f.unsafe, "unsafe", "warn", "lines a terminal would have to be protected from: warn (publish and count) or drop")
 	engineFlags(fs, &f)
@@ -159,6 +205,12 @@ func cmdProduce(ctx context.Context, g *global, args []string) error {
 		if err := os.MkdirAll(f.contentDir, 0o755); err != nil {
 			return err
 		}
+		var fsst syscall.Statfs_t
+		if syscall.Statfs(f.contentDir, &fsst) == nil {
+			if free := uint64(fsst.Bavail) * uint64(fsst.Bsize); free < limits.ContentDirFreeWarn { //nolint:unconvert // the field types differ across platforms
+				g.say("warning: -content-dir %s has %d MiB free: every digest-only batch's content is written there and kept until you remove it (docs/limits.md)", f.contentDir, free>>20)
+			}
+		}
 		o.ContentDir, o.URLs = f.contentDir, f.urls
 	default:
 		return usage("-profile is full or digest")
@@ -172,13 +224,7 @@ func cmdProduce(ctx context.Context, g *global, args []string) error {
 		return usage("-encoding is lines or gzip")
 	}
 	if f.maxBytes == 0 {
-		f.maxBytes = 1 << 20
-		if o.Profile == logrec.ProfileFull && o.Encoding == logrec.EncodingLines {
-			f.maxBytes = logrec.MaxContent
-		}
-	}
-	if f.maxBytes < 1 || f.maxBytes > logrec.MaxExpanded || f.maxLines < 1 || f.maxWait <= 0 || f.interval <= 0 {
-		return usage("-max-bytes (1 to %d), -max-lines, -max-wait and -interval must be positive", logrec.MaxExpanded)
+		f.maxBytes = limits.DefaultMaxBytes(g.cfg.Mode != config.ModeUnicast, o.Profile == logrec.ProfileDigest, o.Encoding == logrec.EncodingLinesGzip)
 	}
 	if f.unsafe != "warn" && f.unsafe != "drop" {
 		return usage("-unsafe is warn or drop")
@@ -217,7 +263,7 @@ func cmdProduce(ctx context.Context, g *global, args []string) error {
 		src, srcErr = produce.ReadLines(g.stdin)
 	}
 	checked, unsafeCount := screen(src, f.unsafe == "drop")
-	runErr := e.Run(ctx, checked, srcErr, produce.Cut{MaxBytes: f.maxBytes, MaxLines: f.maxLines, MaxWait: f.maxWait}, 30*time.Second)
+	runErr := e.Run(ctx, checked, srcErr, produce.Cut{MaxBytes: f.maxBytes, MaxLines: f.maxLines, MaxWait: f.maxWait, MinGap: limits.Gap(f.maxRate)}, 30*time.Second)
 	if n := unsafeCount.Load(); n > 0 {
 		verb := "published"
 		if f.unsafe == "drop" {

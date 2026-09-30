@@ -37,6 +37,7 @@ import (
 	"github.com/lightwebinc/bcommon/producer"
 	"github.com/lightwebinc/bcommon/publish"
 
+	"github.com/lightwebinc/blogs/internal/limits"
 	"github.com/lightwebinc/blogs/internal/logrec"
 	"github.com/lightwebinc/blogs/internal/state"
 	"github.com/lightwebinc/blogs/internal/unicast"
@@ -77,6 +78,10 @@ type Options struct {
 	// Interval is the anchor cadence: an anchor is built once Interval has
 	// passed since the last one and a batch is unanchored.
 	Interval time.Duration
+	// AnchorBatches anchors early, once this many batches are unanchored,
+	// and is the most one anchor covers; zero is the record's bound,
+	// logrec.MaxIntervalBatches.
+	AnchorBatches int
 	// Poll is how often proofs are asked for.
 	Poll time.Duration
 	// ObjectBound is the plane's object bound, in bytes.
@@ -99,12 +104,16 @@ type Options struct {
 // Legs are the endpoints a producer talks to. Objects go to exactly one of
 // Facade (plane mode: one submit, which the plane delivers to every
 // subscribed host) and Hosts (unicast mode: one submit to each host).
+// SweepHosts, in plane mode, are hosts every sweep is also submitted to
+// directly: no lookup class serves a sweep, so a host off the plane
+// receives one only this way.
 type Legs struct {
-	Settler publish.Settler
-	Asset   *nodeapi.Asset
-	Arcade  *publish.Arcade
-	Facade  *publish.Facade
-	Hosts   *unicast.Set
+	Settler    publish.Settler
+	Asset      *nodeapi.Asset
+	Arcade     *publish.Arcade
+	Facade     *publish.Facade
+	Hosts      *unicast.Set
+	SweepHosts *unicast.Set
 }
 
 // treeFacade is where a new funding tree is published: the facade, or in
@@ -135,6 +144,11 @@ type Engine struct {
 	trees       *producer.Trees
 	anchorTrees *producer.Trees
 	collector   *producer.Collector
+	// warnedSize is set once a carrier over the plane's packet aim was
+	// reported, so a run reports it once.
+	warnedSize bool
+	// warnedSweep is set once a sweep went to the facade alone.
+	warnedSweep bool
 }
 
 // New builds an engine over a stream's state.
@@ -379,6 +393,11 @@ func (e *Engine) publishOne(ctx context.Context, b Batch, content []byte) error 
 	if len(beef) > e.Opts.ObjectBound {
 		return fmt.Errorf("seq %d: the carrier's BEEF is %d bytes, over the object bound of %d (shrink the batch or the funding tree)", rec.Seq, len(beef), e.Opts.ObjectBound)
 	}
+	if e.Legs.Facade != nil && len(beef) > limits.PlaneObjectAim && !e.warnedSize {
+		e.warnedSize = true
+		e.note("warning: seq %d: the carrier's BEEF is %d bytes, about %d packets on the plane; objects over %d packets are lost far more often under loss and distance (lower -max-bytes or -tree-count; docs/limits.md)",
+			rec.Seq, len(beef), (len(beef)+limits.FragmentPayload-1)/limits.FragmentPayload, limits.PlanePackets)
+	}
 	c := adm.Carrier.Commitment
 	st.Seq, st.Head, st.Pending = rec.Seq, hex.EncodeToString(c[:]), hex.EncodeToString(beef)
 	st.Unanchored = append(st.Unanchored, st.Head)
@@ -477,10 +496,18 @@ func (e *Engine) Tick(ctx context.Context, force bool) error {
 	if len(e.St.Unanchored) == 0 {
 		return nil
 	}
-	if !force && e.Now().Sub(time.UnixMilli(e.St.LastAnchorMs)) < e.Opts.Interval {
+	if !force && e.Now().Sub(time.UnixMilli(e.St.LastAnchorMs)) < e.Opts.Interval && len(e.St.Unanchored) < e.anchorBatches() {
 		return nil
 	}
 	return e.anchor(ctx)
+}
+
+// anchorBatches is the most batches one anchor covers.
+func (e *Engine) anchorBatches() int {
+	if n := e.Opts.AnchorBatches; n > 0 && n < logrec.MaxIntervalBatches {
+		return n
+	}
+	return logrec.MaxIntervalBatches
 }
 
 // Settled reports whether every batch is anchored and nothing is in flight.
@@ -508,7 +535,7 @@ func (e *Engine) Drain(ctx context.Context) error {
 // and hands it to the settlement leg.
 func (e *Engine) anchor(ctx context.Context) error {
 	st := e.St
-	count := min(len(st.Unanchored), logrec.MaxIntervalBatches)
+	count := min(len(st.Unanchored), e.anchorBatches())
 	cs := make([][32]byte, count)
 	for i := range cs {
 		b, err := hex.DecodeString(st.Unanchored[i])

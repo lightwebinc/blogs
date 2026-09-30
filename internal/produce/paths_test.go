@@ -312,3 +312,59 @@ func TestURLPrefixes(t *testing.T) {
 		}
 	}
 }
+
+func TestAnchorBatchesAnchorsEarly(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	ctx := context.Background()
+	o := r.options()
+	o.Interval, o.AnchorBatches = time.Hour, 2
+	e := r.engine(o)
+	now := time.UnixMilli(1_000_000)
+	e.Now = func() time.Time { return now }
+	if err := e.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Publish(ctx, lines(1, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Tick(ctx, false); err != nil || e.St.Inflight != nil {
+		t.Fatalf("anchored one batch before the interval: %v", err)
+	}
+	for i := 1; i < 3; i++ {
+		if err := e.Publish(ctx, lines(1, i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := e.Tick(ctx, false); err != nil || e.St.Inflight == nil || e.St.Inflight.Count != 2 {
+		t.Fatalf("not anchored early over two batches: %v %+v", err, e.St.Inflight)
+	}
+	if err := e.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if e.St.Anchor.Interval != 2 || e.St.Anchor.Count != 1 {
+		t.Fatalf("the rest: %+v", e.St.Anchor)
+	}
+}
+
+func TestRunPacesBatchesAtTheRate(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	ctx := context.Background()
+	e := r.engine(r.options())
+	if err := e.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	src := make(chan produce.Line, 8)
+	for _, l := range []string{"a\n", "b\n", "c\n", "d\n"} {
+		src <- produce.Line{B: []byte(l)}
+	}
+	close(src)
+	start := time.Now()
+	if err := e.Run(ctx, src, make(chan error), produce.Cut{MaxBytes: 100, MaxLines: 1, MaxWait: time.Second, MinGap: 100 * time.Millisecond}, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took < 300*time.Millisecond || e.St.Seq != 4 {
+		t.Fatalf("4 batches at a 100 ms gap took %s, seq %d", took, e.St.Seq)
+	}
+}

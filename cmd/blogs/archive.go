@@ -8,10 +8,11 @@ import (
 	"time"
 
 	"github.com/lightwebinc/blogs/internal/archive"
+	"github.com/lightwebinc/blogs/internal/limits"
 	"github.com/lightwebinc/blogs/internal/reader"
 )
 
-const archiveHelp = `usage: blogs archive <stream> <producer> -dir DIR [-host URL] [-follow] [flags]
+const archiveHelp = `usage: blogs archive <stream> <producer> -dir DIR [-host URL] [-follow] [-recheck N | -recheck-all] [flags]
 
 Keep one host's copy of a stream in local files: ask the host for every seq
 from where the last pass stopped until it holds nothing, check each carrier
@@ -22,7 +23,9 @@ token, its root, and every seq's commitment with its inclusion path. A seq
 no file holds takes its commitment from the next batch's prev (a retracted
 or undelivered batch), and the interval is written proven-with-holes.
 
-Each pass first asks the host again for every seq it has stored. A stored
+Each pass first asks the host again about the seqs it has stored, up to
+-recheck of them, continuing where the last pass stopped so the seqs asked
+about longest ago come first (-recheck-all asks about every one). A stored
 carrier the host no longer serves is checked for a retraction: a mined
 transaction other than the carrier that spends its funding output (the
 node, or tx_source, names it; the archive checks it against header_url).
@@ -48,6 +51,8 @@ func cmdArchive(ctx context.Context, g *global, args []string) error {
 	host := fs.String("host", "", "the host to follow (default: the first configured host)")
 	follow := fs.Bool("follow", false, "keep following: a pass every -poll until interrupted")
 	poll := fs.Duration("poll", 30*time.Second, "with -follow, the time between passes")
+	recheck := fs.Int("recheck", limits.DefaultRecheck, fmt.Sprintf("stored seqs each pass asks the host about again, oldest checked first (0 to %d)", limits.MaxRecheck))
+	recheckAll := fs.Bool("recheck-all", false, "ask the host again about every stored seq in this pass")
 	var dirs, allow repeated
 	fs.Var(&dirs, "content-dir", "a directory of digest-only content named by SHA-256 hex (repeatable)")
 	fs.Var(&allow, "allow-host", "a host whose locator hints may be fetched over HTTPS (repeatable)")
@@ -72,6 +77,9 @@ func cmdArchive(ctx context.Context, g *global, args []string) error {
 	if *poll <= 0 {
 		return usage("-poll must be positive")
 	}
+	if *recheck < 0 || *recheck > limits.MaxRecheck {
+		return usage("-recheck %d is outside the limits of 0 to %d: each is a lookup, so a pass is bounded (docs/limits.md); -recheck-all asks about every stored seq once", *recheck, limits.MaxRecheck)
+	}
 	abs, err := filepath.Abs(*dir)
 	if err != nil {
 		return err
@@ -81,7 +89,7 @@ func cmdArchive(ctx context.Context, g *global, args []string) error {
 		return err
 	}
 	a := &archive.Archive{Dir: abs, Host: *host, Stream: stream, Producer: producer, Client: c,
-		Fetch: reader.Fetch{Dirs: dirs, Allow: allow, Timeout: g.cfg.Timeout, HTTP: httpClient}}
+		Fetch: reader.Fetch{Dirs: dirs, Allow: allow, Timeout: g.cfg.Timeout, HTTP: httpClient}, Recheck: *recheck, RecheckAll: *recheckAll}
 	if g.verbose {
 		a.Note = g.say
 	}
@@ -126,6 +134,9 @@ func (g *global) archiveSummary(a *archive.Archive, s *archive.Summary, final bo
 	}
 	if len(s.Retracted) > 0 {
 		fmt.Fprintf(out, "retracted seqs %s: receipt and sweep kept in retracted/, bytes dropped\n", joinU64(s.Retracted))
+	}
+	if s.StoredSeqs > 0 {
+		fmt.Fprintf(out, "rechecked %d of %d stored seq(s)\n", s.Rechecked, s.StoredSeqs)
 	}
 	fmt.Fprintf(out, "archive %s from %s: %d batch(es) stored, walked to seq %d, intervals 1 to %d proven, in %s\n",
 		a.Stream, a.Host, s.Stored, s.Next-1, s.Intervals, a.Root())

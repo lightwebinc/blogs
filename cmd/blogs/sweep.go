@@ -35,9 +35,15 @@ Without -yes it prints what it would sweep and changes nothing. Each sweep
 is written to the stream's state before it is settled; a sweep in flight is
 finished (settled, waited for, pooled, published) by the next sweep run,
 with or without flags, before anything new is built. Needs what produce
-needs; -retract-seqs needs hosts. In mode unicast a sweep counts as
-published only when every host took it, whatever the quorum, because no
-backfill can carry a sweep to a host that missed it.`
+needs; -retract-seqs needs hosts.
+
+No lookup class serves a sweep, so a host receives one only when it is
+submitted to it. In mode plane a sweep goes to the facade, which the plane
+carries to every subscribed host, and directly to every other host in
+hosts, so a host off the plane receives it too; in mode unicast it goes to
+every host in hosts. Either way it counts as published only when every
+host named took it, whatever the quorum. A host missing from hosts can be
+given a sweep later by backfill -sweeps.`
 
 func cmdSweep(ctx context.Context, g *global, args []string) error {
 	fs := g.flagSet("sweep", sweepHelp)

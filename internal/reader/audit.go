@@ -50,11 +50,13 @@ type Report struct {
 	// Missing are seqs of the interval no host answered whose commitment
 	// could not be recovered.
 	Missing []uint64
-	// Retracted are seqs of a verified interval that no host serves, each
+	// Unserved are seqs of a verified interval that no host serves, each
 	// commitment taken from the next batch's prev, as an archive proves an
-	// interval across a retraction (docs/spec.md section 8.4). Batches
-	// holds none for them.
-	Retracted []uint64
+	// interval across a retraction (docs/spec.md section 8.4). A host
+	// serves nothing for a retracted batch or for one it never received,
+	// and a lookup cannot tell the two apart, so the auditor names the
+	// position, not the cause. Batches holds none for them.
+	Unserved []uint64
 	// Refusals are answers refused along the way, for the trace.
 	Refusals []string
 }
@@ -77,7 +79,7 @@ func (r *Report) incomplete(format string, args ...any) *Report {
 // batch class for every seq interval n covers and requires the root over
 // their commitments to equal the token's. A seq no host serves takes its
 // commitment from the next batch's prev, as an archive's does, and is
-// reported in Retracted; one whose commitment nothing names leaves the
+// reported in Unserved; one whose commitment nothing names leaves the
 // interval Incomplete. The outputs a token's inputs
 // spend are read from the predecessor token's transaction, from the funding
 // trees the interval's carriers carry, or from Txs.
@@ -184,7 +186,7 @@ func (c *Client) VerifyInterval(ctx context.Context, stream string, producer []b
 			r.Batches = append(r.Batches, b)
 		}
 	}
-	r.Retracted, r.Missing = holes, nil
+	r.Unserved, r.Missing = holes, nil
 	r.Outcome = Verified
 	return r, nil
 }

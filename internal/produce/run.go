@@ -26,11 +26,14 @@ type Line struct {
 }
 
 // Cut is when a batch is closed: at MaxBytes bytes or MaxLines lines,
-// whichever comes first, or MaxWait after its first line.
+// whichever comes first, or MaxWait after its first line. MinGap, when
+// set, is the least time between two published batches: a batch cut
+// sooner waits, and meanwhile the input is not read.
 type Cut struct {
 	MaxBytes int
 	MaxLines int
 	MaxWait  time.Duration
+	MinGap   time.Duration
 }
 
 // Run reads lines until src closes or ctx ends, cuts them into batches and
@@ -45,6 +48,7 @@ func (e *Engine) Run(ctx context.Context, src <-chan Line, srcErr <-chan error, 
 	var tail *state.Tail
 	var timer <-chan time.Time
 	split := false
+	var last time.Time
 	flush := func(ctx context.Context) error {
 		if count == 0 {
 			return nil
@@ -54,6 +58,13 @@ func (e *Engine) Run(ctx context.Context, src <-chan Line, srcErr <-chan error, 
 			e.note("note: a line longer than %d bytes was carried as several lines", MaxLine)
 		}
 		raw, count, timer, split = nil, 0, nil, false
+		if d := cut.MinGap - time.Since(last); cut.MinGap > 0 && !last.IsZero() && d > 0 {
+			select {
+			case <-ctx.Done():
+			case <-time.After(d):
+			}
+		}
+		last = time.Now()
 		return e.Publish(ctx, b)
 	}
 	tick := time.NewTicker(e.Opts.Poll)

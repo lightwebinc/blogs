@@ -56,10 +56,11 @@ reader commands (no home needed):
   read <stream> <producer>     fetch, verify and print a stream's batches
   verify-interval <stream> <producer> <n>
                                audit interval n: the anchor chain, its proof, its root
-  backfill <stream> <producer> [-from URL] [-to URL]
+  backfill <stream> <producer> [-from URL] [-to URL] [-sweeps]
                                fill a host's holes from its siblings; with
-                               neither flag, bring the configured hosts into step
-  archive <stream> <producer> -dir DIR [-host URL]
+                               neither flag, bring the configured hosts into
+                               step; -sweeps also carries sweeps it lacks
+  archive <stream> <producer> -dir DIR [-host URL] [-recheck N | -recheck-all]
                                keep a host's copy of a stream, with interval
                                proofs, in local files
 
