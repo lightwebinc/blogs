@@ -2,7 +2,6 @@ package produce
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
@@ -274,29 +273,26 @@ func (e *Engine) record(tx *transaction.Transaction, kind string, info TreeInfo,
 	return sw, nil
 }
 
-// rebuildSweep rebuilds a sweep from the stream's state. A mined sweep is
-// its raw bytes and proof, through funding.Rebuild. An unmined one is the
-// BEEF record kept, and that BEEF can hold a stand-in parent with no inputs:
-// the Payer builds one for a coinbase fee coin, carrying just the output the
-// sweep spends, which is all signing and the settlement leg's extended
-// format need. bcommon's guard refuses a transaction of no inputs in any
-// BEEF it reads, so this one, which the producer wrote itself into its own
-// mode 0600 state and which never reaches a host, is parsed by the SDK
-// directly and held to the txid recorded beside it.
+// rebuildSweep rebuilds a sweep from the stream's state through
+// funding.Rebuild: a mined sweep from its raw bytes and proof, an unmined
+// one from the BEEF kept, and holds it to the txid recorded beside it.
+//
+// A sweep kept by an earlier build can hold a BEEF whose fee input's parent
+// is a stand-in of no inputs, which the guard refuses on reading back. Once
+// such a sweep is submitted, nothing but its txid and its own bytes is
+// needed to wait for its proof and publish it, so it is read from its raw
+// bytes alone. One not yet submitted still needs its ancestry to settle,
+// and stays refused.
 func rebuildSweep(sw *state.Sweep) (*transaction.Transaction, error) {
-	if sw.BumpHex != "" || sw.BeefHex == "" {
-		return funding.Rebuild(sw.RawHex, sw.BumpHex, sw.BeefHex)
+	tx, err := funding.Rebuild(sw.RawHex, sw.BumpHex, sw.BeefHex)
+	if err != nil && sw.Submitted && sw.BumpHex == "" && sw.BeefHex != "" {
+		tx, err = funding.Rebuild(sw.RawHex, "", "")
 	}
-	b, err := hex.DecodeString(sw.BeefHex)
 	if err != nil {
 		return nil, err
 	}
-	_, tx, _, err := transaction.ParseBeef(b)
-	if err != nil {
-		return nil, err
-	}
-	if tx == nil || tx.TxID().String() != sw.Txid {
-		return nil, errors.New("the kept BEEF does not hold the sweep")
+	if tx.TxID().String() != sw.Txid {
+		return nil, errors.New("the kept record does not hold the sweep")
 	}
 	return tx, nil
 }
