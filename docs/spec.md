@@ -679,13 +679,27 @@ Only a mined spend retracts. An unmined spend of a funding output is not a
 retraction, because a carrier cannot be a double spend of a transaction
 that may never mine.
 
+A file archive that follows a host (one that keeps no link index of its
+own) learns of a retraction by asking again for the `seq` of each carrier it
+stored. A stored carrier the host no longer serves is retracted only when
+the archive finds the evidence: a transaction other than that carrier that
+spends its funding outpoint, mined in the archive's own headers. A lookup
+names no spender, so the archive asks a copy of the chain which transaction
+spent the outpoint, treats the answer as a lead, fetches that transaction
+with its proof by txid and checks both facts itself. It then keeps the
+receipt, with the batch's `prev`, and the sweep with its proof, and drops
+the batch's bytes. An empty answer alone proves nothing: a carrier the host
+stops serving with no such spend is kept.
+
 An archive that never held a batch before it was retracted recovers its
-commitment from the next batch's `prev`, when it holds that batch. A
-retracted batch that is the last of its interval, or followed only by
-retracted batches to the end of it, leaves a commitment the archive cannot
-recover from a sibling (siblings serve nothing for it); the archive reports
-that interval as complete except for those retracted positions, and any
-archive that held the receipts proves the interval.
+commitment from the next batch's `prev`, when it holds that batch; the
+batch before the hole is then chosen with nothing naming it, so it must have
+a single candidate. A retracted batch that is the last of its interval, or
+followed only by retracted batches to the end of it, leaves a commitment the
+archive cannot recover from a sibling (siblings serve nothing for it); the
+archive reports that interval as complete except for those retracted
+positions, and any archive that held the receipts proves the interval,
+because a receipt carries `C` and its `prev`.
 
 ### 8.5 Restore
 
@@ -830,7 +844,14 @@ below.
    contract), recomputes the root, requires it to equal `root`, and so
    obtains `C`'s inclusion at index `seq - first`; with a path in hand from
    elsewhere, it checks the path's shape for that index in a tree of `count`
-   leaves;
+   leaves. A `seq` no host serves takes its commitment from the next
+   batch's `prev`, exactly as an archive recovers a retracted batch's
+   (section 8.4), and the auditor reports that `seq` retracted; the root
+   still proves every other `C` of the interval. Hosts serve nothing for a
+   retracted batch, so the auditor cannot tell a retraction from a batch no
+   host it asked received; the report names the position, not the cause. A
+   `seq` whose commitment nothing names (the interval's last, or the first
+   of two in a row) leaves the audit incomplete;
 4. for a digest-only batch, the fetched bytes against the locator.
 
 The result proves that the producer's key signed the record and committed it
@@ -885,10 +906,10 @@ batches.
    anyone kept stays a copy. The chain holds only commitments and roots.
 7. **Metadata is public.** Producer keys, stream identifiers, sequence numbers,
    timestamps, sizes and counts are visible to every host on the topic.
-8. **Retracted tails (a known limitation).** An archive that never held
-   retracted batches at the end of an interval cannot recover their
-   commitments from a sibling, and so cannot verify that interval by itself
-   (section 8.4); an archive that held the receipts can.
+8. **Retracted tails (a known limitation).** An archive or an auditor that
+   never held retracted batches at the end of an interval cannot recover
+   their commitments from a sibling, and so cannot verify that interval by
+   itself (section 8.4); an archive that held the receipts can.
 9. **Auditing one record** costs a batch question per batch of its interval
    until an archive contract serves inclusion paths.
 

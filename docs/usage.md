@@ -319,7 +319,11 @@ The auditor's check of specification section 13, needing no producer home:
    `tx_source` (a public service; its answer is held to the txid);
 4. require the RFC 6962 root over the batches' commitments, choosing among
    fork candidates by `prev` and trying each at the last `seq`, to equal the
-   token's root.
+   token's root. A `seq` no host serves takes its commitment from the next
+   batch's `prev`, as an archive proves an interval across a retraction
+   (specification section 8.4), and is reported retracted. The `seq` before
+   such a hole must then have a single candidate, since nothing names its
+   commitment.
 
 It prints each interval's canonical token, each batch, and one verdict line:
 
@@ -332,10 +336,19 @@ seq 8  carrier 0b77...  timestamp 1700000002000  4 line(s)
 VERIFIED interval 2 of app_qzxkvbmwtr by 02c0ffee...: seqs 6 to 8, root 5d1e..., committed no later than block 1211
 ```
 
+After seq 7 is retracted, the same audit prints seqs 6 and 8, then
+`retracted seqs 7: no host serves them; each commitment is the next
+batch's prev`, then the same VERIFIED line with the same root. A host
+serves nothing for a retracted batch, so the auditor cannot tell a
+retraction from a batch no host asked ever received; a backfill fills the
+second kind.
+
 `REFUSED interval n: <reason>` (exit 1) names the rule broken, for example
 `anchor-join` or `root-mismatch`. `INCOMPLETE interval n: <reason>` (exit 3)
-means evidence was not found: no host answered an interval or a `seq`, or
-an input's funding tree was unobtainable. With `-v`, answers refused along
+means evidence was not found: no host answered an interval, a `seq`
+whose commitment nothing names was answered by no host (the interval's
+last `seq`, or the first of two in a row), or an input's funding tree was
+unobtainable. With `-v`, answers refused along
 the way are listed on stderr.
 
 ## Backfill
@@ -390,11 +403,12 @@ funding outputs.
   is published, with its proof, to the stream's topic; each carrier that
   spent a swept output is then a double spend, and a host stops serving it
   and keeps its seq as a numbered position: the anchor still commits it, a
-  reader finds it missing, and an archive proves the interval with a hole
-  where the next batch's `prev` names the commitment. A retracted batch
-  that is the last of its interval leaves nothing to name it, so an
-  archive that did not hold it cannot prove that interval (specification
-  section 8.4). An anchor fee tree funds no carrier and cannot be
+  reader finds it missing, and an archive and `verify-interval` prove the
+  interval across the hole where the next batch's `prev` names the
+  commitment. An archive that stored the batch keeps a receipt of it (see
+  Archive). A retracted batch that is the last of its interval leaves
+  nothing to name it, so an archive that did not hold it, and the auditor,
+  cannot prove that interval (specification section 8.4). An anchor fee tree funds no carrier and cannot be
   retracted.
 - **Retirement.** `-retire` spends the unused outputs of every tree no
   longer in use (batch trees, anchor fee trees, and trees minted ahead and
@@ -435,6 +449,21 @@ canonical anchor token (held to the anchor rules, its fee tree read from
 writes the interval's proof. `-follow` repeats the pass every `-poll`.
 `-content-dir` and `-allow-host` find digest-only content as for `read`.
 
+Each pass first asks the host again for every `seq` it has stored. A
+stored carrier the host no longer serves is checked for a retraction: a
+mined transaction other than the carrier that spends the carrier's funding
+output. The spender is named by `asset` (the node's UTXO view) or
+`tx_source` (WhatsOnChain), fetched with its proof, and checked against
+`header_url`: that it spends the output and is mined. When it holds, the
+archive writes a receipt and the sweep under `retracted/` and then drops
+the batch's bytes (its BEEF, its record file and its content), and prints
+`retracted seqs N: receipt and sweep kept in retracted/, bytes dropped`.
+The receipt keeps the position: it completes the interval's root, and its
+`prev` lets a proof continue past it, so an archive holding the receipt of
+an interval's last `seq` still proves that interval. A carrier the host
+stops serving with no such spend is kept and noted: an empty answer proves
+nothing. Every stored `seq` is asked once per pass.
+
 The layout, under `DIR/<stream>/<producer>/`:
 
 | Path | What |
@@ -444,25 +473,29 @@ The layout, under `DIR/<stream>/<producer>/`:
 | `batches/<seq>-<carrier>.json` | what was read from it: `seq`, `prev`, `timestamp`, `count`, `encoding`, `profile`, `size`, the funding outpoint, the host, and `content` (`ok`, `pending`, `unsupported`, `invalid`) |
 | `content/<seq>-<carrier>.log` | the decoded lines, as the producer wrote them (not filtered for a terminal), when the content was read |
 | `anchors/<interval>-<token>.beef` | each canonical anchor token's BEEF, with its proof |
-| `intervals/<interval>.json` | the interval's proof: `token`, `vout`, `height`, `position` in its block, `prevToken`, `first`, `count`, `root`, `status`, `holes`, and per `seq` its `commitment`, whether its bytes are `held`, and its RFC 6962 inclusion `path` (leaf to root, each step the sibling's hash in hex, `L:` before a left sibling) |
+| `intervals/<interval>.json` | the interval's proof: `token`, `vout`, `height`, `position` in its block, `prevToken`, `first`, `count`, `root`, `status`, `holes`, `retracted`, and per `seq` its `commitment`, whether its bytes are `held` or it is held as a `retracted` receipt, and its RFC 6962 inclusion `path` (leaf to root, each step the sibling's hash in hex, `L:` before a left sibling) |
+| `retracted/<seq>-<carrier>.json` | the receipt of a stored batch found retracted: what its batch file held (with `content` now `dropped`), its `commitment`, and the `sweep` txid and `sweepHeight` |
+| `retracted/<seq>-<carrier>.sweep.beef` | that sweep's BEEF, with its proof: the evidence of the retraction |
 
 `<seq>` and `<interval>` are 16 decimal digits, zero padded; `<carrier>`
 and `<token>` are txids. Files are written atomically and never rewritten,
 so an interrupted pass is continued by the next and two archives of the
 same stream hold identical `intervals/` files. An interval's `status` is
-`proven` when every batch is held, and `proven-with-holes` when some `seq`
-is held by no file and its commitment was taken from the next batch's
-`prev` (a retracted batch, or one the host never received); those seqs are
-listed in `holes`. The root over the commitments must equal the token's,
-or the interval is not written. A batch the archive stored before it was
-retracted stays stored.
+`proven` when every `seq` is held as a batch or a receipt (receipts listed
+in `retracted`), and `proven-with-holes` when some `seq` is held by
+neither and its commitment was taken from the next batch's `prev` (a
+retracted batch, or one the host never received); those seqs are listed
+in `holes`. The root over the commitments must equal the token's, or the
+interval is not written. An interval file records what the archive held
+when it was proven: a later retraction adds a receipt and drops the bytes,
+but does not rewrite the interval file, whose proof still holds.
 
 It prints one line per interval proven, a summary, and last
 `latest interval K root R token T`, so two archives are compared by that
 line. Exit 0 when the pass is done, 1 when the host answered something
 refused or the chain or a root does not hold, 3 when an interval the host
 answers cannot be proven from what it holds (for example its last `seq`
-retracted and never stored).
+retracted and never stored, with no receipt).
 
 ## Exit codes
 
@@ -520,7 +553,8 @@ a stand-in host (`internal/testchain`): every command path, restart and
 crash resumption, both profiles and gzip, a followed file with rotation,
 hostile answers, terminal filtering, forks and equivocation, backfill and
 the audit's refusals, retraction and retirement, archives with and without
-holes, a payment imported by `fund -txid`, and mode unicast with a host
+holes, an archive's receipts of retracted batches (including an interval's
+last), the audit across a retracted seq, a payment imported by `fund -txid`, and mode unicast with a host
 down under each quorum, its repair, and a retraction that waits for every
 host.
 
@@ -529,11 +563,14 @@ loading the bundle, over the same local chain serving the node's API and
 the header source: two produce runs and a digest-only one, read,
 verify-interval, a backfill of the second host from the first, a host
 restart, a publish that fails and is resumed, archives of both hosts
-agreeing on every interval, and a retraction the host module applies.
+agreeing on every interval, and a retraction the host module applies,
+which the archive that stored the batch then records and the audit proves
+across.
 `make e2e-unicast` runs a producer in mode unicast against two reference
 hosts: every object on both, a host down under quorum `all` (the run stops)
 and quorum `one` (it continues), the printed backfill repairing the host,
-both archives agreeing, and a retraction reaching both. Both need Docker for
+both archives agreeing, and a retraction reaching both, recorded by both
+archives and proven across at both hosts. Both need Docker for
 the hosts' MySQL and a reference host directory holding its compiled
 `dist/index.js` and its `node_modules`.
 
