@@ -445,7 +445,8 @@ funding outputs and spends, whatever the plane's delivery order, repair or
 lateness did, and the same anchors once it holds what they spend: a host
 that refused an anchor because it did not yet hold the predecessor or the
 funding output recovers it later from a sibling by the interval class, as a
-host whose headers lagged does (rule 8). SPV of the BEEF (scripts, amounts,
+host whose headers lagged does (rule 8), because such a refusal leaves no
+record (below). SPV of the BEEF (scripts, amounts,
 the funding parent's proof or unproven ancestry) is the engine's and runs
 before the topic manager. Checks then run in the order given; a transaction
 is refused for the first rule it breaks, with that rule's reason.
@@ -546,12 +547,35 @@ output stays in storage marked spent. The lookup service does not rely on the
 engine's spend notices; it reads each admitted transaction's inputs itself
 and persists, per outpoint, the set of transactions that spent it.
 
+**Refusals that leave no record.** An overlay engine records every
+transaction its topic manager returns admittance instructions for, empty
+ones included, as seen: it treats a later submission of the same
+transaction as a duplicate that no topic manager is shown again, and it
+marks spent, or deletes, every held output the transaction spends. A
+refusal whose verdict can change must not be recorded, or the recovery
+above would be dropped as a duplicate; and a refused transaction must not
+change what the topic holds. So a host MUST NOT record, and MUST NOT let a
+refused transaction mark spent or delete any held output, when it refuses:
+
+- an anchor token under rule 7 (`anchor-input`) or rule 8 (`unmined`): its
+  verdict depends on what the topic holds and on the host's headers, so the
+  same transaction offered again (repair, a sibling's interval answer, a
+  proven republication) is decided afresh;
+- any transaction that spends an output the topic holds.
+
+A topic manager on such an engine signals these refusals by raising an
+error rather than returning empty instructions; the engine then counts a
+failed topic admission for that submission and stores nothing. Every other
+refusal depends on the object alone and may be recorded, since offering it
+again cannot change it.
+
 **Producer policy.** An open stream admits any producer. A host MAY restrict
 a stream to a configured set of producer keys. Openness is configured
 explicitly, never inferred: an empty producer set is a configuration error,
 not an open stream.
 
-A host counts refusals by reason. It MUST NOT evict unproven carriers:
+A host counts refusals by reason, and whether each was recorded. It MUST
+NOT evict unproven carriers:
 carriers are unproven by design. As a second layer, the lookup service reads
 a transaction's mined status from the BEEF the engine stores for it whenever
 it joins, answers or restores, never from a notice it may not receive.
@@ -594,10 +618,11 @@ admitted token is mined, and admission (section 8.1 rule 7) already
 guarantees that a token for interval `k > 1` spends a token of interval
 `k - 1` whose txid is its `prev`, and that interval 1 is funded by the
 producer. The join adds that `first` equals the predecessor's
-`first + count`; a token that fails it is kept and reported, never used.
-Admission admits a token only while the topic holds what it spends, so its
-predecessor is always admitted first; a join that meets a token before its
-predecessor (on restore, in storage order) waits for it.
+`first + count`; a token that fails it is kept and reported (`anchor-join`),
+never used. Admission admits a token only while the topic holds what it
+spends, so its predecessor is always admitted first; a join that meets a
+token before its predecessor (on restore, in storage order) waits for it,
+reported `pending` meanwhile.
 
 The **canonical** chain: interval 1's canonical token is the one mined first
 (lower block height, then lower position in the block); interval `k > 1`'s
@@ -738,7 +763,8 @@ stream, class or configuration.
   interval's anchor, and the interval's status is recomputed. An anchor is
   admitted whenever it arrives after the outputs it spends; one that arrives
   before its predecessor or its funding tree is refused (section 8.1 rule 7)
-  and fetched again by the interval class from a sibling once they are held. A hole that
+  without a record, and admitted when it is offered again once they are
+  held: redelivered, or fetched by the interval class from a sibling. A hole that
   repair did not fill (the archive was down, or a loss outlived the repair
   window) is filled by the batch class from a sibling archive, without the
   producer. The anchor is what turns "probably everything" into a proof, and
@@ -761,7 +787,17 @@ stream, class or configuration.
    does not hold that interval;
    the token is SPV-verified, mined, and proven against the auditor's
    headers; the section 8.1 anchor rules; same `producer` and `stream`;
-   `first <= seq <= first + count - 1`;
+   `first <= seq <= first + count - 1`. An auditor holds no previous coins,
+   so rule 7 reads each output the token's inputs spend from the transaction
+   that created it: the predecessor token's transaction is the interval
+   class's answer for `interval - 1`, which the walk has already fetched; a
+   funding output's transaction is a mined funding tree, which no question
+   class serves (a token's BEEF carries its own proof and no parents), so
+   the auditor takes it by its txid from any copy of the chain, or from a
+   carrier's BEEF, which carries the funding tree that carrier spends, and
+   accepts it when its double SHA-256 is the txid the input names. No proof
+   of that transaction is needed: the token's proof shows the spend was
+   mined, and the txid binds the output it spent;
 3. the interval's commitments: the auditor asks the batch class for every
    `seq` the anchor covers (or takes them from an archive's export, a later
    contract), recomputes the root, requires it to equal `root`, and so
