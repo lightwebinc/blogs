@@ -1,0 +1,103 @@
+# The quickstart: all of blogs on one machine, in minutes, with no coin.
+# A local chain stands in for the network; two overlay hosts run the blogs
+# module over one MySQL; and the blogs command runs beside them, producing
+# in unicast mode, so every object goes to both hosts. QUICKSTART.md walks
+# through it:
+#
+#   docker compose up -d chain
+#   alias blogs='docker compose run --rm -T blogs'
+#   blogs init && blogs fund && blogs stream new app
+#   (put the BLOGS_STREAMS line it prints in .env)
+#   docker compose up -d
+#
+# The chain (blogs-devchain) has no proof of work and no peers, and nothing
+# it mines is money: it is for trying blogs, never for a network. Every
+# password here is a throwaway meant to be seen.
+#
+# Optional: BLOGS_IMAGE, BLOGS_HOST_IMAGE and DEVCHAIN_IMAGE name the images
+# (default: the published ones, tag latest).
+
+name: blogs-quickstart
+
+x-host: &host
+  image: ${BLOGS_HOST_IMAGE:-ghcr.io/lightwebinc/blogs-host:latest}
+  depends_on:
+    db:
+      condition: service_healthy
+    chain:
+      condition: service_started
+  restart: unless-stopped
+
+services:
+  chain:
+    image: ${DEVCHAIN_IMAGE:-ghcr.io/lightwebinc/blogs-devchain:latest}
+    volumes:
+      - chain:/var/lib/devchain
+    restart: unless-stopped
+
+  db:
+    image: mysql:9@sha256:30a0abfa7b502a496e12339b54cd07aaa70363396dc4b8e8a72a92804a505cd6
+    environment:
+      MYSQL_DATABASE: overlay_a
+      MYSQL_USER: overlay
+      MYSQL_PASSWORD: quickstart
+      MYSQL_RANDOM_ROOT_PASSWORD: "yes"
+    command:
+      - --innodb-buffer-pool-size=128M
+      - --performance-schema=OFF
+    configs:
+      - source: second-database
+        target: /docker-entrypoint-initdb.d/second-database.sql
+    volumes:
+      - db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uoverlay -pquickstart --silent"]
+      interval: 3s
+      timeout: 5s
+      retries: 60
+    restart: unless-stopped
+
+  host-a:
+    <<: *host
+    environment:
+      BLOGS_STREAMS: ${BLOGS_STREAMS:-}
+      OVERLAY_KNEX_URL: mysql://overlay:quickstart@db:3306/overlay_a
+      OVERLAY_CHAIN_TRACKER_URL: http://chain:8080
+    ports:
+      - "127.0.0.1:8081:8080"
+
+  host-b:
+    <<: *host
+    environment:
+      BLOGS_STREAMS: ${BLOGS_STREAMS:-}
+      OVERLAY_KNEX_URL: mysql://overlay:quickstart@db:3306/overlay_b
+      OVERLAY_CHAIN_TRACKER_URL: http://chain:8080
+    ports:
+      - "127.0.0.1:8082:8080"
+
+  # The command, run with `docker compose run --rm -T blogs <command>`. Its
+  # home (identity, coin pool, streams) is the named volume `home`.
+  blogs:
+    image: ${BLOGS_IMAGE:-ghcr.io/lightwebinc/blogs:latest}
+    profiles: [cli]
+    environment:
+      BLOGS_NETWORK: regtest
+      BLOGS_MODE: unicast
+      BLOGS_HOSTS: http://host-a:8080,http://host-b:8080
+      BLOGS_HEADER_URL: http://chain:8080
+      BLOGS_ASSET: http://chain:8080
+      BLOGS_RPC: http://chain:8080/rpc
+      BLOGS_SETTLE: rpc:http://chain:8080/rpc
+    volumes:
+      - home:/home/nonroot/.blogs
+
+configs:
+  second-database:
+    content: |
+      CREATE DATABASE IF NOT EXISTS overlay_b;
+      GRANT ALL PRIVILEGES ON overlay_b.* TO 'overlay'@'%';
+
+volumes:
+  chain:
+  db:
+  home:

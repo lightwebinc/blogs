@@ -1,0 +1,15 @@
+# The images are built from the Go module and, for the host image, the
+# host/ package's sources. Everything below is a build output, a local
+# configuration, or another toolchain's installed tree, and none of it
+# reaches an image; leaving it out keeps the context small and keeps a stale
+# local build from being mistaken for the one the image made.
+.git
+/bin
+/dist
+host/node_modules
+host/dist
+host/bundle
+deploy/**/.env
+scripts/*.env
+**/*.test
+**/*.out

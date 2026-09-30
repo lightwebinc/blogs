@@ -1,0 +1,96 @@
+# A blogs host: the reference overlay host with the blogs module, its
+# database, and a TLS front. Producers submit to it and readers ask it.
+#
+#   BLOGS_STREAMS=app_qzxkvbmwtr=02c0ffee... HOST=logs.example.com docker compose up -d
+#
+# BLOGS_STREAMS is the line `blogs stream new` prints: the streams this host
+# keeps, each open or limited to its producers' keys (docs/host.md). HOST is
+# this server's DNS name; its A/AAAA record must point here before the first
+# start, because Caddy gets the certificate then. Every later `docker
+# compose` command needs both too: export them, or put them in a .env file
+# beside this one.
+#
+# Optional: HEADERS, the host's header source (default woc:main, or
+# chaintracks:https://headers.example.com/v2 for one you run); NETWORK (main,
+# test or regtest; default the source's own); ADMIN_TOKEN (default a random
+# one per start); DB_PASSWORD (the database is never published outside this
+# project's network); DB_BUFFER_POOL; SYNC_PEERS (hosts to catch up from,
+# tm_log_app_qzxkvbmwtr=https://other-host.example.net); BLOGS_HOST_IMAGE.
+# See docs/self-host.md.
+
+name: blogs
+
+services:
+  db:
+    image: mysql:9@sha256:30a0abfa7b502a496e12339b54cd07aaa70363396dc4b8e8a72a92804a505cd6
+    environment:
+      MYSQL_DATABASE: overlay
+      MYSQL_USER: overlay
+      MYSQL_PASSWORD: ${DB_PASSWORD:-overlay-internal}
+      MYSQL_RANDOM_ROOT_PASSWORD: "yes"
+    # Sized for a small host (1 GiB); raise DB_BUFFER_POOL on a bigger one.
+    command:
+      - --innodb-buffer-pool-size=${DB_BUFFER_POOL:-128M}
+      - --performance-schema=OFF
+    volumes:
+      - db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uoverlay -p\"$$MYSQL_PASSWORD\" --silent"]
+      interval: 3s
+      timeout: 5s
+      retries: 60
+    restart: unless-stopped
+
+  host:
+    image: ${BLOGS_HOST_IMAGE:-ghcr.io/lightwebinc/blogs-host:latest}
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      BLOGS_STREAMS: ${BLOGS_STREAMS:?set BLOGS_STREAMS to the line blogs stream new prints}
+      OVERLAY_KNEX_URL: mysql://overlay:${DB_PASSWORD:-overlay-internal}@db:3306/overlay
+      OVERLAY_CHAIN_TRACKER_URL: ${HEADERS:-woc:main}
+      OVERLAY_CHAIN_NETWORK: ${NETWORK:-}
+      OVERLAY_ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      OVERLAY_SYNC_PEERS: ${SYNC_PEERS:-}
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2@sha256:0c994536bddb66445885237f1a5dcc1916bccea922661c76b4e9fc24061f9b52
+    depends_on:
+      - host
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      HOST: ${HOST:?set HOST to this server's DNS name, e.g. HOST=logs.example.com}
+    configs:
+      - source: caddyfile
+        target: /etc/caddy/Caddyfile
+    volumes:
+      - caddy:/data
+    restart: unless-stopped
+
+configs:
+  caddyfile:
+    content: |
+      {$$HOST} {
+        encode gzip
+
+        # The admin surface and metrics stay inside this project's network.
+        handle /admin/* {
+          respond 404
+        }
+        handle /metrics {
+          respond 404
+        }
+
+        # /submit (producers) and /lookup (readers, auditors, archives).
+        handle {
+          reverse_proxy host:8080
+        }
+      }
+
+volumes:
+  db:
+  caddy:

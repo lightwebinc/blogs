@@ -8,14 +8,17 @@
 #
 #	make test NODE=/path/to/node24
 
-.PHONY: verify test go-test ts-test ts-check ts-build module node-check vet fmt-check deps-check vectors vectors-check e2e e2e-client e2e-unicast blogs
+.PHONY: verify test go-test ts-test ts-check ts-build module node-check vet fmt-check deps-check licences licences-update lint vectors vectors-check e2e e2e-client e2e-unicast blogs devchain docker-build docker-build-host docker-smoke docker-smoke-host quickstart-check
 
 NODE ?= node
 TSC := $(NODE) node_modules/typescript/bin/tsc
-SDK := github.com/bsv-blockchain/go-sdk
-SDK_VERSION := v1.5.2
 
-verify: fmt-check vet deps-check ts-check vectors-check test
+VERSION        ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+IMAGE          ?= ghcr.io/lightwebinc/blogs
+DEVCHAIN_IMAGE ?= ghcr.io/lightwebinc/blogs-devchain
+HOST_IMAGE     ?= ghcr.io/lightwebinc/blogs-host
+
+verify: fmt-check vet deps-check licences ts-check vectors-check test
 
 # Go and TypeScript. The Go tests read the TypeScript-written vectors under
 # testdata/ts, and the TypeScript tests read the Go-generated ones under
@@ -30,18 +33,59 @@ vet:
 	GOWORK=off go vet ./...
 	GOWORK=off go vet -tags e2e ./cmd/blogs/
 
-# The command, into bin/.
+# The command, and the local chain, into bin/.
 blogs:
 	GOWORK=off go build -o bin/blogs ./cmd/blogs
+
+devchain:
+	GOWORK=off go build -o bin/devchain ./cmd/devchain
+
+# golangci-lint's default linters (errcheck, govet, ineffassign, staticcheck,
+# unused) where it is installed. Not part of verify: CI and a fresh machine
+# need not have it.
+lint:
+	GOWORK=off golangci-lint run ./...
+	GOWORK=off golangci-lint run --build-tags e2e ./cmd/blogs/
 
 fmt-check:
 	@test -z "$$(gofmt -l .)" || { echo "gofmt:"; gofmt -l .; exit 1; }
 
-# go-sdk at exactly the version bcommon pins, which the vectors were made
-# with.
+# The direct dependencies, asserted rather than intended: a dependency
+# arriving by accident is invisible in a diff that only adds an import.
+#  - go.mod and go.sum are tidy, so their direct and indirect markers can be
+#    trusted, and no module is replaced;
+#  - the direct set is exactly go-sdk and bcommon;
+#  - go-sdk resolves to exactly v1.5.2, the version bcommon pins and the
+#    vectors were made with. Minimal version selection takes the higher of
+#    two pins, so a library asking for a later go-sdk would change what
+#    blogs ships without a line changing here.
+DEPS_DIRECT := github.com/bsv-blockchain/go-sdk github.com/lightwebinc/bcommon
+DEPS_SDK    := github.com/bsv-blockchain/go-sdk v1.5.2
+
 deps-check:
-	@v=$$(GOWORK=off go list -m -f '{{.Version}}' $(SDK)); \
-	if [ "$$v" != "$(SDK_VERSION)" ]; then echo "$(SDK) is $$v, want exactly $(SDK_VERSION)"; exit 1; fi
+	@set -eu; \
+	if ! GOWORK=off go mod tidy -diff >/dev/null; then \
+		echo "deps-check: go.mod or go.sum is not tidy; run go mod tidy"; exit 1; \
+	fi; \
+	replaced=$$(GOWORK=off go list -m -f '{{if .Replace}}{{.Path}}{{end}}' all); \
+	if [ -n "$$replaced" ]; then echo "deps-check: no module may be replaced, found: $$replaced"; exit 1; fi; \
+	direct=$$(GOWORK=off go list -m -f '{{if not (or .Main .Indirect)}}{{.Path}}{{end}}' all | sed '/^$$/d' | sort); \
+	want=$$(printf '%s\n' $(DEPS_DIRECT) | sort); \
+	if [ "$$direct" != "$$want" ]; then \
+		echo "deps-check: the direct dependencies must be exactly:"; echo "$$want" | sed 's/^/  /'; \
+		echo "found:"; echo "$$direct" | sed 's/^/  /'; exit 1; \
+	fi; \
+	sdk=$$(GOWORK=off go list -m $(firstword $(DEPS_SDK))); \
+	if [ "$$sdk" != "$(DEPS_SDK)" ]; then echo "deps-check: go-sdk must resolve to exactly $(lastword $(DEPS_SDK)), found: $$sdk"; exit 1; fi
+
+# LICENSE-THIRD-PARTY is generated from what the binaries link, so a new
+# dependency brings its licence obligation into the file rather than
+# leaving it undischarged. licences fails when the file is stale.
+licences:
+	python3 scripts/gen-third-party-licenses.py . --check
+
+licences-update:
+	python3 scripts/gen-third-party-licenses.py .
 
 node-check:
 	@$(NODE) -e 'process.exit(process.versions.node.split(".")[0] === "24" ? 0 : 1)' || \
@@ -109,3 +153,76 @@ vectors: ts-build
 vectors-check: ts-build
 	GOWORK=off go run ./cmd/vectors -check
 	cd host && $(NODE) dist/tsvectors.js -check
+
+# The images, built and tagged locally, each as $(VERSION) and latest.
+# Nothing here pushes: the image-publish workflow is the only thing that
+# does. docker-build makes the command and the local chain; the host image
+# needs the reference overlay host image it is built on, so it has a target
+# of its own:
+#
+#	make docker-build-host REFERENCE_HOST_IMAGE=<reference overlay host image>
+docker-build:
+	docker build --build-arg VERSION=$(VERSION) -t $(IMAGE):$(VERSION) -t $(IMAGE):latest .
+	docker build --build-arg VERSION=$(VERSION) --target devchain -t $(DEVCHAIN_IMAGE):$(VERSION) -t $(DEVCHAIN_IMAGE):latest .
+	@docker image ls --format '{{.Repository}}:{{.Tag}}  {{.Size}}' | grep -E '^($(IMAGE)|$(DEVCHAIN_IMAGE)):$(VERSION) '
+
+docker-build-host:
+	@test -n "$(REFERENCE_HOST_IMAGE)" || { echo "set REFERENCE_HOST_IMAGE to the reference overlay host image the module is added to"; exit 1; }
+	docker build -f host/Dockerfile --build-arg REFERENCE_HOST_IMAGE=$(REFERENCE_HOST_IMAGE) -t $(HOST_IMAGE):$(VERSION) -t $(HOST_IMAGE):latest .
+	@docker image ls --format '{{.Repository}}:{{.Tag}}  {{.Size}}' | grep -E '^$(HOST_IMAGE):$(VERSION) '
+
+# The command's image first with no network at all, so everything checked
+# is something the image does on its own: the stamped version, help, a
+# first run in a fresh named volume mounted where the documentation says,
+# and the exit codes of commands missing their settings. Then the command
+# and the local chain together on a private network: mining to the fund
+# address, and the chain's journal replaying the same tip after a restart.
+# The golden vectors' public test key: a well-formed producer that owns
+# nothing.
+SMOKE_KEY := 0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c
+
+docker-smoke: docker-build
+	@set -eu; img=$(IMAGE):$(VERSION); chain=$(DEVCHAIN_IMAGE):$(VERSION); id=blogs-smoke-$$$$; \
+	docker volume create $$id-home >/dev/null; docker volume create $$id-chain >/dev/null; docker network create $$id >/dev/null; \
+	trap 'docker rm -f $$id-chain >/dev/null 2>&1; docker network rm $$id >/dev/null 2>&1; docker volume rm -f $$id-home $$id-chain >/dev/null' EXIT; \
+	run() { docker run --rm --network none -v $$id-home:/home/nonroot/.blogs $$img "$$@"; }; \
+	echo "== -version"; out=$$(run -version); echo "$$out"; \
+	[ "$$out" = "blogs $(VERSION)" ] || { echo "docker-smoke: want blogs $(VERSION)"; exit 1; }; \
+	echo "== help"; run help | head -1; \
+	echo "== init"; run -network regtest init; \
+	echo "== stream new"; run -network regtest stream new smoke | grep -E '^(stream|topic) '; \
+	echo "== doctor"; out=$$(run -network regtest doctor); echo "$$out"; \
+	echo "$$out" | grep -q '^headers     NOT CONFIGURED' || { echo "docker-smoke: doctor output unexpected"; exit 1; }; \
+	echo "== a read with no hosts exits 2 before any request"; \
+	rc=0; out=$$(run read smoke_abcdefghij $(SMOKE_KEY) 2>&1) || rc=$$?; echo "$$out"; \
+	[ "$$rc" = 2 ] && echo "$$out" | grep -q 'no overlay host configured' || { echo "docker-smoke: want exit 2 naming hosts, got $$rc"; exit 1; }; \
+	echo "== devchain"; docker run -d --name $$id-chain --network $$id -v $$id-chain:/var/lib/devchain $$chain >/dev/null; \
+	net() { docker run --rm --network $$id -v $$id-home:/home/nonroot/.blogs -e BLOGS_NETWORK=regtest \
+		-e BLOGS_ASSET=http://$$id-chain:8080 -e BLOGS_RPC=http://$$id-chain:8080/rpc -e BLOGS_HEADER_URL=http://$$id-chain:8080 $$img "$$@"; }; \
+	for i in $$(seq 1 30); do net doctor 2>/dev/null | grep -q '^node .* tip 700$$' && break; sleep 1; done; \
+	echo "== fund on the devchain"; net fund -blocks 101; \
+	out=$$(net doctor); echo "$$out" | grep -E '^(node|pool|headers) '; \
+	echo "$$out" | grep -q '^node .* tip 801$$' || { echo "docker-smoke: the chain did not mine"; exit 1; }; \
+	echo "== devchain restart replays its journal"; docker restart $$id-chain >/dev/null; \
+	for i in $$(seq 1 30); do net doctor 2>/dev/null | grep -q '^node .* tip 801$$' && ok=1 && break; sleep 1; done; \
+	[ "$${ok:-}" = 1 ] || { echo "docker-smoke: the chain lost its blocks across a restart"; exit 1; }; \
+	echo "docker-smoke: ok ($$img, $$chain)"
+
+# The host image loads the module with the host's own @bsv/sdk, and refuses
+# to start with no stream configured.
+docker-smoke-host:
+	@set -eu; img=$(HOST_IMAGE):$(VERSION); \
+	echo "== the module imports from the host's node_modules"; \
+	docker run --rm --network none --entrypoint node $$img -e \
+		"import('/app/modules/blogs/blogs-module.js').then(m => { if (typeof m.default !== 'function') process.exit(1); console.log('blogs module: default export is the factory') })"; \
+	echo "== no BLOGS_STREAMS: exit 64 with the reason"; \
+	rc=0; out=$$(docker run --rm --network none $$img 2>&1) || rc=$$?; echo "$$out"; \
+	[ "$$rc" = 64 ] && echo "$$out" | grep -q 'BLOGS_STREAMS is empty' || { echo "docker-smoke-host: want exit 64, got $$rc"; exit 1; }; \
+	echo "docker-smoke-host: ok ($$img)"
+
+# QUICKSTART.md, run as written, in the quickstart compose project: the
+# local chain, two hosts and MySQL; init, fund, a stream, a unicast
+# produce, read, verify-interval, a host that misses objects and is
+# repaired. Needs the three images (docker-build, docker-build-host).
+quickstart-check:
+	scripts/quickstart-check.sh
