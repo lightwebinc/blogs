@@ -245,9 +245,15 @@ such as change, are the producer's business):
   MUST spend one of the producer's funding outputs (section 6.3). Either way
   only the producer's key can make an anchor, and two anchors spending one
   predecessor are a double spend of which at most one is ever mined;
-- every input's unlocking script is push-only: minimal pushes, each
-  signature strict low-S DER with its sighash byte, so the transaction cannot
-  be re-encoded under another txid by anyone but its signers;
+- it spends nothing else: every input spends either that predecessor token
+  or one of the producer's funding outputs, which pay the fee. Both are
+  outputs the topic has already admitted, and a host reads them from the
+  topic's previous coins (section 8.1);
+- every input's unlocking script is exactly one minimal push of a strict
+  low-S DER signature followed by the sighash byte `0x41`
+  (`SIGHASH_ALL|FORKID`), the carrier's form (section 6.2), so the
+  transaction cannot be re-encoded under another txid by anyone but its
+  signer;
 - it is published once, after it mines, with its proof (section 6.3). The
   producer's next anchor names the mined txid in `prev` and spends the mined
   output.
@@ -285,7 +291,8 @@ rules of section 8.1:
 
 - **exactly one input**, spending one of the producer's funding-tree
   outputs, `nSequence = 0`, unlocked by exactly one push of the producer's
-  signature (strict DER, low S, sighash byte `0x41`);
+  signature (strict DER, low S, sighash byte `0x41`, `SIGHASH_ALL|FORKID`,
+  bcommon `carrier.SigHashType`);
 - **exactly one output**, a lock-before PushDrop of one field, the batch
   record, with the field signature, locked to `derive(producer, "batch")`,
   carrying the whole value of the output it spends (fee zero);
@@ -422,14 +429,23 @@ the carrier's BEEF, the anchor record inside the token's.
 
 Admission depends only on the object: the transaction and its BEEF, checked
 against the host's block headers and its configured producer policy, never
-against what else the host holds or the order in which objects arrived. A
-break in the `seq`/`prev` link between batches (no batch held at `seq - 1`,
+against what else the host holds or the order in which objects arrived. The
+one exception is an anchor token's inputs: a mined transaction's BEEF
+carries its own proof and no parents, so the outputs an anchor spends are
+read from the topic's **previous coins**, the outputs the topic holds that
+the transaction's inputs spend, which the overlay engine hands the topic
+manager with the transaction (BRC-22). An anchor spends only outputs the
+topic has admitted (section 5.3). A break in the `seq`/`prev` link between batches (no batch held at `seq - 1`,
 a `prev` that names no held batch, two batches at one `seq`) is therefore
 never a refusal: it is a reported status, `gap` or `fork` (section 8.2).
 The `prev` rules of a record's own decoding (section 3.2) compare `prev`
 with the same record's `seq` or `interval`, never with another object. Every
-archive with the same configuration therefore admits the same set, whatever
-the plane's delivery order, repair or lateness did. SPV of the BEEF (scripts, amounts,
+archive with the same configuration therefore admits the same carriers,
+funding outputs and spends, whatever the plane's delivery order, repair or
+lateness did, and the same anchors once it holds what they spend: a host
+that refused an anchor because it did not yet hold the predecessor or the
+funding output recovers it later from a sibling by the interval class, as a
+host whose headers lagged does (rule 8). SPV of the BEEF (scripts, amounts,
 the funding parent's proof or unproven ancestry) is the engine's and runs
 before the topic manager. Checks then run in the order given; a transaction
 is refused for the first rule it breaks, with that rule's reason.
@@ -459,20 +475,24 @@ nothing is handled as a funding tree or a spend (below).
 4. `producer-policy`: the host restricts this stream to a producer set and
    the producer is not in it (below);
 5. `mineable`: `nLockTime < 4102444800`, or `nSequence = 0xFFFFFFFF`;
-6. `lock`: the output script is not the well-formed one-field signed PushDrop
+6. `unlock`: the input's unlocking script is not exactly one minimal push of
+   a strict low-S DER signature followed by the sighash byte `0x41`
+   (`SIGHASH_ALL|FORKID`);
+7. `lock`: the output script is not the well-formed one-field signed PushDrop
    locked to `derive(producer, "batch")`;
-7. `signature`: the field signature is not strict low-S DER, or does not
+8. `signature`: the field signature is not strict low-S DER, or does not
    verify under that key;
-8. `funding`: the input's source output (from the BEEF) is not a well-formed
-   funding output `62 6c 02` locked to `derive(producer, "batch")`;
-9. `unlock`: the input's unlocking script is not exactly one minimal push of
-   a strict low-S DER signature followed by the sighash byte `0x41`.
+9. `funding`: the input's source output (from the carrier's BEEF, which
+   carries its unmined ancestry) is not a well-formed funding output
+   `62 6c 02` locked to `derive(producer, "batch")`.
 
-Rules 5 to 7 are bcommon `carrier.Validate`'s order. Rules 8 and 9 make the
-commitment the producer's alone: rule 8 means only the producer's key can
-spend the input, and rule 9 means nobody else can re-encode that spend under
-another txid. With both, a second batch at a producer's `seq` can only be a
-batch the producer signed.
+Rules 5 to 8 are bcommon `carrier.Validate`'s order: finality, the unlocking
+script (bcommon `carrier.CheckUnlocking`), the lock, the signature. A carrier
+that breaks both rule 6 and rule 7 is refused with `unlock`, as bcommon
+refuses it. Rules 6 and 9 make the commitment the producer's alone: rule 9
+means only the producer's key can spend the input, and rule 6 means nobody
+else can re-encode that spend under another txid. With both, a second batch
+at a producer's `seq` can only be a batch the producer signed.
 
 **Anchor token.** A transaction with an output that claims an anchor:
 
@@ -486,20 +506,25 @@ batch the producer signed.
    locked to `derive(producer, "anchor")`;
 6. `signature`: the field signature is not strict low-S DER, or does not
    verify;
-7. `anchor-input`: for `interval > 1`, no input spends an output of txid
-   `prev` whose source output (from the BEEF) is a well-formed anchor token of
-   this producer for this stream and interval `interval - 1`; for
-   `interval = 1`, no input spends a well-formed funding output locked to
-   `derive(producer, "batch")`;
+7. `anchor-input`: an input spends an output that is not among the previous
+   coins; or a previous coin an input spends is neither a well-formed funding
+   output locked to `derive(producer, "batch")` nor, for `interval > 1`, a
+   well-formed anchor token of this producer for this stream and interval
+   `interval - 1` in the transaction of txid `prev`; or, for
+   `interval > 1`, no input spends that token; or, for `interval = 1`, no
+   input spends such a funding output;
 8. `unmined`: the transaction has no proof in the BEEF that verifies against
    the host's headers (a host whose headers lagged, and so refused a mined
    anchor, recovers it later from a sibling by the interval class);
-9. `unlock`: an input's unlocking script is not push-only in the section 5.3
-   form.
+9. `unlock`: an input's unlocking script is not exactly one minimal push of
+   a strict low-S DER signature followed by the sighash byte `0x41`
+   (`SIGHASH_ALL|FORKID`), the carrier's rule 6 applied to each input.
 
 The rules speak of a "well-formed" anchor token or funding output: one whose
-script matches the rebuilt script as above. Nothing in admission depends on
-which anchors the host already holds.
+script matches the rebuilt script as above. Rule 7 reads the spent outputs
+only from the previous coins, never from the BEEF, so an anchor whose spent
+outputs the topic does not hold is refused with `anchor-input` whatever its
+BEEF carries.
 
 **Funding tree or sweep.** A transaction whose outputs claim nothing, that
 has a proof in the BEEF verifying against the host's headers, and that has at
@@ -569,8 +594,10 @@ admitted token is mined, and admission (section 8.1 rule 7) already
 guarantees that a token for interval `k > 1` spends a token of interval
 `k - 1` whose txid is its `prev`, and that interval 1 is funded by the
 producer. The join adds that `first` equals the predecessor's
-`first + count`; a token that fails it is kept and reported, never used. A
-token whose predecessor has not arrived waits for it.
+`first + count`; a token that fails it is kept and reported, never used.
+Admission admits a token only while the topic holds what it spends, so its
+predecessor is always admitted first; a join that meets a token before its
+predecessor (on restore, in storage order) waits for it.
 
 The **canonical** chain: interval 1's canonical token is the one mined first
 (lower block height, then lower position in the block); interval `k > 1`'s
@@ -706,9 +733,12 @@ stream, class or configuration.
   `seq = 1` and MUST NOT guess the head from lookup answers (an empty answer
   proves nothing); it creates a new stream, with a new random suffix and so
   a new topic.
-- **Archive.** Lateness is never a refusal. A batch or an anchor is admitted
+- **Archive.** Lateness is never a refusal for a batch. A batch is admitted
   whenever it arrives, before or after its neighbours, before or after the
-  interval's anchor, and the interval's status is recomputed. A hole that
+  interval's anchor, and the interval's status is recomputed. An anchor is
+  admitted whenever it arrives after the outputs it spends; one that arrives
+  before its predecessor or its funding tree is refused (section 8.1 rule 7)
+  and fetched again by the interval class from a sibling once they are held. A hole that
   repair did not fill (the archive was down, or a loss outlived the repair
   window) is filled by the batch class from a sibling archive, without the
   producer. The anchor is what turns "probably everything" into a proof, and
@@ -812,7 +842,7 @@ them and compares byte for byte, and refuses a file nothing generates.
 | `anchor-v1.json`, `anchor-interval-*.hex` | two consecutive intervals (5 and 3 batches): commitments, leaves, root, every inclusion path, the record, the token's fields and the hash its signature covers |
 | `derivation-v1.json` | the registry values, the keys the fixed test key derives for `batch`, `anchor` and `fund`, and two stream identifiers with one readable part and different suffixes, split, with their topics |
 | `refusal-v1.json` | fifty-three byte strings the record decoder refuses, each with its reason (section 3.2) and what admission does with an output carrying it: refuse, or skip one that does not claim to be a record. Every one is decided by the record alone; a `seq`/`prev` link break is a status (section 8.2), never a refusal, so none is here |
-| `transaction-v1.json` | forty-eight transactions, each as raw hex and as BEEF, with the block headers they are admitted against: three batch carriers, two anchor tokens, a funding tree mined and unmined, a sweep, and a refusal for every rule of section 8.1 in its order, each with its reason. Every refused transaction's own scripts still verify, so each is caught only by the rule it names |
+| `transaction-v1.json` | fifty-four transactions, each as raw hex and as BEEF with the previous coins it is admitted with, and the block headers they are admitted against: three batch carriers, two anchor tokens, a funding tree mined and unmined, a sweep, a refusal for every rule of section 8.1 in its order, each with its reason, and carriers that break two rules to pin the order between them. Every refused transaction's own scripts still verify, so each is caught only by the topic manager's rules |
 
 The vectors' stream is `example_app_qzxkvbmwtr`; its suffix is a fixed
 example so that the vectors are reproducible, where a real stream draws its
@@ -821,8 +851,9 @@ suffix at random. Commitments in the anchor vectors are fixed stand-ins,
 carrier txids. Signatures are deterministic (RFC 6979). The test key is 32
 bytes of `0x42`, and a second key for other-producer cases 32 bytes of `0x43`;
 both are public and never for real use. In the transaction vectors the BEEF of
-a mined transaction also carries the transactions its inputs spend, because
-the anchor rules read their outputs.
+a mined transaction carries its own proof and no parents; each case lists
+its previous coins (outpoint, locking script and satoshis, in input order),
+from which the anchor rules read the outputs an anchor spends.
 
 The TypeScript codec in `host/` runs every file above and writes
 `testdata/ts/ts-v1.json` (records, a locator, an anchor with its root and a

@@ -5,10 +5,10 @@ host. Once one record using it is on a public host, readers verify against
 it for as long as anyone reads that record, so changing it afterwards is a
 new identifier or a new record version, never an edit.
 
-**Status: signed**, except the rows marked **provisional** (section 2). The
-registry rows in section 1 belong in bcommon's registry (`docs/registry.md`),
-where they are checked against every registered row; this repository does
-not edit that registry.
+**Status: fully signed.** Every row below is signed. The registry rows in
+section 1 belong in bcommon's registry (`docs/registry.md`), where they are
+checked against every registered row; this repository does not edit that
+registry.
 
 ## 1. Registry entries
 
@@ -37,22 +37,20 @@ Type bytes `0x03` to `0xff` under `bl` and record letters other than `b` and
 | Derivation setting | BRC-42, counterparty `anyone`, `forSelf = true` on the producer's side | signed |
 | PushDrop layout | lock-before, field signature last, over `SHA-256` of the fields concatenated | signed |
 | Carrier non-final device | producers write `nLockTime = 4102444800` and input `nSequence = 0`; hosts accept any `nLockTime >= 4102444800` and any `nSequence` below `0xFFFFFFFF` | signed |
-| Carrier shape | exactly one input spending a producer funding output, unlocked by exactly one minimal push of a strict low-S DER signature and sighash `0x41`; exactly one output carrying the whole input value | provisional |
-| Script canonicality | every checked script equals, byte for byte, the one rebuilt from its fields and the derived key (compressed key, minimal pushes, fewest `OP_2DROP` then `OP_DROP`) | provisional |
-| Signatures | field and input signatures strict DER, low S | provisional |
+| Carrier shape | exactly one input spending a producer funding output, unlocked by exactly one minimal push of a strict low-S DER signature and sighash `0x41` (SIGHASH_ALL with FORKID, bcommon `carrier.SigHashType`); exactly one output carrying the whole input value; refused in bcommon `carrier.Validate`'s order: `mineable`, then `unlock`, then `lock`, then `signature`, then `funding` (spec section 8.1) | signed |
+| Script canonicality | every checked script equals, byte for byte, the one rebuilt from its fields and the derived key (compressed key, minimal pushes, fewest `OP_2DROP` then `OP_DROP`) | signed |
+| Signatures | field and input signatures strict DER, low S; input signatures of carriers and anchor tokens carry sighash `0x41` only | signed |
 | Funding output | `<derive(producer, "batch")> OP_CHECKSIG <62 6c 02> OP_DROP`, unsigned; admitted only from mined transactions | signed |
-| Anchor token | exactly one anchor output per transaction, other outputs allowed; admitted only mined; every input's unlocking script push-only with strict low-S DER signatures; lock-before PushDrop `[62 6c 01, A]` signed under `derive(producer, "anchor")`, 1 satoshi; interval `k > 1` spends interval `k - 1`'s token, interval 1 spends a producer funding output | provisional |
+| Anchor token | exactly one anchor output per transaction, other outputs allowed; admitted only mined; lock-before PushDrop `[62 6c 01, A]` signed under `derive(producer, "anchor")`, 1 satoshi; interval `k > 1` spends interval `k - 1`'s token, interval 1 spends a producer funding output, and every input spends one of those or a producer funding output, read from the topic's previous coins (BRC-22), never from the BEEF; a spent output the topic does not hold refuses the token (`anchor-input`); every input unlocked by exactly one minimal push of a strict low-S DER signature and sighash `0x41` | signed |
 | Canonical chain | interval 1: the first mined token (block height, then position); interval `k > 1`: the token that spends the canonical `k - 1` token | signed |
 | Publication | funding trees, anchor tokens and sweeps are published to the object leg once, after they mine; carriers spend only mined trees | signed |
 | Retraction | only a mined spend of a carrier's funding outpoint by another transaction retracts it | signed |
 | Commitment | `C = txid(K)` in hash byte order | signed |
 | CBOR | RFC 8949 section 4.2.1 core deterministic encoding, bcommon's subset, enforced on decode | signed |
-| Admission | depends only on the object (the transaction and its BEEF, against the host's headers and producer policy), never on other objects held or arrival order; a `seq`/`prev` link break between batches is a reported status (`gap`, `fork`), never a refusal | signed |
+| Admission | depends only on the object (the transaction and its BEEF, against the host's headers and producer policy), never on other objects held or arrival order, except that an anchor token's spent outputs are the topic's previous coins; a `seq`/`prev` link break between batches is a reported status (`gap`, `fork`), never a refusal | signed |
 
-The rows marked **provisional** (carrier shape, script canonicality,
-signatures, and the anchor token with its inputs and unlocking-script form)
-are not frozen until transaction vectors exercise them, and a finding from
-those vectors reopens them here.
+The carrier shape, script canonicality, signature and anchor token rows are
+exercised by the transaction vectors (spec section 16).
 
 ## 3. The batch record (magic `blb` `0x01`)
 
