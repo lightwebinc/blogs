@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,15 +10,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bsv-blockchain/go-sdk/chainhash"
 	base58 "github.com/bsv-blockchain/go-sdk/compat/base58"
 
 	"github.com/lightwebinc/bcommon/bwallet"
 	"github.com/lightwebinc/bcommon/nodeapi"
 	"github.com/lightwebinc/bcommon/publish"
+	"github.com/lightwebinc/bcommon/termsafe"
 
 	"github.com/lightwebinc/blogs/internal/config"
 	"github.com/lightwebinc/blogs/internal/logrec"
 	"github.com/lightwebinc/blogs/internal/produce"
+	"github.com/lightwebinc/blogs/internal/reader"
 	"github.com/lightwebinc/blogs/internal/state"
 	"github.com/lightwebinc/blogs/internal/unicast"
 )
@@ -140,15 +144,25 @@ func cmdInit(_ context.Context, g *global, args []string) error {
 }
 
 const fundHelp = `usage: blogs fund [-blocks N] [-batch N] [-rescan]
+       blogs fund -txid TXID
 
-Mine coinbase to the home's fund address through the node's
+With -txid, import a payment: read the mined transaction TXID with its
+proof from the node (asset) or, with no node, from tx_source; check the
+proof against the header source; and add every output it pays to the
+home's fund address to the pool. This is how a producer on a real network
+is funded: send BSV to the fund address that init printed, wait for one
+confirmation, and import it.
+
+Without -txid, mine coinbase to the fund address through the node's
 generatetoaddress, which only a chain you run answers, and add the outputs
 to the pool. Coinbase can be spent 100 blocks after it is mined, so the
-first fund mines 101 or more. The address prefix follows the network (main:
-mainnet; test and regtest: testnet), and an address for another network than
-the configured one, above all a mainnet address on a test network, is
-refused before anything is mined. -rescan re-reads recent blocks for
-coinbase the pool lacks.`
+first fund mines 101 or more. -rescan re-reads recent blocks for coinbase
+the pool lacks.
+
+The address prefix follows the network (main: mainnet; test and regtest:
+testnet), and an address for another network than the configured one,
+above all a mainnet address on a test network, is refused before anything
+is mined.`
 
 // addressNetwork is the network a base58 P2PKH address is for.
 func addressNetwork(addr string) (string, error) {
@@ -184,10 +198,17 @@ func cmdFund(ctx context.Context, g *global, args []string) error {
 	blocks := fs.Int("blocks", 101, "blocks to mine to the fund address")
 	batch := fs.Int("batch", bwallet.DefaultFundBatch, "blocks per generatetoaddress call")
 	rescan := fs.Bool("rescan", false, "re-read the last -blocks blocks for coinbase the pool lacks instead of mining")
+	txid := fs.String("txid", "", "import this mined payment to the fund address instead of mining")
 	if pos, err := parse(fs, args); err != nil {
 		return err
 	} else if len(pos) > 0 {
 		return usage("fund takes no arguments")
+	}
+	if *txid != "" {
+		if *rescan {
+			return usage("-txid and -rescan are exclusive")
+		}
+		return g.importPayment(ctx, *txid)
 	}
 	if *blocks < 1 {
 		return usage("-blocks must be at least 1")
@@ -236,6 +257,74 @@ func cmdFund(ctx context.Context, g *global, args []string) error {
 	}
 	fmt.Fprintf(g.stdout, "pool after:  %d output(s), %d sat (+%d); immature %d; node tip %d\n",
 		e.Pool.Count(), e.Pool.Balance(), added, len(e.Pool.Immature(h)), h)
+	return nil
+}
+
+// importPayment adds the outputs a mined payment pays to the fund address
+// to the pool, once its proof holds against the header source.
+func (g *global) importPayment(ctx context.Context, txid string) error {
+	if h, err := chainhash.NewHashFromHex(txid); err != nil || h.String() != txid {
+		return usage("-txid %q is not a transaction id (64 lowercase hex characters)", termsafe.Abbrev(txid))
+	}
+	e, err := g.openWallet()
+	if err != nil {
+		return err
+	}
+	hc, err := g.headerClient()
+	if err != nil {
+		return err
+	}
+	c := readerFor(g, nil, g.cfg.Timeout)
+	if c.Txs == nil {
+		return usage("fund -txid reads the payment from asset (a node) or tx_source (woc:main or woc:test); configure one")
+	}
+	tx, err := c.Fetch(ctx, txid, true)
+	if err != nil {
+		if errors.Is(err, reader.ErrOtherBytes) {
+			return refused("%v", err)
+		}
+		return fmt.Errorf("payment %s: %w", txid, err)
+	}
+	ok, err := tx.MerklePath.Verify(ctx, tx.TxID(), hc)
+	if err != nil {
+		return fmt.Errorf("payment %s: checking its proof against %s: %w", txid, g.cfg.HeaderURL, err)
+	}
+	if !ok {
+		return refused("payment %s: its proof does not hold against the header source %s", txid, g.cfg.HeaderURL)
+	}
+	fund, err := e.Signer().FundScript()
+	if err != nil {
+		return err
+	}
+	var outs []bwallet.Output
+	var sats uint64
+	for i, o := range tx.Outputs {
+		if o.LockingScript == nil || !bytes.Equal(*o.LockingScript, *fund) {
+			continue
+		}
+		outs = append(outs, bwallet.Output{TxID: txid, Vout: uint32(i), Satoshis: o.Satoshis, //nolint:gosec // an output index
+			LockingScript: o.LockingScript.String(), Height: tx.MerklePath.BlockHeight, Coinbase: tx.IsCoinbase(),
+			Raw: tx.Hex(), Bump: tx.MerklePath.Hex()})
+		sats += o.Satoshis
+	}
+	addr, _ := e.FundAddress(e.Mainnet)
+	if len(outs) == 0 {
+		return usage("payment %s pays nothing to the fund address %s", txid, addr)
+	}
+	unlock, err := g.lockHome()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	added, err := e.Pool.Add(outs...)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(g.stdout, "imported %d of %d output(s) paying %s, %d sat, mined at height %d; pool %d output(s), %d sat\n",
+		added, len(outs), addr, sats, tx.MerklePath.BlockHeight, e.Pool.Count(), e.Pool.Balance())
+	if added < len(outs) {
+		g.say("note: %d output(s) were in the pool already", len(outs)-added)
+	}
 	return nil
 }
 

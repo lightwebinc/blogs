@@ -114,7 +114,7 @@ func (c *Client) feedFunding(ctx context.Context, to *publish.Facade, topic stri
 			note("interval %d spends funding tree %s, which no lookup class serves; configure asset (a node) or tx_source (woc:main or woc:test) to read it", an.Interval, id)
 			continue
 		}
-		src, err := c.fetch(ctx, id, true)
+		src, err := c.Fetch(ctx, id, true)
 		if errors.Is(err, ErrOtherBytes) {
 			return false, err
 		}

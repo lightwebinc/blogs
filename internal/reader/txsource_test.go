@@ -72,24 +72,24 @@ func TestWhatsOnChainIsHeldToTheTxid(t *testing.T) {
 	}
 	ctx := context.Background()
 	c := &Client{Txs: WhatsOnChain{Network: "main", Base: woc(t, chain, nil).URL}}
-	tx, err := c.fetch(ctx, txids[0], false)
+	tx, err := c.Fetch(ctx, txids[0], false)
 	if err != nil || tx.TxID().String() != txids[0] {
 		t.Fatalf("hex: %v", err)
 	}
-	tx, err = c.fetch(ctx, txids[0], true)
+	tx, err = c.Fetch(ctx, txids[0], true)
 	if err != nil || tx.MerklePath == nil {
 		t.Fatalf("beef: %v", err)
 	}
-	if _, err := c.fetch(ctx, strings.Repeat("ab", 32), false); err == nil || errors.Is(err, ErrOtherBytes) {
+	if _, err := c.Fetch(ctx, strings.Repeat("ab", 32), false); err == nil || errors.Is(err, ErrOtherBytes) {
 		t.Fatalf("an unknown txid: %v", err)
 	}
 	// A source that answers with another transaction is caught.
 	c.Txs = WhatsOnChain{Network: "main", Base: woc(t, chain, chain.Tx(txids[1])).URL}
-	if _, err := c.fetch(ctx, txids[0], false); !errors.Is(err, ErrOtherBytes) {
+	if _, err := c.Fetch(ctx, txids[0], false); !errors.Is(err, ErrOtherBytes) {
 		t.Fatalf("other bytes: %v", err)
 	}
 	var none Client
-	if _, err := none.fetch(ctx, txids[0], false); err == nil || !strings.Contains(err.Error(), "tx_source") {
+	if _, err := none.Fetch(ctx, txids[0], false); err == nil || !strings.Contains(err.Error(), "tx_source") {
 		t.Fatalf("no source: %v", err)
 	}
 }

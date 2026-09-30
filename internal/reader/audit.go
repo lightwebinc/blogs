@@ -255,7 +255,7 @@ func (c *Client) coins(ctx context.Context, tx *transaction.Transaction, prev *T
 		case evidence[id] != nil:
 			src = evidence[id]
 		case c.Txs != nil:
-			t, err := c.fetch(ctx, id, false)
+			t, err := c.Fetch(ctx, id, false)
 			if errors.Is(err, ErrOtherBytes) {
 				return nil, "", err
 			}

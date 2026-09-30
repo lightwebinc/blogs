@@ -196,3 +196,53 @@ func TestATransactionSourceMustMatchTheNetwork(t *testing.T) {
 	h.env["BLOGS_TX_SOURCE"] = "https://api.example.com"
 	h.want(h.run("", "doctor"), exitUsage, "tx_source must be woc:main or woc:test")
 }
+
+var fundAddrLine = regexp.MustCompile(`(?m)^fund address (\S+) `)
+
+func TestFundImportsAPayment(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	r := h.must("", "init")
+	m := fundAddrLine.FindStringSubmatch(r.stdout)
+	if m == nil {
+		t.Fatalf("init printed no fund address:\n%s", r.stdout)
+	}
+	before := map[string]bool{}
+	for _, id := range h.chain.Txids() {
+		before[id] = true
+	}
+	if _, err := h.chain.Generate(1, m[1]); err != nil {
+		t.Fatal(err)
+	}
+	var paid string
+	for _, id := range h.chain.Txids() {
+		if !before[id] {
+			paid = id
+		}
+	}
+	r = h.must("", "fund", "-txid", paid)
+	if !strings.Contains(r.stdout, "imported 1 of 1 output(s) paying "+m[1]+", 5000000000 sat, mined at height 701") {
+		t.Fatalf("fund -txid:\n%s\n%s", r.stdout, r.stderr)
+	}
+	r = h.must("", "fund", "-txid", paid)
+	if !strings.Contains(r.stderr, "in the pool already") {
+		t.Fatalf("a second import:\n%s\n%s", r.stdout, r.stderr)
+	}
+	// Coinbase keeps its maturity: nothing is spendable yet.
+	r = h.must("", "doctor")
+	if !strings.Contains(r.stdout, "1 output(s), 5000000000 sat, 1 immature") {
+		t.Fatalf("doctor:\n%s", r.stdout)
+	}
+	other := strings.Repeat("ab", 32)
+	h.want(h.run("", "fund", "-txid", other), exitUsage, other)
+	h.want(h.run("", "fund", "-txid", "nothex"), exitUsage, "is not a transaction id")
+	// A transaction that pays someone else.
+	if _, err := h.chain.Generate(1, "mfWxJ45yp2SFn7UciZyNpvDKrzbhyfKrY8"); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range h.chain.Txids() {
+		if !before[id] && id != paid {
+			h.want(h.run("", "fund", "-txid", id), exitUsage, "pays nothing to the fund address")
+		}
+	}
+}

@@ -124,9 +124,10 @@ func (w WhatsOnChain) Tx(ctx context.Context, txid string, proof bool) (*transac
 	return transaction.NewTransactionFromHex(text)
 }
 
-// fetch asks the source for txid and holds the answer to it: the bytes must
+// Fetch asks the source for txid and holds the answer to it: the bytes must
 // hash to the txid asked for, and with proof a merkle path must come too.
-func (c *Client) fetch(ctx context.Context, txid string, proof bool) (*transaction.Transaction, error) {
+// The path itself is the caller's to check against its headers.
+func (c *Client) Fetch(ctx context.Context, txid string, proof bool) (*transaction.Transaction, error) {
 	if c.Txs == nil {
 		return nil, errNoTxSource
 	}
