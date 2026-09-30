@@ -11,8 +11,9 @@
   "scripts": {
     "prebuild": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "tsc",
+    "bundle": "node scripts/bundle.js",
     "check": "tsc --noEmit",
-    "pretest": "npm run build",
+    "pretest": "npm run build && npm run bundle",
     "test": "node --test \"dist/**/*.test.js\"",
     "vectors": "node dist/tsvectors.js",
     "vectors-check": "node dist/tsvectors.js -check"
@@ -24,6 +25,7 @@
   "devDependencies": {
     "@bsv/overlay": "2.3.1",
     "@types/node": "^24.10.1",
+    "esbuild": "^0.28.2",
     "typescript": "^5.9.3"
   }
 }

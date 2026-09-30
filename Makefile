@@ -50,19 +50,23 @@ node-check:
 ts-check: node-check
 	cd host && $(TSC) --noEmit
 
+# tsc into host/dist, then the deployable bundle into host/bundle.
 ts-build: node-check
-	cd host && $(NODE) -e "require('node:fs').rmSync('dist', { recursive: true, force: true })" && $(TSC)
+	cd host && $(NODE) -e "require('node:fs').rmSync('dist', { recursive: true, force: true })" && $(TSC) && $(NODE) scripts/bundle.js
 
-# The host module a reference overlay host loads: host/dist/module.js, named
-# by absolute path in OVERLAY_MODULES. Its tests (make test) load that file
-# the way the host's loader does and run it inside the overlay engine.
+# The host module a reference overlay host loads: one file,
+# host/bundle/blogs-module.js, with bcommon inlined and nothing imported but
+# @bsv/sdk (the host's own copy) and Node built-ins. It is copied into the
+# host's tree and named by absolute path in OVERLAY_MODULES (docs/host.md).
+# Its tests (make test) mount that file and run the golden vectors through it.
 module: ts-build
 
 ts-test: ts-build
 	cd host && $(NODE) --test "dist/**/*.test.js"
 
-# One publish-and-lookup on a local reference overlay host, with restart and
-# restore. Not part of verify: it needs Docker (for MySQL) and a reference
+# One publish-and-lookup on a local reference overlay host loading the
+# bundle, staged beside the host's node_modules as a deployment places it,
+# with restart and restore. Not part of verify: it needs Docker (for MySQL) and a reference
 # host directory holding its compiled dist/index.js and its node_modules.
 #
 #	make e2e REFERENCE_HOST=/path/to/reference-host
@@ -72,8 +76,8 @@ e2e: ts-build
 
 # The blogs command end to end: init, fund, stream, produce (both profiles,
 # gzip, a restart, a publish that fails and is resumed), read,
-# verify-interval and backfill, against two local reference hosts with this
-# module loaded, over a local chain (internal/testchain) serving the node's
+# verify-interval and backfill, against two local reference
+# hosts loading the bundle, over a local chain (internal/testchain) serving the node's
 # API and the header source. Not part of verify: it needs Docker (for MySQL)
 # and a reference host directory holding its compiled dist/index.js and its
 # node_modules.

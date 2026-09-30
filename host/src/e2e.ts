@@ -1,11 +1,15 @@
 /**
  * One publish-and-lookup end to end on a local reference overlay host,
- * with this module loaded from dist/module.js through OVERLAY_MODULES.
+ * with this module loaded from the bundle (bundle/blogs-module.js) through
+ * OVERLAY_MODULES.
  *
  *   node dist/e2e.js /path/to/reference-host
  *
  * The reference host directory holds its compiled dist/index.js and its
- * node_modules. The run needs Docker, for a throwaway MySQL (the host's
+ * node_modules. The bundle is staged as a deployment places it: copied into
+ * a modules/ directory whose only node_modules is the host's, so it loads
+ * with nothing but what the host provides, and the SDK it imports is the
+ * host's own copy. The run needs Docker, for a throwaway MySQL (the host's
  * only store), and serves the vector block headers itself in the host's
  * native header shape (/v1/root/<height>, /v1/tip). It submits the
  * transaction vectors in a scrambled order, interval 2's anchor before
@@ -13,16 +17,31 @@
  * asks again from the restored index. Everything it starts, it stops.
  */
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { resolve } from 'node:path'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Transaction } from '@bsv/sdk'
 import { byName, beefOf, txVectors } from './testutil.js'
 
 const v = txVectors()
 const password = 'blogs-e2e'
-const moduleFile = fileURLToPath(new URL('./module.js', import.meta.url))
+const bundle = fileURLToPath(new URL('../bundle/blogs-module.js', import.meta.url))
+
+/**
+ * Stages the bundle beside the reference host's node_modules and returns
+ * the module's path and the staging root to remove.
+ */
+function stage(dir: string): { file: string; root: string } {
+  const root = mkdtempSync(join(tmpdir(), 'blogs-e2e-'))
+  symlinkSync(resolve(dir, 'node_modules'), join(root, 'node_modules'))
+  mkdirSync(join(root, 'modules', 'blogs'), { recursive: true })
+  const file = join(root, 'modules', 'blogs', 'blogs-module.js')
+  copyFileSync(bundle, file)
+  return { file, root }
+}
 
 function fail(msg: string): never {
   throw new Error(`e2e: ${msg}`)
@@ -69,7 +88,7 @@ interface Host {
   out: string[]
 }
 
-async function startHost(dir: string, db: number, hdr: number, port: number): Promise<Host> {
+async function startHost(dir: string, moduleFile: string, db: number, hdr: number, port: number): Promise<Host> {
   const out: string[] = []
   const proc = spawn(process.execPath, [resolve(dir, 'dist/index.js')], {
     env: {
@@ -145,9 +164,13 @@ async function main(): Promise<void> {
     })
   })
   const hport = (hdr.address() as AddressInfo).port
+  const staged = stage(dir)
   let host: Host | undefined
   try {
-    host = await startHost(dir, db.port, hport, port)
+    host = await startHost(dir, staged.file, db.port, hport, port)
+    const mounted = host.out.join('').split('\n').find((l) => l.includes('blogs module mounted'))
+    if (mounted === undefined || !mounted.includes('with @lightwebinc/bcommon')) fail(`the bundle's mount line is missing:\n${host.out.join('')}`)
+    console.log('ok  the bundle mounts from beside the host\'s node_modules')
     const id = (n: string): string => byName(v, n).txid
     const q = (k: string, n: number) => ({ stream: v.stream, producer: v.identityKey, [k]: n })
     expect('funding tree admits its five funding outputs', await submit(host, 'funding-tree'), [0, 1, 2, 3, 4])
@@ -173,7 +196,7 @@ async function main(): Promise<void> {
     const failed = metrics.split('\n').find((l) => l.startsWith('overlay_host_topic_failures_total') && l.includes(v.topic))
     expect('the host counts it as one failed topic admission', failed?.trim().split(' ').pop(), '1')
     await stopHost(host)
-    host = await startHost(dir, db.port, hport, port)
+    host = await startHost(dir, staged.file, db.port, hport, port)
     if (!host.out.join('').includes('ls_log')) fail(`no restore line:\n${host.out.join('')}`)
     await answers('restored', true)
     expect('restored: retracted seq 1 answers nothing', await ask(host, q('seq', 1)), [])
@@ -182,6 +205,7 @@ async function main(): Promise<void> {
     if (host !== undefined) await stopHost(host)
     docker('rm', '-f', db.id)
     hdr.close()
+    rmSync(staged.root, { recursive: true, force: true })
   }
 }
 

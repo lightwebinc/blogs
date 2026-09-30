@@ -1,34 +1,68 @@
 # The host module
 
-`host/dist/module.js` is the blogs module for a reference overlay host: a
-`tm_log_<name>_<suffix>` topic manager for each configured stream and one
-`ls_log` lookup service for all of them. The host carries no blogs code; it
-imports this file by absolute path and calls its default export. The rules
-it applies are the specification's ([spec.md](spec.md) sections 7 and 8).
+`host/bundle/blogs-module.js` is the blogs module for a reference overlay
+host: a `tm_log_<name>_<suffix>` topic manager for each configured stream
+and one `ls_log` lookup service for all of them. The host carries no blogs
+code; it imports this one file by absolute path and calls its default
+export. The rules it applies are the specification's ([spec.md](spec.md)
+sections 7 and 8).
+
+## Building it
+
+```sh
+(cd host && npm ci)   # once
+make module           # tsc into host/dist, then the bundle into host/bundle
+```
+
+The bundle is one ESM file built by esbuild from `host/src/module.ts`, with
+`@lightwebinc/bcommon` inlined. It imports only `@bsv/sdk`, by bare
+specifier, which every reference host already has in its own
+`node_modules`, so the SDK that parses every BEEF is the host's copy at the
+version the host pins. The bundle step refuses, and deletes the file, when
+any input lies outside `host/src/` and bcommon's own package, when nothing
+of bcommon was inlined, or when the file imports anything but `@bsv/sdk`
+and Node built-ins. It carries no source map.
+
+The first line names what it holds:
+
+```text
+// @lightwebinc/blogs-host <version>: tm_log_<stream> and ls_log, with @lightwebinc/bcommon <version> inlined; imports @bsv/sdk (built against <version>)
+```
+
+and the host logs the same text once, as the `build` field of the `blogs
+module mounted` line.
 
 ## Loading it
 
+Copy the file into the host's tree, below the directory that holds the
+host's `node_modules`: Node resolves a bare import from the nearest
+`node_modules` above the module file, so a copy elsewhere either fails to
+import `@bsv/sdk` or loads a second copy. Nothing else from `host/` is
+needed. For a host whose tree is `/srv/overlay-host`:
+
 ```sh
-(cd host && npm ci && npm run build)
+install -D -m 0644 host/bundle/blogs-module.js /srv/overlay-host/modules/blogs/blogs-module.js
 
 OVERLAY_TOPICS=tm_anytx,tm_log_example_app_qzxkvbmwtr
-OVERLAY_MODULES=/abs/path/to/blogs/host/dist/module.js
+OVERLAY_MODULES=/srv/overlay-host/modules/blogs/blogs-module.js
 BLOGS_STREAMS=example_app_qzxkvbmwtr=open
 ```
 
-`BLOGS_STREAMS` is a comma list, one entry per stream: `<stream>=open`, or
-`<stream>=<key>+<key>...` with each producer key as 66 lowercase hex
-characters. Openness is stated, never inferred; an empty or malformed entry
-stops the host before its port opens. Every stream's topic must be in
-`OVERLAY_TOPICS` (the host refuses otherwise), and every `tm_log_` topic in
-`OVERLAY_TOPICS` must be configured here (the module refuses otherwise),
-because a blogs topic left to the host's default manager would admit
-anything.
+`OVERLAY_MODULES` is a comma list of absolute paths, so the blogs module
+loads beside other modules. `BLOGS_STREAMS` is a comma list, one entry per
+stream: `<stream>=open`, or `<stream>=<key>+<key>...` with each producer key
+as 66 lowercase hex characters. Openness is stated, never inferred; an empty
+or malformed entry stops the host before its port opens. Every stream's
+topic must be in `OVERLAY_TOPICS` (the host refuses otherwise), and every
+`tm_log_` topic in `OVERLAY_TOPICS` must be configured here (the module
+refuses otherwise), because a blogs topic left to the host's default manager
+would admit anything. A host that receives its objects from the plane also
+needs the stream's topic in its plane subscription; the module decides
+admission, not delivery.
 
-The module imports `@bsv/sdk` and `@lightwebinc/bcommon` by bare specifier,
-and they resolve from `host/node_modules` beside `dist/`, so the host loads
-it from this directory after `npm ci`. It parses every BEEF it is handed
-with that SDK, at the version the host pins.
+The tsc tree `host/dist/module.js` loads the same way from inside this
+repository, where `host/node_modules` resolves its imports; the tests use
+it, and deployments use the bundle.
 
 ## What it exports
 
@@ -112,7 +146,9 @@ Every counter is preset at start.
 
 `make test` runs the module's tests: every transaction and refusal vector
 through the topic manager, the lookup rules and statuses, the module loaded
-by absolute path as the host loads it, and the module inside the overlay
-engine over an in-memory store. `make e2e REFERENCE_HOST=/path` runs one
-publish and lookup on a local reference host with a MySQL container,
-restarts it, and asks again from the restored index.
+by absolute path as the host loads it, the module inside the overlay engine
+over an in-memory store, the bundle mounted and admitting the golden
+transactions, and the bundle step's refusals. `make e2e
+REFERENCE_HOST=/path` stages the bundle beside the reference host's
+`node_modules`, runs one publish and lookup on that host with a MySQL
+container, restarts it, and asks again from the restored index.

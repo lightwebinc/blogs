@@ -22,6 +22,13 @@ import { LookupService, TopicPrefix, checkProducer, checkStream, topic } from '.
 import { LogLookupService } from './ls_log.js'
 import { AdmitKinds, LogTopicManager, Reasons } from './tm_log.js'
 
+/**
+ * The bundle's banner, which the bundle step defines (scripts/bundle.js):
+ * the package and library versions the host is running. The tsc tree
+ * leaves it undefined.
+ */
+declare const BLOGS_BUILD: string | undefined
+
 export interface StreamConfig {
   stream: string
   policy: Policy
@@ -89,7 +96,8 @@ export function blogsModule(host: ModuleHost, streams: StreamConfig[], overlayTo
   host.metrics.gauge('blogs_fork_positions', () => ls.forkSeqCount)
   const topics: Record<string, LogTopicManager> = {}
   for (const s of streams) topics[topic(s.stream)] = new LogTopicManager(topic(s.stream), s.policy, ls.coin, host)
-  host.log('blogs module mounted', { topics: [...names].join(','), lookup: LookupService })
+  const build = typeof BLOGS_BUILD === 'string' ? BLOGS_BUILD : 'unbundled'
+  host.log('blogs module mounted', { topics: [...names].join(','), lookup: LookupService, build })
   return { topics, lookups: { [LookupService]: ls } }
 }
 
