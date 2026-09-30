@@ -141,17 +141,13 @@ func TestTheQuorumDecides(t *testing.T) {
 	}
 }
 
-func TestSubmitAndTheFacadeAdapter(t *testing.T) {
+func TestTheFacadeAdapter(t *testing.T) {
 	a, b := newHost(t, 0), newHost(t, 0)
 	s, _ := set(2, a, b)
-	res, err := s.Submit(context.Background(), "tm_x", beef(1))
-	if err != nil || len(res.Admitted) != 1 {
-		t.Fatalf("%+v %v", res, err)
-	}
 	// The adapter: one facade, every host sent the object.
 	f := s.Facade("funding tree")
-	res, err = f.Submit(context.Background(), "tm_x", beef(2))
-	if err != nil || len(res.Admitted) != 1 || a.calls.Load() != 2 || b.calls.Load() != 2 {
+	res, err := f.Submit(context.Background(), "tm_x", beef(2))
+	if err != nil || len(res.Admitted) != 1 || a.calls.Load() != 1 || b.calls.Load() != 1 {
 		t.Fatalf("adapter: %+v %v, calls %d %d", res, err, a.calls.Load(), b.calls.Load())
 	}
 	res, err = f.Submit(context.Background(), "tm_x", beef(2))

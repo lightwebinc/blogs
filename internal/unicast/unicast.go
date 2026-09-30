@@ -152,17 +152,6 @@ func (s *Set) Send(ctx context.Context, what, topic string, beef []byte, need in
 	return o
 }
 
-// Submit is Send with the Set's quorum, as one result: the Merged answer,
-// or an error naming the hosts that missed the object when too few took
-// it. It is the publish.Facade Submit signature.
-func (s *Set) Submit(ctx context.Context, topic string, beef []byte) (publish.Result, error) {
-	o := s.Send(ctx, "object", topic, beef, 0)
-	if err := o.Err(); err != nil {
-		return publish.Result{}, err
-	}
-	return o.Merged(), nil
-}
-
 func (s *Set) one(ctx context.Context, host, topic string, beef []byte) Result {
 	f := &publish.Facade{Base: host, HTTP: s.HTTP}
 	r := Result{Host: host}
