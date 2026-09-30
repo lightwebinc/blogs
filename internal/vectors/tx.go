@@ -106,8 +106,11 @@ func newTxEnv() (*txEnv, error) {
 		return nil, err
 	}
 	otherPriv, _ := ec.PrivateKeyFromBytes(OtherKey)
-	// The fee coins pay the embedded wallet's funding key: [1, "blogs"],
-	// key id fund, counterparty anyone, the producer's side.
+	// The fee coins pay [1, "blogs"] key id fund under counterparty
+	// anyone, the key derivation-v1.json records for fund. The embedded
+	// wallet derives its funding key under self (docs/spec.md section
+	// 6.1); no admission rule reads which key a fee coin pays, so the
+	// vectors' transactions are the same either way.
 	feeKey, err := wallet.NewKeyDeriver(priv).DerivePrivateKey(logrec.Protocol, logrec.KeyFund, pushdrop.Anyone())
 	if err != nil {
 		return nil, err

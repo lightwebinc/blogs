@@ -273,16 +273,20 @@ Everything here is bcommon's, parameterised by the values in section 6.1.
 | BRC-43 protocol | `[1, "blogs"]` (security level 1) |
 | Carrier record output, carrier field signature, funding-tree outputs | key id `batch`, invoice `1-blogs-batch` |
 | Anchor token lock and field signature | key id `anchor`, invoice `1-blogs-anchor` |
-| Embedded wallet funding key | key id `fund`, invoice `1-blogs-fund` |
+| Embedded wallet funding key | key id `fund`, invoice `1-blogs-fund`, counterparty `self` |
 | Anchor token tag | `62 6c 01` (`"bl"` `0x01`) |
 | Funding-output tag | `62 6c 02` (`"bl"` `0x02`) |
 
-Every derivation is BRC-42 with counterparty `anyone`: the producer's wallet
-derives with `forSelf = true`, and a reader derives the same public key from
-the producer's identity key alone. That is the one setting under which a
-reader can recompute a locking key and the embedded field signature verifies
-under it. The protocol name is five characters because BRC-43 key derivation
-refuses a shorter one.
+Every derivation a reader or a host checks (`batch` and `anchor`) is BRC-42
+with counterparty `anyone`: the producer's wallet derives with
+`forSelf = true`, and a reader derives the same public key from the
+producer's identity key alone. That is the one setting under which a reader
+can recompute a locking key and the embedded field signature verifies under
+it. The funding key is the exception: bcommon's embedded wallet derives it
+with counterparty `self`, so only the producer can compute it. It locks the
+coin pool's outputs, which pay the fees of funding trees, anchors and sweeps;
+no host rule and no reader check reads it. The protocol name is five
+characters because BRC-43 key derivation refuses a shorter one.
 
 ### 6.2 The carrier
 
@@ -336,7 +340,19 @@ carrier spends only a mined tree's outputs; that also means no carrier can be
 stranded by a different version of its parent being mined.
 
 A carrier is published once, to the object leg only, naming
-`tm_log_<name>_<suffix>` as its first topic.
+`tm_log_<name>_<suffix>` as its first topic. "Once" is per destination: on
+the plane the object leg is one submission the plane delivers to every
+subscribed host; without the plane (unicast) the producer submits the same
+bytes to each host it publishes to, and that is still one publication per
+host.
+
+A host answers a submission with the outputs its topic manager admitted.
+An answer that admits nothing is the same whether the host already held the
+transaction or refused it (section 8.1, refusals the engine records), so a
+producer cannot tell a duplicate from a refusal by the answer alone. The
+producer's own copy of the admission rules is what keeps it from building a
+carrier a host would refuse; a reader's lookup is what shows whether a host
+holds it.
 
 ### 6.4 Retraction
 
@@ -744,7 +760,11 @@ that names a chunked store (BRC-167).
 
 The plane repairs loss for every object it carries; nothing in blogs
 disables, bypasses or asks for an exception from repair, for any profile,
-stream, class or configuration.
+stream, class or configuration. Without the plane (a producer that submits
+to each host itself, unicast) there is no network repair: the producer
+retries each host, and a host that still missed an object is filled from a
+sibling by the batch and interval classes, as an archive fills a hole
+below.
 
 - **Producer.** Publishes each carrier once. It does not retransmit a batch
   for loss; the network repairs. It republishes nothing but a
@@ -753,8 +773,9 @@ stream, class or configuration.
   exactly once, after it mines (section 6.3). A producer persists its head
   (`seq`, `C`) and the carrier bytes durably before publishing, and after a crash republishes the persisted
   carrier rather than building a new one for the same `seq`, which would be
-  a fork. Its anchor head is the current anchor token, which its wallet keeps
-  in a basket. A producer that has lost its head MUST NOT restart at
+  a fork. Its anchor head is the current anchor token, kept with the rest of
+  the head in the stream's state, with the anchor in flight, if any. A
+  producer that has lost its head MUST NOT restart at
   `seq = 1` and MUST NOT guess the head from lookup answers (an empty answer
   proves nothing); it creates a new stream, with a new random suffix and so
   a new topic.
@@ -764,7 +785,10 @@ stream, class or configuration.
   admitted whenever it arrives after the outputs it spends; one that arrives
   before its predecessor or its funding tree is refused (section 8.1 rule 7)
   without a record, and admitted when it is offered again once they are
-  held: redelivered, or fetched by the interval class from a sibling. A hole that
+  held: redelivered, or its predecessor fetched by the interval class from
+  a sibling. An anchor's fee tree is carried by no carrier and served by no
+  question class, so an archive that lacks it reads it, with its proof,
+  from a copy of the chain (a node), and submits it before the anchor. A hole that
   repair did not fill (the archive was down, or a loss outlived the repair
   window) is filled by the batch class from a sibling archive, without the
   producer. The anchor is what turns "probably everything" into a proof, and
@@ -793,9 +817,12 @@ stream, class or configuration.
    class's answer for `interval - 1`, which the walk has already fetched; a
    funding output's transaction is a mined funding tree, which no question
    class serves (a token's BEEF carries its own proof and no parents), so
-   the auditor takes it by its txid from any copy of the chain, or from a
-   carrier's BEEF, which carries the funding tree that carrier spends, and
-   accepts it when its double SHA-256 is the txid the input names. No proof
+   the auditor takes it by its txid from a carrier's BEEF, which carries the
+   funding tree that carrier spends, or otherwise from any copy of the
+   chain; an anchor pays its fee from an anchor fee tree, which no carrier
+   spends, so that one always comes from a copy of the chain (a node, or a
+   public service answering raw transactions). It accepts the transaction
+   when its double SHA-256 is the txid the input names. No proof
    of that transaction is needed: the token's proof shows the spend was
    mined, and the txid binds the output it spent;
 3. the interval's commitments: the auditor asks the batch class for every
@@ -876,9 +903,9 @@ them and compares byte for byte, and refuses a file nothing generates.
 | `batch-v1.json`, `batch-*.hex` | four batch records: seq 1 with an unknown key; full-bytes `lines` whose content carries an escape sequence; full-bytes `lines+gzip`; digest-only |
 | `locator-v1.json`, `locator-hints.hex` | a locator with a hint URL, and one with an unknown member (unsupported, preserved) |
 | `anchor-v1.json`, `anchor-interval-*.hex` | two consecutive intervals (5 and 3 batches): commitments, leaves, root, every inclusion path, the record, the token's fields and the hash its signature covers |
-| `derivation-v1.json` | the registry values, the keys the fixed test key derives for `batch`, `anchor` and `fund`, and two stream identifiers with one readable part and different suffixes, split, with their topics |
+| `derivation-v1.json` | the registry values, the keys the fixed test key derives for `batch`, `anchor` and `fund` under counterparty `anyone` (the reader's derivation; the embedded wallet's funding key is derived under `self`, section 6.1, and is not this `fund` entry), and two stream identifiers with one readable part and different suffixes, split, with their topics |
 | `refusal-v1.json` | fifty-three byte strings the record decoder refuses, each with its reason (section 3.2) and what admission does with an output carrying it: refuse, or skip one that does not claim to be a record. Every one is decided by the record alone; a `seq`/`prev` link break is a status (section 8.2), never a refusal, so none is here |
-| `transaction-v1.json` | fifty-four transactions, each as raw hex and as BEEF with the previous coins it is admitted with, and the block headers they are admitted against: three batch carriers, two anchor tokens, a funding tree mined and unmined, a sweep, a refusal for every rule of section 8.1 in its order, each with its reason, and carriers that break two rules to pin the order between them. Every refused transaction's own scripts still verify, so each is caught only by the topic manager's rules |
+| `transaction-v1.json` | fifty-four transactions, each as raw hex and as BEEF with the previous coins it is admitted with, and the block headers they are admitted against: three batch carriers, a carrier admitted under a closed producer policy, two anchor tokens, a funding tree mined and unmined, a sweep, a refusal for every rule of section 8.1 in its order, each with its reason, and carriers that break two rules to pin the order between them. Every refused transaction's own scripts still verify, so each is caught only by the topic manager's rules |
 
 The vectors' stream is `example_app_qzxkvbmwtr`; its suffix is a fixed
 example so that the vectors are reproducible, where a real stream draws its

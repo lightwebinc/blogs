@@ -52,7 +52,11 @@ var (
 	MagicAnchor = []byte{'b', 'l', 'a', 0x01}
 )
 
-// Derivations under [1, "blogs"].
+// Derivations under [1, "blogs"], each with counterparty anyone, so a
+// reader derives the key from the producer's identity key alone. For key id
+// fund that is the key the vectors record; the embedded wallet's own
+// funding key is bcommon bwallet's, derived under counterparty self, and no
+// rule reads it (docs/spec.md section 6.1).
 var (
 	Protocol         = wallet.Protocol{SecurityLevel: wallet.SecurityLevelEveryApp, Protocol: ProtocolName}
 	BatchDerivation  = pushdrop.Derivation{Protocol: Protocol, KeyID: KeyBatch}
