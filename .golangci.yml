@@ -1,0 +1,23 @@
+# golangci-lint v2 (make lint): the default linters (errcheck, govet,
+# ineffassign, staticcheck, unused), with errcheck told what this code
+# ignores on purpose: writes of messages to stdout and stderr, and Close on
+# a file or body only read from, whose error carries nothing to act on. A
+# Close whose error matters (a written file) is checked in the code.
+version: "2"
+
+linters:
+  settings:
+    errcheck:
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (io.Closer).Close
+        - (io.ReadCloser).Close
+        - (*os.File).Close
+  exclusions:
+    rules:
+      # Tests write fixtures and stand-in servers whose errors the test
+      # itself would surface.
+      - path: _test\.go
+        linters: [errcheck]

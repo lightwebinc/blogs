@@ -197,7 +197,7 @@ func Follow(ctx context.Context, path string, offset int64, poll time.Duration, 
 						break
 					}
 					cut := i + 1
-					b := pending
+					var b []byte
 					isSplit := false
 					if i < 0 || cut > MaxLine {
 						cut, isSplit = MaxLine-1, true

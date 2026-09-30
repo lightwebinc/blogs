@@ -66,9 +66,7 @@ func TestWhatsOnChainIsHeldToTheTxid(t *testing.T) {
 	}
 	var txids []string
 	for h := uint32(701); h <= 702; h++ {
-		for _, id := range chainCoinbase(t, chain, h) {
-			txids = append(txids, id)
-		}
+		txids = append(txids, chainCoinbase(t, chain, h)...)
 	}
 	ctx := context.Background()
 	c := &Client{Txs: WhatsOnChain{Network: "main", Base: woc(t, chain, nil).URL}}

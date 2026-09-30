@@ -198,13 +198,13 @@ func TestReadFiltersWhatReachesTheTerminal(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	stream, producer := h.producer()
-	hostile := "title\x1b]0;owned\x07 \x1b[31mred\x1b[0m rev‮ersed\x1b[2J\n" + strings.Repeat("w", 700) + "\n"
+	hostile := "title\x1b]0;owned\x07 \x1b[31mred\x1b[0m rev\u202eersed\x1b[2J\n" + strings.Repeat("w", 700) + "\n"
 	r := h.produce(hostile, stream)
 	if !strings.Contains(r.stderr, "2 line(s) held something a terminal must be protected from") && !strings.Contains(r.stderr, "1 line(s) held") {
 		t.Fatalf("produce did not warn:\n%s", r.stderr)
 	}
 	r = h.must("", "read", stream, producer)
-	if strings.ContainsAny(r.stdout, "\x1b\x07‮") {
+	if strings.ContainsAny(r.stdout, "\x1b\x07\u202e") {
 		t.Fatalf("read let a control through: %q", r.stdout)
 	}
 	if !strings.Contains(r.stdout, "title red reversed\n") {
@@ -441,13 +441,13 @@ func TestTheFirstMinedTokenIsCanonical(t *testing.T) {
 	file := filepath.Join(state.Dir(h.home, stream), "state.json")
 	saved := filepath.Join(t.TempDir(), "state.json")
 	copyFile(t, file, saved)
-	r := h.must("", append([]string{"anchor", stream}, fast...)...)
+	h.must("", append([]string{"anchor", stream}, fast...)...)
 	st, _ := state.Load(h.home, stream)
 	first := st.Anchor.Txid
 	// The producer equivocates: the same batches anchored again from the
 	// state before the first anchor, as a second interval 1.
 	copyFile(t, saved, file)
-	r = h.must("", append([]string{"anchor", stream}, fast...)...)
+	r := h.must("", append([]string{"anchor", stream}, fast...)...)
 	st, _ = state.Load(h.home, stream)
 	if st.Anchor.Txid == first || st.Anchor.Interval != 1 {
 		t.Fatalf("no second interval 1:\n%s", r.stdout)

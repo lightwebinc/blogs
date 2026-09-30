@@ -176,18 +176,6 @@ func checkMagic(f map[uint64]cbor.Value, magic []byte) error {
 	return nil
 }
 
-func getUint(f map[uint64]cbor.Value, k uint64) (uint64, error) {
-	v, ok := f[k]
-	if !ok {
-		return 0, fmt.Errorf("%w: key %d", ErrMissing, k)
-	}
-	n, ok := v.(uint64)
-	if !ok {
-		return 0, fmt.Errorf("%w: key %d", ErrType, k)
-	}
-	return n, nil
-}
-
 func getBytes(f map[uint64]cbor.Value, k uint64) ([]byte, error) {
 	v, ok := f[k]
 	if !ok {
