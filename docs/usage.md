@@ -287,10 +287,11 @@ what became of it ...`:
 
 | The node shows | The command does | It says |
 | --- | --- | --- |
-| the tree, and the current tree of its kind is used up or there is none | adopts the tree, takes its unspent change into the pool and publishes it | `funding tree ... is recovered`, `funding tree published: ...` |
-| the tree, and the current tree of its kind still has outputs | takes its change, holds the tree and switches to it when the current tree runs out; the record stays until then | `funding tree ... is recovered and waits for the switch` |
+| the tree, its coin not spent by another transaction, and the current tree of its kind is used up or there is none | adopts the tree, takes its unspent change into the pool and publishes it | `funding tree ... is recovered`, `funding tree published: ...` |
+| the tree, its coin not spent by another transaction, and the current tree of its kind still has outputs | takes its change, holds the tree and switches to it when the current tree runs out; the record stays until then | `funding tree ... is recovered and waits for the switch` |
 | no such tree, and the coin unspent | puts the coin back in the pool and keeps the record for one more command; the second such answer drops it | `... never reached the chain: its fee coin ... is unspent and back in the pool`, then `its record is kept for one more command`; the second time `the node still does not know it, so its record is dropped` |
 | no such tree, and the coin spent by another transaction | drops the record | `... never reached the chain: its fee coin ... is spent by ...` |
+| the tree, with no proof, and the coin spent by another transaction | drops the record and adopts nothing: the tree lost a double spend and never mines, though the node still serves it | `... lost a double spend: the node still serves it, without a proof, and its fee coin ... is spent by ...` |
 | nothing: it cannot answer, or the tree has not mined in time | keeps the record and goes on without the tree; the next command asks again | `... what became of it could not be settled now (...): its record is kept ...` |
 
 Several trees can be held at once. They are used in the order they were
@@ -302,8 +303,10 @@ command, which adopts it and takes the coin, now spent, out of the pool
 (`its fee coin ... is spent and is taken out of the pool`). Nothing is lost
 unless the tree lands after two commands found nothing: then its outputs
 are lost to the stream. The command that next takes the coin has its
-transaction refused and exits 2, and the command after that finds the coin
-spent and takes it out of the pool.
+transaction refused and exits 2, and the refusal takes the spent coin out
+of the pool (`its fee coin ... is spent by ..., so it is out of the pool
+and is not returned`). The command after that drops the refused
+transaction's record.
 
 **The wait at the start.** A tree is used only once it has mined, so a
 tree the node knows and has not mined yet is waited for, as a new tree is.
@@ -677,6 +680,9 @@ Results go to stdout; progress and errors to stderr, errors as one line
 | `blogs: this home holds no stream S (create one with ...)` | `produce` or `anchor` on a stream without state, exit 2 |
 | `blogs: another blogs command is using the home H ...` | the home is locked, exit 2 |
 | `blogs: batch funding tree: fee input: ... (run `blogs fund`)` | the pool has no spendable coin, exit 2 |
+| `no coin is spendable and N funding tree(s) minted ahead hold one: waiting for the change` | a fee is asked for while a tree minted ahead holds the pool's last coin: the command waits for that tree to mine, no longer than the wait for one proof, and goes on |
+| `blogs: fee input: ...: N funding tree(s) signed for a coin of this home are not settled ...` | the tree did not mine in time, exit 2; its record is kept and the next `produce`, `anchor` or `sweep` recovers it |
+| `blogs: fee input: ...: N funding tree(s) minted ahead hold a coin and have not settled ...` | the wait for a tree minted ahead was interrupted, exit 2; the next command recovers the tree |
 | `blogs: seq N: publish: ...; the carrier is persisted and a later run publishes it` | the facade did not take a carrier, or in mode unicast fewer hosts than the quorum did (`K of N host(s) took it and the quorum is Q (...)`), exit 2 |
 | `<what>: host URL MISSED it after N tries: ...` | mode unicast: a host did not take an object (`seq N`, `anchor interval K`, `batch funding tree`, `anchor fee tree`, `sweep TXID`) |
 | `host URL: took N object(s), missed M[: ...]` | mode unicast, at the end of `produce` and `anchor`, on stdout |

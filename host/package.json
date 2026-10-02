@@ -20,7 +20,7 @@
   },
   "dependencies": {
     "@bsv/sdk": "2.7.1",
-    "@lightwebinc/bcommon": "file:vendor/lightwebinc-bcommon-0.6.2.tgz"
+    "@lightwebinc/bcommon": "file:vendor/lightwebinc-bcommon-0.6.4.tgz"
   },
   "devDependencies": {
     "@bsv/overlay": "2.3.1",

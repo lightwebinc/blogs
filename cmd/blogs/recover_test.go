@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-sdk/transaction"
 
@@ -275,7 +276,8 @@ func TestATreeThatLandsLateIsStillAdopted(t *testing.T) {
 
 // The tree lands after two commands found nothing and dropped its record:
 // the tree is lost to the stream. The command that next takes the coin is
-// refused, and the one after it finds the coin spent and goes on.
+// refused, and the refusal takes the spent coin out of the pool. The one
+// after it drops the refused tree's record and goes on.
 func TestATreeThatLandsAfterItsRecordIsDroppedCostsOneRefusedCommand(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -302,10 +304,16 @@ func TestATreeThatLandsAfterItsRecordIsDroppedCostsOneRefusedCommand(t *testing.
 	}
 	// A tree of another size, so it is not the landed transaction signed
 	// again, which the chain would answer as one it already holds.
-	h.want(h.run("a\n", append(append([]string{"produce", stream}, fast...), "-tree-count", "5")...), exitUsage, "batch funding tree")
+	refused := h.run("a\n", append(append([]string{"produce", stream}, fast...), "-tree-count", "5")...)
+	h.want(refused, exitUsage, "batch funding tree")
 	st := h.state(stream)
 	if len(st.PendingTrees) != 1 || st.PendingTrees[0].Coin.Outpoint() != coin || st.Seq != 0 {
 		t.Fatalf("after the refused tree: records %+v, seq %d", st.PendingTrees, st.Seq)
+	}
+	// The refusal names the tree that landed as the coin's spender, so the
+	// coin is out of the pool already and is not handed out again.
+	if !strings.Contains(refused.stderr, "its fee coin "+coin+" is spent by "+tree.TxID().String()+", so it is out of the pool and is not returned") || h.poolCoins()[coin] {
+		t.Fatalf("the refused command: coin held %t\n%s", h.poolCoins()[coin], refused.stderr)
 	}
 	if w, err = bwallet.Open(h.home, produce.Profile); err != nil {
 		t.Fatal(err)
@@ -340,6 +348,51 @@ func TestATreeWhoseCoinWasSpentElsewhereIsForgotten(t *testing.T) {
 	}
 	if st := h.state(stream); len(st.PendingTrees) != 0 || h.poolCoins()[coin] {
 		t.Fatalf("after a coin spent elsewhere: %+v, coin held %t", st.PendingTrees, h.poolCoins()[coin])
+	}
+}
+
+// A tree the node took and that then lost a double spend never mines,
+// though the node goes on serving it. The next command drops its record at
+// once, as for any coin another transaction spent, takes the coin out of
+// the pool and adopts nothing; the stream goes on with a tree of its own.
+func TestATreeThatLostADoubleSpendIsForgotten(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	stream, producer, tree, coin := h.stopped()
+	id := tree.TxID().String()
+	// The node takes the tree and never mines it.
+	h.chain.SetHoldIf(func(tx *transaction.Transaction) bool { return tx.TxID().String() == id })
+	if err := h.chain.Send(tree); err != nil {
+		t.Fatal(err)
+	}
+	if h.chain.Tx(id) == nil || h.chain.Mined(id) {
+		t.Fatalf("the tree on the node %v, mined %v", h.chain.Tx(id) != nil, h.chain.Mined(id))
+	}
+	in := tree.Inputs[0]
+	other := strings.Repeat("5e", 32)
+	h.chain.SpendElsewhere(in.SourceTXID.String(), in.SourceTxOutIndex, other)
+	began := time.Now()
+	r := h.must("", append([]string{"anchor", stream}, fast...)...)
+	if !strings.Contains(r.stderr, "funding tree "+id+" lost a double spend: the node still serves it, without a proof, and its fee coin "+coin+" is spent by "+other) ||
+		strings.Contains(r.stderr, "could not be settled now") {
+		t.Fatalf("anchor:\n%s", r.stderr)
+	}
+	if d := time.Since(began); d > 30*time.Second {
+		t.Fatalf("the command waited %s for a tree that never mines", d)
+	}
+	if st := h.state(stream); len(st.PendingTrees) != 0 || st.Tree != nil || len(st.Ahead) != 0 || h.poolCoins()[coin] {
+		t.Fatalf("after the lost double spend: records %+v, tree %+v, ahead %d, coin held %t", st.PendingTrees, st.Tree, len(st.Ahead), h.poolCoins()[coin])
+	}
+	// The command after says nothing of it and mints a tree of its own.
+	r = h.produce("a\n", stream)
+	if strings.Contains(r.stderr, id) {
+		t.Fatalf("the command after:\n%s", r.stderr)
+	}
+	if st := h.state(stream); st.Tree == nil || st.Tree.Txid == id || len(st.PendingTrees) != 0 {
+		t.Fatalf("after the next produce: tree %+v, records %+v", st.Tree, st.PendingTrees)
+	}
+	if r = h.must("", "read", stream, producer); r.stdout != "a\n" {
+		t.Fatalf("read: %q", r.stdout)
 	}
 }
 

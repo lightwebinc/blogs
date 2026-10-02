@@ -120,7 +120,7 @@ func (e *Engine) Retract(ctx context.Context, txid string, vouts []uint32, seqs 
 	payer := e.newPayer()
 	fee, err := payer.Take(ctx)
 	if err != nil {
-		return nil, FeeError(fmt.Errorf("sweep fee: %w", err))
+		return nil, e.feeError(fmt.Errorf("sweep fee: %w", err))
 	}
 	change, err := e.Signer.FundScript()
 	if err != nil {

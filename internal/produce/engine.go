@@ -270,14 +270,52 @@ func FeeError(err error) error {
 	var nk *producer.NoKeyError
 	switch {
 	case errors.As(err, &nc):
-		if nc.Held > 0 {
+		switch {
+		case nc.Held > 0 && nc.Minting > 0:
+			return fmt.Errorf("fee input: %w: the other coins are change from %d transaction(s) whose proofs have not arrived, and %d funding tree(s) minted ahead hold a coin and have not settled; they become spendable once mined, so run the command again", nc.Err, nc.Held, nc.Minting)
+		case nc.Held > 0:
 			return fmt.Errorf("fee input: %w: the other coins are change from %d transaction(s) whose proofs have not arrived; they become spendable once mined", nc.Err, nc.Held)
+		case nc.Minting > 0:
+			return fmt.Errorf("fee input: %w: %d funding tree(s) minted ahead hold a coin and have not settled; the change returns once one does, so run the command again", nc.Err, nc.Minting)
 		}
 		return fmt.Errorf("fee input: %w (run `blogs fund`)", nc.Err)
 	case errors.As(err, &nk):
 		return fmt.Errorf("wallet output %s is locked to a key this home does not hold", nk.Outpoint)
 	}
 	return err
+}
+
+// feeError is FeeError for a fee this engine asked for. A tree minted ahead
+// is waited for by the take (producer.Payer.Take), for as long as the tree
+// itself waits for its block, so a tree that does not mine in time ends
+// both waits: the take then finds no coin and no mint in flight, while the
+// coin is in a tree on its way to a block. The record made when the tree
+// was signed says so, and the words follow it.
+func (e *Engine) feeError(err error) error {
+	var nc *producer.NoCoinError
+	if errors.As(err, &nc) && nc.Held == 0 && nc.Minting == 0 {
+		if n := e.unsettled(); n > 0 {
+			return fmt.Errorf("fee input: %w: %d funding tree(s) signed for a coin of this home are not settled, and the change of one on its way to a block returns once it mines; run the command again, which asks the node about them first, or run `blogs fund`", nc.Err, n)
+		}
+	}
+	return FeeError(err)
+}
+
+// unsettled counts the trees signed for a coin that are neither adopted nor
+// held for the switch: the ones whose change the pool has not got.
+func (e *Engine) unsettled() int {
+	n := 0
+	for _, p := range e.St.PendingTrees {
+		id := p.Tree.Txid
+		held := e.St.MintedAhead(id)
+		for _, t := range []*producer.Trees{e.trees, e.anchorTrees} {
+			held = held || slices.ContainsFunc(t.Held(), func(h funding.Tree) bool { return h.Txid == id })
+		}
+		if !held && !e.adopted(id) {
+			n++
+		}
+	}
+	return n
 }
 
 // Start reads the chain tip for coinbase maturity, settles the funding
@@ -394,7 +432,7 @@ func (e *Engine) publishOne(ctx context.Context, b Batch, content []byte) error 
 	}
 	tree, vout, err := e.spend(ctx, e.trees, 1)
 	if err != nil {
-		return FeeError(fmt.Errorf("batch funding tree: %w", err))
+		return e.feeError(fmt.Errorf("batch funding tree: %w", err))
 	}
 	k, err := carrier.Mint(ctx, e.Signer, e.Signer.Originator, Params, payload, tree, vout)
 	if err != nil {
@@ -605,7 +643,7 @@ func (e *Engine) anchor(ctx context.Context) error {
 	}
 	tree, vout, err := e.spend(ctx, e.anchorTrees, 1)
 	if err != nil {
-		return FeeError(fmt.Errorf("anchor funding tree: %w", err))
+		return e.feeError(fmt.Errorf("anchor funding tree: %w", err))
 	}
 	change, err := e.Signer.FundScript()
 	if err != nil {

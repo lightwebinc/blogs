@@ -328,6 +328,7 @@ Common messages:
 | `this home holds no stream S ...` | 2 | The stream's state is not in this home. Use the home that created it, or a new stream |
 | `another blogs command is using the home ...` | 2 | One producer per home at a time; wait, or give the other stream its own home |
 | `batch funding tree: fee input: ... (run blogs fund)` | 2 | The coin pool is empty: `blogs fund` |
+| `fee input: ...: N funding tree(s) signed for a coin of this home are not settled ...` | 2 | The pool's last coin is in a funding tree that has not mined yet. Run the command again once a block has passed, or `blogs fund` so the pool holds a second coin |
 | `seq N: publish: ...; the carrier is persisted and a later run publishes it` | 2 | The facade, or too few hosts, did not take it. Fix the endpoint and run `produce` or `anchor` again |
 | `funding tree TXID: ...; the tree is adopted and recorded as not published, and the next produce, anchor or sweep publishes it` | 2 | The facade, or too few hosts, did not take a new funding tree. Fix the endpoint and run `produce` or `anchor` again; no second tree is minted |
 | `... funding tree TXID was signed by a run that stopped before it adopted the tree: asking the node what became of it ...` | 0 | An earlier run stopped while minting a tree. The lines after it say what was found; nothing to do |
