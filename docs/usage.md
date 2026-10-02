@@ -293,6 +293,10 @@ what became of it ...`:
 | no such tree, and the coin spent by another transaction | drops the record | `... never reached the chain: its fee coin ... is spent by ...` |
 | nothing: it cannot answer, or the tree has not mined in time | keeps the record and goes on without the tree; the next command asks again | `... what became of it could not be settled now (...): its record is kept ...` |
 
+Several trees can be held at once. They are used in the order they were
+signed, each adopted at its own switch, and no tree is minted ahead while
+one is held.
+
 A tree that reaches the node after its coin went back is found by the next
 command, which adopts it and takes the coin, now spent, out of the pool
 (`its fee coin ... is spent and is taken out of the pool`). Nothing is lost

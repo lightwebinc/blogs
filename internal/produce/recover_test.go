@@ -2,6 +2,8 @@ package produce_test
 
 import (
 	"context"
+	"encoding/hex"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,8 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-sdk/transaction"
+
 	"github.com/lightwebinc/bcommon/nodeapi"
 
+	"github.com/lightwebinc/blogs/internal/produce"
 	"github.com/lightwebinc/blogs/internal/state"
 )
 
@@ -204,4 +209,252 @@ func TestATreeWhoseRecordCannotBeSavedIsNotSent(t *testing.T) {
 	if err := e.Publish(ctx, lines(1, 0)); err != nil {
 		t.Fatalf("the publish after: %v", err)
 	}
+}
+
+// twoTreesOnChain leaves the stream with a current batch tree of six
+// outputs, three of them spent, and the records of two more batch trees
+// that are on the chain and mined, each signed by a run that stopped before
+// it adopted the tree: the home two crashed runs leave. It returns the two
+// in the order they were signed, and the outputs spent so far.
+func (r *rig) twoTreesOnChain(o produce.Options) (first, second string, spent map[string]bool) {
+	r.t.Helper()
+	spent = map[string]bool{}
+	// The chain keeps every batch tree after the first unmined.
+	r.chain.SetHoldIf(func(tx *transaction.Transaction) bool {
+		st, err := state.Load(r.home, r.stream)
+		if err != nil || st.Tree == nil {
+			return false
+		}
+		p := st.PendingTree(tx.TxID().String())
+		return p != nil && p.Kind == "batch"
+	})
+	// Each run mints the next tree ahead and stops before it mines.
+	for n, batches := range []int{2, 1} {
+		ro := o
+		ro.Wait = 150 * time.Millisecond
+		ctx, cancel := context.WithCancel(context.Background())
+		e := r.engine(ro)
+		if err := e.Start(ctx); err != nil {
+			r.t.Fatalf("run %d: %v\n%s", n, err, r.notes)
+		}
+		for range batches {
+			r.publish(e, spent)
+		}
+		for end := time.Now().Add(10 * time.Second); r.chain.Waiting() != n+1; time.Sleep(time.Millisecond) {
+			if time.Now().After(end) {
+				r.t.Fatalf("run %d: %d tree(s) waiting on the chain\n%s", n, r.chain.Waiting(), r.notes)
+			}
+		}
+		cancel()
+	}
+	st := r.state()
+	if len(st.PendingTrees) != 2 || len(st.Trees) != 1 || st.Tree.Remaining() != 3 || len(st.Ahead) != 0 {
+		r.t.Fatalf("after two stopped runs: records %v, %d trees, %d left, ahead %d", records(st), len(st.Trees), st.Tree.Remaining(), len(st.Ahead))
+	}
+	r.chain.SetHoldIf(nil)
+	if n := r.chain.Mine(); n != 2 {
+		r.t.Fatalf("mined %d", n)
+	}
+	r.notes.Reset()
+	return st.PendingTrees[0].Tree.Txid, st.PendingTrees[1].Tree.Txid, spent
+}
+
+// records and aheads are the txids of the trees signed and not adopted, and
+// of the trees minted ahead.
+func records(st *state.Stream) []string {
+	var out []string
+	for _, p := range st.PendingTrees {
+		out = append(out, p.Tree.Txid)
+	}
+	return out
+}
+
+func aheads(st *state.Stream) []string {
+	var out []string
+	for _, t := range st.Ahead {
+		out = append(out, t.Txid)
+	}
+	return out
+}
+
+// publish publishes one batch and records the funding output its carrier
+// spent, which no other carrier may spend.
+func (r *rig) publish(e *produce.Engine, spent map[string]bool) {
+	r.t.Helper()
+	if err := e.Publish(context.Background(), lines(1, len(spent))); err != nil {
+		r.t.Fatalf("publish: %v\n%s", err, r.notes)
+	}
+	cur := e.St.Tree
+	out := fmt.Sprintf("%s.%d", cur.Txid, cur.Next-1)
+	if spent[out] {
+		r.t.Fatalf("funding output %s is spent a second time\n%s", out, r.notes)
+	}
+	spent[out] = true
+}
+
+// trees checks the batch trees the state adopted, in order, each once, and
+// how many outputs of each are spent.
+func (r *rig) trees(want []string, next []uint32) {
+	r.t.Helper()
+	st := r.state()
+	if len(st.Trees) != len(want) {
+		r.t.Fatalf("%d batch trees, want %d\n%s", len(st.Trees), len(want), r.notes)
+	}
+	for i, tr := range st.Trees {
+		if tr.Txid != want[i] || tr.Next != next[i] {
+			r.t.Fatalf("batch tree %d is %s with %d spent, want %s with %d\n%s", i, tr.Txid, tr.Next, want[i], next[i], r.notes)
+		}
+	}
+	if st.Tree.Txid != want[len(want)-1] || st.Tree.Next != next[len(next)-1] {
+		r.t.Fatalf("the current tree is %s with %d spent", st.Tree.Txid, st.Tree.Next)
+	}
+}
+
+func twoTreeOptions(r *rig) produce.Options {
+	o := r.options()
+	o.TreeCount, o.Ahead = 6, 4
+	return o
+}
+
+// Two recovered trees are held, in the order they were signed, and one
+// command spends the current tree to its end, then the first held tree,
+// then the second: each adopted once, at its switch, from output 0, and no
+// funding output spent twice. Nothing is minted while a tree is held.
+func TestTwoRecoveredTreesAreHeldAndSpentInOrderWithinOneCommand(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	ctx := context.Background()
+	o := twoTreeOptions(r)
+	first, second, spent := r.twoTreesOnChain(o)
+	current := r.state().Tree.Txid
+
+	e := r.engine(o)
+	if err := e.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(r.notes.String(), "is recovered and waits for the switch"); n != 2 {
+		t.Fatalf("%d tree(s) held:\n%s", n, r.notes)
+	}
+	st := r.state()
+	if len(st.Ahead) != 2 || st.Ahead[0].Txid != first || st.Ahead[1].Txid != second || len(st.PendingTrees) != 2 || st.Tree.Txid != current {
+		t.Fatalf("after the start: ahead %v, records %v", aheads(st), records(st))
+	}
+	sent := r.chain.Sent
+	for range 3 {
+		r.publish(e, spent)
+	}
+	r.trees([]string{current}, []uint32{6})
+	// The switch to the first held tree: the second keeps its place.
+	r.publish(e, spent)
+	r.trees([]string{current, first}, []uint32{6, 1})
+	st = r.state()
+	if len(st.PendingTrees) != 1 || st.PendingTrees[0].Tree.Txid != second || len(st.Ahead) != 1 || st.Ahead[0].Txid != second {
+		t.Fatalf("after the first switch: records %v, ahead %v", records(st), aheads(st))
+	}
+	for range 5 {
+		r.publish(e, spent)
+	}
+	r.trees([]string{current, first}, []uint32{6, 6})
+	// The switch to the second.
+	r.publish(e, spent)
+	r.trees([]string{current, first, second}, []uint32{6, 6, 1})
+	if err := e.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	st = r.state()
+	if len(st.PendingTrees) != 0 || len(st.Ahead) != 0 || st.Seq != 13 || len(spent) != 13 {
+		t.Fatalf("at the end: records %v, ahead %v, seq %d, %d outputs spent", records(st), aheads(st), st.Seq, len(spent))
+	}
+	if r.chain.Sent != sent {
+		t.Fatalf("%d transaction(s) were sent while trees were held", r.chain.Sent-sent)
+	}
+	producer, _ := hex.DecodeString(st.Identity)
+	for seq := uint64(1); seq <= st.Seq; seq++ {
+		if !r.host.Holds(producer, r.stream, seq) {
+			t.Fatalf("the host does not hold seq %d", seq)
+		}
+	}
+	for _, id := range []string{first, second} {
+		if !r.host.HoldsTree(id) {
+			t.Fatalf("the host does not hold the tree %s", id)
+		}
+	}
+}
+
+// The same across commands: one command switches to the first held tree
+// and ends, and the next holds the second again, and only the second, and
+// goes on from where the first tree was spent to.
+func TestTwoRecoveredTreesAreHeldAndSpentInOrderAcrossCommands(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	ctx := context.Background()
+	o := twoTreeOptions(r)
+	first, second, spent := r.twoTreesOnChain(o)
+	current := r.state().Tree.Txid
+
+	// The first command: to the end of the current tree, and one output of
+	// the first held tree.
+	e := r.engine(o)
+	if err := e.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for range 4 {
+		r.publish(e, spent)
+	}
+	if err := e.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	r.trees([]string{current, first}, []uint32{6, 1})
+	st := r.state()
+	if len(st.PendingTrees) != 1 || st.PendingTrees[0].Tree.Txid != second || len(st.Ahead) != 1 || st.Ahead[0].Txid != second {
+		t.Fatalf("after the first command: records %v, ahead %v", records(st), aheads(st))
+	}
+
+	// The second: the tree in use is not held again, the second one is.
+	r.notes.Reset()
+	e = r.engine(o)
+	if err := e.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(r.notes.String(), first) || !strings.Contains(r.notes.String(), "batch funding tree "+second+", minted ahead by an earlier run, waits for the switch") {
+		t.Fatalf("the second command's start:\n%s", r.notes)
+	}
+	r.trees([]string{current, first}, []uint32{6, 1})
+	for range 2 {
+		r.publish(e, spent)
+	}
+	if err := e.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	r.trees([]string{current, first}, []uint32{6, 3})
+
+	// The third: to the end of the first tree and into the second.
+	e = r.engine(o)
+	if err := e.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		r.publish(e, spent)
+	}
+	r.trees([]string{current, first}, []uint32{6, 6})
+	r.publish(e, spent)
+	if err := e.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	r.trees([]string{current, first, second}, []uint32{6, 6, 1})
+	if st = r.state(); len(st.PendingTrees) != 0 || len(st.Ahead) != 0 || st.Seq != 13 || len(spent) != 13 {
+		t.Fatalf("at the end: records %v, ahead %v, seq %d, %d outputs spent", records(st), aheads(st), st.Seq, len(spent))
+	}
+
+	// The fourth holds nothing and spends the next output of the second.
+	r.notes.Reset()
+	e = r.engine(o)
+	if err := e.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(r.notes.String(), "funding tree") {
+		t.Fatalf("a start with nothing to settle:\n%s", r.notes)
+	}
+	r.publish(e, spent)
+	r.trees([]string{current, first, second}, []uint32{6, 6, 2})
 }
