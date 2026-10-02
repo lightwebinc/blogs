@@ -83,7 +83,7 @@ the host's own `@bsv/sdk`.
 | `blogsModule(host, streams, overlayTopics?)` | the same, from a parsed configuration |
 | `parseStreams(raw)` | parses `BLOGS_STREAMS` |
 | `LogTopicManager` | one stream's topic manager |
-| `LogLookupService` | `ls_log`, with `restore`, `report(stream?)` and `batchStatusOf(producer, stream, txid)` |
+| `LogLookupService` | `ls_log`, with `restore`, `report(stream?)`, `batchStatusOf(producer, stream, txid)` and `treeCount` |
 | `Unrecorded` | the error a topic manager raises for a refusal the engine must not record |
 | `parseQuery(query)` | the question rules of spec section 7.2 |
 
@@ -105,14 +105,26 @@ admission FAILED` and counts it in `overlay_host_topic_failures_total`.
 For an anchor that arrived before its predecessor this is expected and
 clears when the anchor is offered again; one that keeps recurring is an
 archive missing a predecessor or a funding tree, which it fetches from a
-sibling by the interval class.
+sibling by the interval class and the tree class.
 
 ## Questions and statuses
 
 `ls_log` answers `{stream, producer, seq}` with the unretracted batch
 carriers at that seq, and `{stream, producer, interval}` with the anchor
-tokens of that interval, canonical first; at most 8 of either. Any other
-query is an error.
+tokens of that interval, canonical first; at most 8 of either. It answers
+`{stream, tree}` with the mined funding tree of that txid, as one output
+(the lowest funding output the topic holds), whose BEEF is the tree with
+its proof. Any other query is an error.
+
+The tree class is what keeps an audit independent of a node's retention.
+The topic manager retains every output a transaction spends, so a funding
+output stays in storage, marked spent, with its transaction and proof, and
+a tree is answered after its last output is spent, when a pruning node no
+longer has it. Nothing new is stored for it: a host that admitted a tree
+before it ran a module with this class serves that tree once the module is
+replaced and the host restarted. Storage that has lost a tree's rows or
+its transaction answers empty, and an auditor reports the audit incomplete,
+naming the tree. Do not prune `tm_log_` topics' spent outputs.
 
 Statuses are never in an answer. `report()` gives, per producer and stream,
 the holes (`gap`), the seqs with a `fork`, the retracted seqs, each interval
@@ -144,6 +156,7 @@ Every counter is preset at start.
 | `blogs_retractions_total` | counter | batches retracted by a mined spend of their funding output |
 | `blogs_candidates_dropped_total`, `blogs_tokens_dropped_total` | counter | fork candidates and tokens over the cap of 8 |
 | `blogs_streams`, `blogs_batches`, `blogs_anchor_tokens`, `blogs_retracted_batches` | gauge | what the index holds |
+| `blogs_funding_trees` | gauge | mined transactions (funding trees, and sweeps by their tombstones) the tree class answers |
 | `blogs_missing_positions` | gauge | seqs below each stream's highest that nothing holds |
 | `blogs_fork_positions` | gauge | seqs holding more than one candidate |
 
@@ -152,7 +165,7 @@ Every counter is preset at start.
 - GASP catch-up between hosts carries unspent outputs; an anchor token
   reaches a host that way only if the host already holds what it spends.
   The interval class is the catch-up path for anchors.
-- No lookup class serves a sweep. A host receives one from the plane, from
+- No lookup class names the sweep of a batch. A host receives one from the plane, from
   a producer that names it in `hosts`, or from `blogs backfill -sweeps`;
   until then it keeps serving the batches the sweep retracted.
 - The index is in memory and restore reads every unspent output of the

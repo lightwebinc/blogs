@@ -40,7 +40,7 @@ command goes on.
 | Archive recheck (`-recheck`, stored seqs asked about again per pass) | 1024 | 65536; `-recheck-all` for every one | Each is a lookup; asking about every stored seq on every pass does not scale. The pass continues after the last seq it asked about, oldest first | Same |
 | Seqs per read | until no host holds the next | 65536 | Each seq is a lookup and a proof check; a longer read stops and names the `-from` to continue with | Same |
 | Backfill range (`-seqs`) | none | 65536 | One interval's worth of positions per run; `-interval K` is bounded by the interval | Same |
-| Lookup answer | 8 candidates per seq, 8 tokens per interval | 8 (a reader keeps at most 8) | Bounds a host's storage, its answers, and a reader's root search. Stated in the specification, and listed as not frozen: a later version may raise it | Same |
+| Lookup answer | 8 candidates per seq, 8 tokens per interval, 1 output for a funding tree | 8 (a reader keeps at most 8); a tree is one output | Bounds a host's storage, its answers, and a reader's root search. Stated in the specification, and listed as not frozen: a later version may raise it | Same |
 | Digest-only content (`-content-dir`) | kept until removed | 16777216 per file | The located bound; warns when the directory's file system has under 1 GiB free, since every batch's content is written there | Content never rides the plane |
 
 ## Where the numbers come from
@@ -107,7 +107,8 @@ Nothing here needed one. These would, and are not made:
   spent this carrier's funding output" would let any backfill carry sweeps
   without a spend source. The question classes are signed
   ([frozen.md](frozen.md) section 6), so it would be a new, separately
-  named class.
+  named class, added as the tree class was (a funding tree by its txid,
+  which serves audits but names no spender).
 - **A smaller carried-content bound for the plane.** The 256 KiB floor is
   what every reader accepts, and a floor is never lowered. The plane default
   is producer policy for that reason.

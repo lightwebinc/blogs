@@ -80,9 +80,10 @@ The object is **published** once at least `quorum` hosts took it. Then:
 - **A funding tree** is recorded before it is sent. Below the quorum the run
   stops. A host that misses a batch tree needs nothing: each carrier's BEEF
   carries the tree it spends. A host that misses an anchor fee tree is
-  given it by `backfill` (from `asset` or `tx_source`) before the anchor.
+  given it by `backfill` (from a sibling, by the tree class, or failing
+  that from `asset` or `tx_source`) before the anchor.
 - **A sweep** (a retraction or a retirement) needs every host, whatever the
-  quorum, because no lookup class serves a sweep: a backfill of batches
+  quorum, because no lookup class names the sweep of a batch: a backfill of batches
   cannot carry one, and only `backfill -sweeps`, which finds the mined spend
   of each held batch's funding output, can give it to a host later. Below
   all hosts, `sweep` stops with the sweep mined and persisted, and the next

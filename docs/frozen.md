@@ -10,6 +10,14 @@ section 1 belong in bcommon's registry (`docs/registry.md`), where they are
 checked against every registered row; this repository does not edit that
 registry.
 
+A signed row is never edited; the contract grows only by addition. The
+tree class of section 6 and the funding-tree retention row of section 2 are
+such additions, signed: no record, no script, and no question a reader
+could ask before them is read or answered differently. A reader that asks
+the tree class of a host that predates it is refused with an error, as for
+any question the host does not define, and falls back to another source
+(spec section 13).
+
 ## 1. Registry entries
 
 | Kind | Value | Use | Status |
@@ -45,12 +53,14 @@ Type bytes `0x03` to `0xff` under `bl` and record letters other than `b` and
 | Canonical chain | interval 1: the first mined token (block height, then position); interval `k > 1`: the token that spends the canonical `k - 1` token | signed |
 | Publication | funding trees, anchor tokens and sweeps are published to the object leg once, after they mine; carriers spend only mined trees | signed |
 | Retraction | only a mined spend of a carrier's funding outpoint by another transaction retracts it | signed |
+| Funding-tree retention | a host keeps every funding output it admitted, spent or unspent, with its transaction and the proof it was admitted with, and answers that transaction by txid (the tree class); spending never deletes it | signed |
 | Commitment | `C = txid(K)` in hash byte order | signed |
 | CBOR | RFC 8949 section 4.2.1 core deterministic encoding, bcommon's subset, enforced on decode | signed |
 | Admission | depends only on the object (the transaction and its BEEF, against the host's headers and producer policy), never on other objects held or arrival order, except that an anchor token's spent outputs are the topic's previous coins; a `seq`/`prev` link break between batches is a reported status (`gap`, `fork`), never a refusal | signed |
 
 The carrier shape, script canonicality, signature and anchor token rows are
-exercised by the transaction vectors (spec section 16).
+exercised by the transaction vectors, and the question rows of section 6 by
+the question vectors (spec section 16).
 
 ## 3. The batch record (magic `blb` `0x01`)
 
@@ -93,8 +103,9 @@ exercised by the transaction vectors (spec section 16).
 | --- | --- |
 | Stream identifier `<name>_<suffix>`, 12 to 43 bytes: `<name>` 1 to 32 bytes of `[a-z]` and single underscores, starting and ending with a letter; `<suffix>` exactly 10 letters `a` to `z`, drawn uniformly at random once at the stream's creation and fixed for its life; the topic `tm_log_<name>_<suffix>` is then at most 50 characters | signed |
 | The full identifier is what records, lookup questions and topics carry; the readable part alone never identifies a stream | signed |
-| Lookup classes, both free on every conforming host: `{stream, producer, seq}` and `{stream, producer, interval}` | signed |
-| Query member names `stream`, `producer`, `seq`, `interval`; validated as parsed: `stream` the full identifier; producer 66 lowercase hex meeting the key rule; `seq` and `interval` numbers whose double value is an integer from 1 to 2^53 - 1 | signed |
+| Lookup classes, all free on every conforming host: `{stream, producer, seq}`, `{stream, producer, interval}` and `{stream, tree}` | signed |
+| Query member names `stream`, `producer`, `seq`, `interval`, `tree`; validated as parsed: `stream` the full identifier; producer 66 lowercase hex meeting the key rule; `seq` and `interval` numbers whose double value is an integer from 1 to 2^53 - 1; `tree` a txid as displayed, exactly 64 lowercase hex characters | signed |
+| The tree class `{stream, tree}` carries exactly those two members and answers the mined transaction with that txid whose funding outputs the stream's topic holds, spent or unspent, as exactly one output, the lowest-numbered funding output held; its BEEF is the transaction with its proof. A reader holds the answer to the txid it asked for and the proof to its own headers | signed |
 | An unknown or missing query member is refused, never ignored; a priced class is never a superset of a free one | signed |
 
 ## 7. Bounds that are a floor
@@ -116,6 +127,9 @@ accepts.
   the spec requires it.)
 - The cap of 8 fork candidates per `seq` and 8 anchors per interval, which
   a later version may raise.
+- Where a reader looks for a funding tree first (a carrier's BEEF, an
+  archive's files, a host, a copy of the chain): any source is held to the
+  txid.
 - The lookup service's answer order.
 - Anything the spec marks as a host's or a producer's choice.
 - The limits of [limits.md](limits.md): batch sizes, rates, anchor

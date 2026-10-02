@@ -48,10 +48,10 @@ variables.
 | `anchor <stream>` | yes | as `produce` | publishes a persisted carrier, anchors every published batch, waits |
 | `doctor` | optional | nothing | the home's state and whether the node, headers, facade and hosts answer; reads only |
 | `read <stream> <producer>` | no | `hosts`, `header_url` | verifies and prints a stream's batches |
-| `verify-interval <stream> <producer> <n>` | no | `hosts`, `header_url`; `asset` or `tx_source` for fee trees | the auditor's check of interval n |
+| `verify-interval <stream> <producer> <n>` | no | `header_url`, and `hosts` or `-archive DIR`; `asset` or `tx_source` only for a fee tree no host serves | the auditor's check of interval n |
 | `sweep <stream>` | yes | as `produce`; `hosts` for `-retract-seqs`, and to reach hosts off the plane | retracts batches by sweeping their funding outputs, or retires unused funding outputs to the pool |
-| `backfill <stream> <producer>` | no | `-from` and `-to`, or two or more `hosts`; `asset` or `tx_source` for fee trees and for `-sweeps` | fills a host's holes from its siblings, or brings every configured host into step; `-sweeps` also carries sweeps |
-| `archive <stream> <producer>` | no | `-dir`, a host, `header_url`, `asset` or `tx_source` | keeps one host's copy of a stream, with each interval's proof, in local files |
+| `backfill <stream> <producer>` | no | `-from` and `-to`, or two or more `hosts`; `asset` or `tx_source` for `-sweeps`, and for a fee tree no sibling serves | fills a host's holes from its siblings, or brings every configured host into step; `-sweeps` also carries sweeps |
+| `archive <stream> <producer>` | no | `-dir`, a host, `header_url`; `asset` or `tx_source` to find retractions, and for a fee tree the host does not serve | keeps one host's copy of a stream, with each interval's proof and each anchor's fee tree, in local files |
 | `version` | no | nothing | prints the version |
 
 `<stream>` is always the full identifier `<name>_<suffix>`; the readable
@@ -84,7 +84,7 @@ define, a key given twice, or a line without `=` is an error, never ignored.
 | `rpc_pass`, `rpc_user` | `bitcoin` | the node's basic auth, also for `settle = rpc:` |
 | `settle` | none | the settlement leg: `tcp:<host:port>` (bare EF to an ingress), `rpc:<url>` (a node's `sendrawtransaction`) or `arcade:<url>` |
 | `timeout` | `15s` | bounds each request; `1s` to `5m` |
-| `tx_source` | none | `woc:main` or `woc:test`: where a reader with no node (`asset` unset) reads the funding trees an anchor spends, and `fund -txid` reads a payment. Its answers are held to the txid and, with a proof, to the header source |
+| `tx_source` | none | `woc:main` or `woc:test`: where a reader with no node (`asset` unset) reads a funding tree no host serves and the spender of a funding output, and `fund -txid` reads a payment. Its answers are held to the txid and, with a proof, to the header source |
 
 Every limit on these settings and on the flags below, with its reason, is in
 [limits.md](limits.md). A hard cap is refused with exit 2 and a message
@@ -325,10 +325,17 @@ The auditor's check of specification section 13, needing no producer home:
    and verify each carrier;
 3. hold every token to the anchor rules of section 8.1, reading the outputs
    its inputs spend from the predecessor token, from the funding trees the
-   interval's carriers carry, or from `asset`. An anchor pays its fee from
-   an anchor fee tree, which no carrier carries and no lookup class serves,
-   so an auditor gives `asset` (any node's asset API) or, with no node,
-   `tx_source` (a public service; its answer is held to the txid);
+   interval's carriers carry, or from the funding tree itself. An anchor
+   pays its fee from an anchor fee tree, which no carrier carries, so the
+   auditor asks the hosts for it by its txid (the tree class,
+   `{stream, tree}`). A host answers the tree with its proof however long
+   ago its outputs were spent, so the audit does not depend on a node that
+   prunes spent transactions. The tree must hash to the txid the anchor's
+   input names, and its proof must hold against `header_url`; an answer
+   that fails either is refused and the next host is asked. Only when no
+   host serves the tree is `asset` (a node's asset API) or `tx_source` (a
+   public service) asked, its answer held to the txid. `-v` prints
+   `interval K: funding tree T from <source>` for each tree fetched;
 4. require the RFC 6962 root over the batches' commitments, choosing among
    fork candidates by `prev` and trying each at the last `seq`, to equal the
    token's root. A `seq` no host serves takes its commitment from the next
@@ -362,8 +369,24 @@ undelivered.
 means evidence was not found: no host answered an interval, a `seq`
 whose commitment nothing names was answered by no host (the interval's
 last `seq`, or the first of two in a row), or an input's funding tree was
-unobtainable. With `-v`, answers refused along
+served by nothing asked. The reason then names the tree and what each
+source did, for example
+`interval 1: input 0 spends T:0, a funding tree nothing asked serves: URL
+holds no such tree; the node URL did not answer (...)`: a host that
+predates the tree class `did not answer the tree class`, one that never
+received the tree `holds no such tree`, and one whose answer failed a check
+`answered something refused`. With `-v`, answers refused along
 the way are listed on stderr.
+
+`-archive DIR` adds an archive directory (`blogs archive -dir DIR`) as a
+source asked before the hosts. Its stored tokens, carriers and funding
+trees are checked exactly as a host's answers are, so a file that was
+altered is refused, not believed. With `-archive` and no host configured,
+the audit runs from the files and the header source alone:
+
+```console
+$ blogs -header-url woc:main verify-interval app_qzxkvbmwtr 02c0ffee... 12 -archive /srv/blogs-archive
+```
 
 ## Backfill
 
@@ -386,10 +409,12 @@ is how a unicast producer's hosts are repaired ([unicast.md](unicast.md)).
 `-interval K` fills the anchor chain 1 to K, in order, and every `seq`
 interval K covers; `-seqs A-B` a range of seqs (at most 65536); `-anchors
 K` the anchor chain alone; `-seqs` and `-anchors` combine. A host admits an
-anchor only once it holds the fee outputs the anchor spends, and no lookup
-class serves a funding tree, so when a host does not admit a token,
-`backfill` reads the funding trees its inputs spend from `asset` (or
-`tx_source`), with their proofs, submits them, and offers the token again.
+anchor only once it holds the fee outputs the anchor spends, so when a host
+does not admit a token, `backfill` asks the siblings for the funding trees
+its inputs spend by txid (the tree class), reads one from `asset` (or
+`tx_source`) only when no sibling serves it, submits each with its proof
+(`interval K: funding tree T submitted from <source>`), and offers the
+token again.
 One line per position (`held`, `filled from the sibling URL`, `MISSING`,
 `REFUSED`), then a count per host filled:
 `backfill S to URL: H held, F filled, M missing, R refused, U unserved, W
@@ -401,15 +426,15 @@ missing and does not fail the run (the interval is proven across it, as
 `verify-interval` and `archive` do). A host that cannot be asked is
 reported and the others are still filled.
 
-No lookup class serves a sweep, so a host that missed one keeps serving the
-batches it retracted, and a backfill of batches cannot tell. `-sweeps`
+No lookup class names the sweep of a batch, so a host that missed one keeps
+serving the batches it retracted, and a backfill of batches cannot tell. `-sweeps`
 carries them: for every `seq` the host holds, each carrier it serves is
 checked for a mined spend of its funding output by another transaction
 (named by `asset` or `tx_source` and checked against `header_url`, as an
 archive checks), and a sweep found is submitted to the host, which then
 stops serving the batch. It costs one spend read per held carrier, so it is
 asked for, not done by default; a backfill without it ends with
-`note: backfill carried batches and anchors, not sweeps: ...`.
+`note: backfill carried batches, anchors and their fee trees, not sweeps: ...`.
 
 ## Sweeping
 
@@ -458,8 +483,8 @@ settled and the swept outputs are marked used, so no later carrier or
 anchor spends them; the run then settles it, waits up to `-wait` (default
 `10m`) for it to mine, pools its change and publishes it.
 
-Where a sweep goes. No lookup class serves a sweep, so a host receives one
-only when it is submitted to it. In mode plane a sweep goes to `facade`,
+Where a sweep goes. No lookup class names the sweep of a batch, so a host
+receives one only when it is submitted to it. In mode plane a sweep goes to `facade`,
 which the plane carries to every subscribed host, and directly to every
 other host in `hosts`, so a host off the plane receives it too; with no
 other host configured, the run says the sweep went to the facade only. In
@@ -484,9 +509,15 @@ every `seq` from where the last pass stopped until the host holds nothing,
 checks each carrier as `read` does (the carrier rules, this producer, the
 `seq`, SPV through its funding parent against `header_url`) and stores it;
 then it walks the interval class from the last interval proven, keeps each
-canonical anchor token (held to the anchor rules, its fee tree read from
-`asset` or `tx_source`), fetches any `seq` the interval covers that is not yet stored, and
-writes the interval's proof. `-follow` repeats the pass every `-poll`.
+canonical anchor token (held to the anchor rules, its fee tree asked of the
+host by txid and read from `asset` or `tx_source` only when the host does
+not serve it), fetches any `seq` the interval covers that is not yet stored,
+writes the interval's proof, and keeps the fee tree with its proof under
+`trees/` (`kept N funding tree(s) with their proofs in trees/`). A node
+that prunes spent transactions stops serving a fee tree once its last
+output is spent; the archive's copy, like the host's, does not depend on
+it. An archive begun before trees were kept catches up on its next pass,
+and says `a funding tree is not kept yet: ...` while nothing serves one. `-follow` repeats the pass every `-poll`.
 `-content-dir` and `-allow-host` find digest-only content as for `read`.
 
 Each pass first asks the host again about the seqs it has stored, at most
@@ -513,7 +544,7 @@ The layout, under `DIR/<stream>/<producer>/`:
 
 | Path | What |
 | --- | --- |
-| `archive.json` | the cursor: the next `seq` to walk to, the last interval proven, the hosts followed, and `rechecked`, the last stored `seq` asked about again |
+| `archive.json` | the cursor: the next `seq` to walk to, the last interval proven, the hosts followed, `rechecked`, the last stored `seq` asked about again, and `trees`, the last interval whose fee trees are kept |
 | `batches/<seq>-<carrier>.beef` | each verified carrier's BEEF as the host answered it; it carries the funding tree the carrier spends and the tree's proof |
 | `batches/<seq>-<carrier>.json` | what was read from it: `seq`, `prev`, `timestamp`, `count`, `encoding`, `profile`, `size`, the funding outpoint, the host, and `content` (`ok`, `pending`, `unsupported`, `invalid`) |
 | `content/<seq>-<carrier>.log` | the decoded lines, as the producer wrote them (not filtered for a terminal), when the content was read |
@@ -521,6 +552,7 @@ The layout, under `DIR/<stream>/<producer>/`:
 | `intervals/<interval>.json` | the interval's proof: `token`, `vout`, `height`, `position` in its block, `prevToken`, `first`, `count`, `root`, `status`, `holes`, `retracted`, and per `seq` its `commitment`, whether its bytes are `held` or it is held as a `retracted` receipt, and its RFC 6962 inclusion `path` (leaf to root, each step the sibling's hash in hex, `L:` before a left sibling) |
 | `retracted/<seq>-<carrier>.json` | the receipt of a stored batch found retracted: what its batch file held (with `content` now `dropped`), its `commitment`, and the `sweep` txid and `sweepHeight` |
 | `retracted/<seq>-<carrier>.sweep.beef` | that sweep's BEEF, with its proof: the evidence of the retraction |
+| `trees/<txid>.beef` | each funding tree an anchor token spends (its fee tree), as BEEF with its proof, kept when the anchor is first proven. With these the directory is a complete source for `verify-interval -archive` |
 
 `<seq>` and `<interval>` are 16 decimal digits, zero padded; `<carrier>`
 and `<token>` are txids. Files are written atomically and never rewritten,

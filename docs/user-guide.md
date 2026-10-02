@@ -176,8 +176,12 @@ the position, not the cause. An archive, which looks on chain for the sweep,
 is what says `retracted` (section 8). A backfill fills the undelivered kind
 (section 10).
 
-An anchor pays its fee from a funding tree no question serves, so an
-auditor also needs `asset` (a node) or `tx_source = woc:main`.
+An anchor pays its fee from a funding tree, which the audit also checks.
+The hosts serve it by its txid, with its proof, for as long as they keep
+the stream, so an auditor needs nothing but the hosts and a header source:
+a node that has pruned the spent tree does not matter. `asset` (a node) or
+`tx_source = woc:main` is asked only if no host serves a tree. When nothing
+does, the audit is `INCOMPLETE` and names the tree and each source asked.
 
 ## 8. Archiving
 
@@ -187,8 +191,12 @@ $ blogs archive app_qzxkvbmwtr 02c0ffee... -dir /srv/blogs-archive -follow -poll
 ```
 
 An archive keeps one host's copy of a stream in local files: every verified
-batch, every canonical anchor, and for each interval a proof file with
-every `seq`'s commitment and inclusion path. It ends with
+batch, every canonical anchor with the fee tree it spends (under `trees/`,
+with its proof), and for each interval a proof file with
+every `seq`'s commitment and inclusion path. With the trees kept, the
+directory can be audited on its own, with no host:
+`blogs verify-interval <stream> <producer> <n> -archive DIR` checks the
+files against the header source exactly as it checks a host's answers. It ends with
 `latest interval K root R token T`, so two archives are compared by that
 line, and an interval file can be checked with no network at all.
 
@@ -311,6 +319,7 @@ Common messages:
 | `REFUSED interval N: root-mismatch ...` | 1 | The producer anchored batches it did not publish, or a host answered other batches. Try another host; if every host agrees, the producer's anchor is wrong |
 | `seq N: BROKEN LINK: ...`, `seq N: FORK: ...` | 1 | A host answered a batch that does not continue the stream, or the producer signed two batches for one `seq` |
 | `INCOMPLETE interval N: no host answered ...` | 3 | No host you asked holds that interval yet: wait for delivery, ask another host, or backfill |
+| `INCOMPLETE interval N: ... a funding tree nothing asked serves: ...` | 3 | No source served the fee tree an anchor spends; the line says what each did. A host that `did not answer the tree class` runs an older module, and one that `holds no such tree` never received it: ask another host, add `-archive DIR`, or `backfill -anchors` the host from a sibling that has it |
 | `INCOMPLETE interval N: ... cannot be recovered from the next batch's prev` | 3 | The interval's last batch is served by no host (retracted, or not delivered). An archive that stored it, or its receipt, still proves the interval |
 | `seq N: MISSING: no host holds it` | 3 | A hole: not delivered, or retracted. `backfill` fills the first kind |
 | `unserved seqs N: ...` before `VERIFIED` | 0 | The interval is proven; those positions are empty at every host asked. An archive tells a retraction from a loss |

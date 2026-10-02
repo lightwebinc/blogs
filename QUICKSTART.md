@@ -154,9 +154,9 @@ The same commands, with the local stand-ins replaced:
 | Node (`asset`) | the local chain | a node's asset API. The producer asks it whether its funding trees and anchors have mined, and no public service offers it, so **a producer on the real network needs access to a node** |
 | Coin | mined locally | real BSV: pay the fund address `init` printed from any wallet, then `blogs fund -txid <txid>` once it has one confirmation |
 
-Readers and auditors need no node and no coin: a header source, the hosts,
-and `tx_source = woc:main` so an auditor can read the fee trees anchors
-spend.
+Readers and auditors need no node and no coin: a header source and the
+hosts, which also serve the fee trees anchors spend. `tx_source = woc:main`
+is a fallback for a fee tree no host serves.
 
 ```console
 $ blogs -header-url woc:main -tx-source woc:main -hosts https://logs.example.com \

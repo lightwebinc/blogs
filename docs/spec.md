@@ -365,8 +365,9 @@ only the unused outputs; that retracts nothing.
 
 Retraction removes bytes, not positions: section 8.4.
 
-A host learns of a sweep only by receiving it: no question class serves one
-(section 7.2), so no lookup and no backfill of batches carries it. On the
+A host learns of a sweep only by receiving it: no question class names the
+transaction that spent a funding output (section 7.2), so no lookup finds
+a sweep for a host that lacks it and no backfill of batches carries it. On the
 plane every subscribed host receives it from the plane; a host off the plane
 receives it only when it is submitted to that host directly. A producer
 therefore also submits a sweep, after it mines, directly to every host it
@@ -418,13 +419,14 @@ it; producer policy (section 8.1) is what restricts who is admitted.
 ### 7.2 The lookup service `ls_log`
 
 One lookup service per host answers for every stream the host carries. It
-answers BRC-24 questions of exactly two classes, both free on every
+answers BRC-24 questions of exactly three classes, all free on every
 conforming host:
 
 | Class | Question (`query` object) | Answer (`output-list`) |
 | --- | --- | --- |
 | batch | `{"stream": s, "producer": p, "seq": n}` | the admitted, unretracted batch carriers of `p` on `s` at `seq = n`: normally one, at most 8 (section 8.2) |
 | interval | `{"stream": s, "producer": p, "interval": k}` | the admitted anchor tokens of `p` on `s` for interval `k`: normally one, at most 8 (section 8.3) |
+| tree | `{"stream": s, "tree": t}` | the mined transaction with txid `t` whose funding outputs the topic of `s` holds, spent or unspent: exactly one output, the lowest-numbered funding output held (section 8.1) |
 
 The query is validated as parsed, so hosts in any language reach the same
 verdict: a member given twice takes its last value, as JSON parsers do; `s`
@@ -432,22 +434,49 @@ is a string that meets the stream identifier grammar (section 7.1), the full
 `<name>_<suffix>`, so a readable part alone is refused; `p` is a string of 66 lowercase
 hex characters whose bytes meet the key rule (section 2); `n` and `k` are
 numbers whose value, as an IEEE 754 double, is an integer from 1 to
-2^53 - 1. A question MUST carry exactly the members of one class. A missing
+2^53 - 1; `t` is a string of exactly 64 lowercase hex characters, a txid as
+it is displayed. A question MUST carry exactly the members of one class. A missing
 member, a member no class defines, or a value that breaks these rules is
 refused with an error, never answered empty and never ignored: ignoring an
 extra member would let a priced question alias a free one. A class that is
 ever priced (a BRC-105 402 on the lookup route) MUST be a different question,
-never a superset of these two.
+never a superset of these three.
 
 The batch class is how an archive fills a hole from a sibling. The interval
 class is how an archive or an auditor checks completeness against the
-anchor. There is no class for "the newest batch", ranges, inclusion paths or
-search; those belong to a later archive contract. An empty answer means only
-that this host holds nothing that answers: a reader MUST NOT read it as proof
-that the batch or the interval does not exist.
+anchor. The tree class is how an auditor, an archive or a backfill obtains
+the funding tree an anchor's input spends (section 13): an anchor pays its
+fee from an anchor fee tree, which no carrier carries, and a copy of the
+chain that prunes spent transactions stops serving a tree once its last
+output is spent, which is exactly when every anchor it funded is mined. A
+host already holds every such tree, because a tree is published to the
+topic and admitted before the anchors that spend it (section 6.3), and it
+keeps every output it admitted (section 8.1); so the audit of a stream
+depends on the hosts and on block headers, never on how long a node keeps
+a transaction.
+
+The tree class names a transaction, not a producer: a funding output is not
+attributed to a producer at admission, and the txid is exact. The answer is
+one output because the engine hydrates an output as its whole transaction
+(below), so one is the whole tree; which output the anchor spends is the
+reader's to read from it. Any mined transaction whose funding outputs the
+topic holds answers, so a sweep answers by its own txid through its
+tombstone; that finds no sweep for a reader that does not already know its
+txid. A carrier's or an anchor token's txid answers nothing here: they are
+the batch and interval classes'.
+
+There is no class for "the newest batch", ranges, inclusion paths, search,
+or the transaction that spent an output; those belong to a later archive
+contract. An empty answer means only that this host holds nothing that
+answers: a reader MUST NOT read it as proof that the batch, the interval or
+the tree does not exist. A host that holds a tree's outputs without the
+transaction's bytes (storage that lost them) answers empty, as for a tree it
+never received.
 
 The engine hydrates each answered output as BEEF: the batch record is inside
-the carrier's BEEF, the anchor record inside the token's.
+the carrier's BEEF, the anchor record inside the token's, and a tree's BEEF
+is the tree's transaction with the proof it was admitted with. A reader
+trusts none of it: section 13 says what it checks.
 
 ## 8. The host
 
@@ -569,7 +598,10 @@ the topic holds is accepted for its inputs alone.
 manager lists every input that spends an output the topic holds as a coin to
 retain, so no admitted output is deleted when something spends it: anchor
 tokens stay answerable after the next interval spends them, and a funding
-output stays in storage marked spent. The lookup service does not rely on the
+output stays in storage marked spent, with its transaction and proof, so
+that the tree class answers a funding tree after every output of it is
+spent. A host MUST NOT delete an admitted funding output, or its
+transaction's bytes, because it was spent. The lookup service does not rely on the
 engine's spend notices; it reads each admitted transaction's inputs itself
 and persists, per outpoint, the set of transactions that spent it.
 
@@ -727,7 +759,11 @@ index from the topic's stored outputs and the spender sets it persisted:
 batches by `(producer, stream, seq)` and their statuses from the set
 (order-independent, section 8.2); retractions from mined spends of carrier
 funding outpoints; anchor tokens by interval, each interval's canonical
-anchor chosen by section 8.3's rule, whatever order storage returns them in.
+anchor chosen by section 8.3's rule, whatever order storage returns them in;
+and the funding outputs held, spent ones included, by their transaction,
+for the tree class. A spent output is reached from an unspent one through
+the spends storage records, so a tree whose outputs are all spent is found
+from the anchors and carriers that spent them.
 
 ## 9. Profiles
 
@@ -781,6 +817,7 @@ fail.
 | Anchor record, encoded | 1024 bytes | the fields need about 150 |
 | Batches per interval | 65536 | bounds a root recomputation |
 | Fork candidates kept and answered | 8 per `seq`, 8 anchor tokens per interval | bounds storage, answers and root searches |
+| Tree class answer | 1 output | one output's BEEF is the whole tree and its proof; the tree's size is the producer's (section 6.3) |
 | Carrier object on the plane | the plane operator's object bound (BRC-149) | a producer MUST check the carrier's BEEF (record, funding tree, proof or unproven ancestry) against it before publishing |
 
 A reader accepts every record within these bounds. A later version may raise
@@ -801,7 +838,7 @@ disables, bypasses or asks for an exception from repair, for any profile,
 stream, class or configuration. Without the plane (a producer that submits
 to each host itself, unicast) there is no network repair: the producer
 retries each host, and a host that still missed an object is filled from a
-sibling by the batch and interval classes, as an archive fills a hole
+sibling by the batch, interval and tree classes, as an archive fills a hole
 below.
 
 - **Producer.** Publishes each carrier once. It does not retransmit a batch
@@ -824,9 +861,13 @@ below.
   before its predecessor or its funding tree is refused (section 8.1 rule 7)
   without a record, and admitted when it is offered again once they are
   held: redelivered, or its predecessor fetched by the interval class from
-  a sibling. An anchor's fee tree is carried by no carrier and served by no
-  question class, so an archive that lacks it reads it, with its proof,
-  from a copy of the chain (a node), and submits it before the anchor. A hole that
+  a sibling. An anchor's fee tree is carried by no carrier, so an archive
+  that lacks it asks a sibling for it by the tree class, or failing that
+  reads it, with its proof, from a copy of the chain, and submits it
+  before the anchor. An archive that keeps files rather than an index
+  (section 8.4) stores each fee tree, with its proof, when it first
+  verifies the anchor that spends it, so that its copy of a stream can be
+  audited from the files and block headers alone. A hole that
   repair did not fill (the archive was down, or a loss outlived the repair
   window) is filled by the batch class from a sibling archive, without the
   producer. The anchor is what turns "probably everything" into a proof, and
@@ -853,16 +894,26 @@ below.
    so rule 7 reads each output the token's inputs spend from the transaction
    that created it: the predecessor token's transaction is the interval
    class's answer for `interval - 1`, which the walk has already fetched; a
-   funding output's transaction is a mined funding tree, which no question
-   class serves (a token's BEEF carries its own proof and no parents), so
-   the auditor takes it by its txid from a carrier's BEEF, which carries the
-   funding tree that carrier spends, or otherwise from any copy of the
-   chain; an anchor pays its fee from an anchor fee tree, which no carrier
-   spends, so that one always comes from a copy of the chain (a node, or a
-   public service answering raw transactions). It accepts the transaction
-   when its double SHA-256 is the txid the input names. No proof
-   of that transaction is needed: the token's proof shows the spend was
-   mined, and the txid binds the output it spent;
+   funding output's transaction is a mined funding tree (a token's BEEF
+   carries its own proof and no parents), which the auditor takes, by the
+   txid the input names, from a carrier's BEEF when a carrier it holds
+   spends the same tree, and otherwise by the tree class from any host,
+   from an archive's files, or, when none of those serves it, from a copy
+   of the chain (a node, or a public service answering raw transactions).
+   An anchor pays its fee from an anchor fee tree, which no carrier spends,
+   so that one comes by the tree class, and the audit does not depend on
+   how long any copy of the chain keeps a spent transaction. Whatever the
+   source, the auditor accepts the transaction only when its double
+   SHA-256 is the txid the input names, which binds the output it reads
+   to the output the token spent, and it reads the output at the index the
+   input names. A tree answered by a host or kept by an archive comes with
+   its proof, which the auditor checks against its own headers; an answer
+   with another transaction, with no proof, or with a proof its headers do
+   not hold is refused and the next source is asked. A tree from a copy of
+   the chain needs no proof of its own: the token's proof shows the spend
+   was mined, and the txid binds the output it spent. A tree no source
+   serves leaves the audit incomplete, naming the tree and each source
+   asked: nothing is proven either way;
 3. the interval's commitments: the auditor asks the batch class for every
    `seq` the anchor covers (or takes them from an archive's export, a later
    contract), recomputes the root, requires it to equal `root`, and so
@@ -907,7 +958,7 @@ so a verifier walking the anchors sees every `seq` of the stream covered once.
 | Unknown record keys preserved and ignored | BRC-174 section 3.2 (ignore fields not recognised; preserve them when reconstructing) | the same rule for CBOR keys; an unknown locator member makes the locator unsupported rather than being ignored, because it may change how the content is found |
 | Carrier ancestry and proofs | BRC-62 and BRC-95/96 BEEF; BRC-74 BUMP, guarded by bcommon `guard` | none |
 | Sibling backfill by lookup | BRC-24 | BRC-76 GASP remains available between hosts; the batch class is the targeted form |
-| Priced questions | BRC-105 | the seam is left open: both classes here are free, and a priced class must be a different question |
+| Priced questions | BRC-105 | the seam is left open: the three classes here are free, and a priced class must be a different question |
 | Objects on the plane | BRC-148 and BRC-149 (the object frame; the operator bounds the size) | none |
 
 No BRC defines a log batch, a log stream or an interval anchor for logs.
@@ -943,10 +994,17 @@ batches.
     interval across the position and reports it unserved; whether it was
     retracted is shown only by the mined spend of its funding output, which
     an archive checks (section 8.4).
-11. **No question class serves a sweep.** A host that was not subscribed
+11. **No question class finds a sweep.** No class names the transaction
+    that spent a funding output (the tree class answers a sweep only to a
+    reader that already knows its txid). A host that was not subscribed
     when a sweep was published, and was not sent it directly, keeps serving
     the batches it retracts until someone who finds the mined spend submits
     the sweep to it (section 6.4).
+12. **A tree no host kept.** The tree class answers what a host holds. A
+    stream all of whose hosts lost a fee tree, with no archive that kept it
+    and no copy of the chain that still serves it, has audits that stop,
+    incomplete, at the first anchor that tree funded; the anchors and
+    batches stay as they were.
 
 ## 16. Vectors
 
@@ -961,6 +1019,7 @@ them and compares byte for byte, and refuses a file nothing generates.
 | `anchor-v1.json`, `anchor-interval-*.hex` | two consecutive intervals (5 and 3 batches): commitments, leaves, root, every inclusion path, the record, the token's fields and the hash its signature covers |
 | `derivation-v1.json` | the registry values, the keys the fixed test key derives for `batch`, `anchor` and `fund` under counterparty `anyone` (the reader's derivation; the embedded wallet's funding key is derived under `self`, section 6.1, and is not this `fund` entry), and two stream identifiers with one readable part and different suffixes, split, with their topics |
 | `refusal-v1.json` | fifty-three byte strings the record decoder refuses, each with its reason (section 3.2) and what admission does with an output carrying it: refuse, or skip one that does not claim to be a record. Every one is decided by the record alone; a `seq`/`prev` link break is a status (section 8.2), never a refusal, so none is here |
+| `query-v1.json` | lookup questions as JSON text (section 7.2): seven accepted across the three classes, with what a host reads from each, and thirty refused (a missing or extra member, a member of another class, a value out of its rule) |
 | `transaction-v1.json` | fifty-four transactions, each as raw hex and as BEEF with the previous coins it is admitted with, and the block headers they are admitted against: three batch carriers, a carrier admitted under a closed producer policy, two anchor tokens, a funding tree mined and unmined, a sweep, a refusal for every rule of section 8.1 in its order, each with its reason, and carriers that break two rules to pin the order between them. Every refused transaction's own scripts still verify, so each is caught only by the topic manager's rules |
 
 The vectors' stream is `example_app_qzxkvbmwtr`; its suffix is a fixed
