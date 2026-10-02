@@ -263,6 +263,11 @@ func (e *Engine) record(tx *transaction.Transaction, kind string, info TreeInfo,
 			}
 		}
 	}
+	// A tree minted ahead whose outputs are swept is no longer one to switch
+	// to: without its record the next start does not hold it again.
+	if info.Kind == AheadTree {
+		st.DropPendingTree(info.Tree.Txid)
+	}
 	st.Sweeps = append(st.Sweeps, state.Sweep{Kind: kind, Tree: info.Tree.Txid, Vouts: vouts, Seqs: seqs,
 		Txid: tx.TxID().String(), RawHex: tx.Hex(), BeefHex: beef, Publish: publish})
 	if err := st.Save(); err != nil {

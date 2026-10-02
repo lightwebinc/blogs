@@ -484,6 +484,16 @@ func cmdDoctor(ctx context.Context, g *global, args []string) error {
 			if st.AnchorTree != nil {
 				fmt.Fprintf(out, "            anchor tree %s %d of %d left\n", st.AnchorTree.Txid, st.AnchorTree.Remaining(), st.AnchorTree.Count)
 			}
+			for _, p := range st.PendingTrees {
+				if st.MintedAhead(p.Tree.Txid) {
+					fmt.Fprintf(out, "            %s tree %s minted ahead; the next produce, anchor or sweep holds it for the switch\n", p.Kind, p.Tree.Txid)
+					continue
+				}
+				fmt.Fprintf(out, "            %s tree %s signed for coin %s and not adopted; the next produce, anchor or sweep asks the node what became of it\n", p.Kind, p.Tree.Txid, p.Coin.Outpoint())
+			}
+			for _, id := range st.Unpublished {
+				fmt.Fprintf(out, "            tree %s adopted and not confirmed published; the next produce, anchor or sweep publishes it\n", id)
+			}
 			if st.Tail != nil {
 				fmt.Fprintf(out, "            following %s at offset %d\n", st.Tail.Path, st.Tail.Offset)
 			}

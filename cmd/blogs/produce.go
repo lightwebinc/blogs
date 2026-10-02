@@ -35,7 +35,9 @@ collected by the next produce or anchor.
 
 A run persists each carrier before publishing it and republishes a carrier
 it finds persisted, so a restart continues the stream at the next seq and
-never builds two carriers for one.
+never builds two carriers for one. A funding tree an earlier run signed and
+did not adopt is settled first: the node is asked what became of it, and a
+tree on the chain and not yet mined is waited for, 10 minutes at most.
 
 Needs settle and asset, and where objects go: facade in mode plane, or
 hosts in mode unicast, where each host is sent every object, retried on
@@ -388,8 +390,9 @@ func screen(in <-chan produce.Line, drop bool) (<-chan produce.Line, *atomic.Int
 
 const anchorHelp = `usage: blogs anchor <stream> [-wait DUR]
 
-Publish a carrier a previous run persisted and may not have published,
-collect the anchor in flight, anchor every published batch not yet
+Settle a funding tree an earlier run signed and did not adopt, publish a
+carrier a previous run persisted and may not have published, collect the
+anchor in flight, anchor every published batch not yet
 anchored, and wait until the anchors are mined and published. Needs what
 produce needs.`
 

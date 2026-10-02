@@ -13,6 +13,11 @@
 // collects each anchor's proof, and the anchor is published once, after it
 // mines. Kept holds the one copy of every tree and anchor in use.
 //
+// Every tree is recorded with its fee coin before it reaches the settlement
+// leg (Trees.Prepare), and a run's start settles the records an earlier run
+// left (recover.go), so a run that stops between a tree's signing and its
+// adoption loses neither the coin nor the tree.
+//
 // The state file (package state) is written before every publish, so a
 // crash never makes the producer build a second carrier for a seq it may
 // already have published: the persisted carrier is published again instead.
@@ -23,6 +28,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/bsv-blockchain/go-sdk/chainhash"
@@ -171,10 +177,10 @@ func New(st *state.Stream, signer *bwallet.Signer, pool *bwallet.Pool, legs Legs
 	}
 	e.trees = &producer.Trees{Payer: e.payer, State: treeState{e, false}, Identity: signer.IdentityHex(),
 		Count: o.TreeCount, Sats: o.TreeSats, Funder: "pool", Lock: lock, Change: signer.FundScript,
-		Facade: legs.treeFacade("batch funding tree"), Topic: topic, Ahead: o.Ahead}
+		Facade: legs.treeFacade("batch funding tree"), Topic: topic, Ahead: o.Ahead, Prepare: e.prepareTree(BatchTree)}
 	e.anchorTrees = &producer.Trees{Payer: e.payer, State: treeState{e, true}, Identity: signer.IdentityHex(),
 		Count: o.AnchorTreeCount, Sats: o.AnchorTreeSats, Funder: "pool", Lock: lock, Change: signer.FundScript,
-		Facade: legs.treeFacade("anchor fee tree"), Topic: topic, Ahead: o.AnchorAhead}
+		Facade: legs.treeFacade("anchor fee tree"), Topic: topic, Ahead: o.AnchorAhead, Prepare: e.prepareTree(AnchorTree)}
 	e.collector = &producer.Collector{Proofs: producer.Proofs{Arcade: legs.Arcade, Asset: legs.Asset},
 		Kept: e.kept, Pool: pool, Save: st.Save, Note: e.note}
 	return e, nil
@@ -217,6 +223,9 @@ func (t treeState) Current() *funding.Tree {
 	return t.e.St.Tree
 }
 
+// Adopt makes tr the current tree of its kind. The same save drops the
+// record made when the tree was signed, and the tree's entry among those
+// minted ahead: from here on the tree lists hold it.
 func (t treeState) Adopt(tr funding.Tree) error {
 	st := t.e.St
 	if t.anchor {
@@ -226,6 +235,8 @@ func (t treeState) Adopt(tr funding.Tree) error {
 		st.Tree = &tr
 		st.Trees = append(st.Trees, tr)
 	}
+	st.DropPendingTree(tr.Txid)
+	st.Ahead = slices.DeleteFunc(st.Ahead, func(a funding.Tree) bool { return a.Txid == tr.Txid })
 	return st.Save()
 }
 
@@ -269,10 +280,19 @@ func FeeError(err error) error {
 	return err
 }
 
-// Start reads the chain tip for coinbase maturity and publishes the
-// carrier a previous run persisted and may not have published.
+// Start reads the chain tip for coinbase maturity, settles the funding
+// trees an earlier run signed and did not adopt, publishes the trees an
+// earlier run adopted and could not publish, and publishes the carrier a
+// previous run persisted and may not have published. Nothing is spent
+// before it returns.
 func (e *Engine) Start(ctx context.Context) error {
 	if err := e.tip(ctx); err != nil {
+		return err
+	}
+	if err := e.RecoverTrees(ctx); err != nil {
+		return err
+	}
+	if err := e.PublishTrees(ctx); err != nil {
 		return err
 	}
 	return e.Resume(ctx)
@@ -372,7 +392,7 @@ func (e *Engine) publishOne(ctx context.Context, b Batch, content []byte) error 
 	if err != nil {
 		return fmt.Errorf("seq %d: %w", rec.Seq, err)
 	}
-	tree, vout, err := e.trees.Spend(ctx, 1)
+	tree, vout, err := e.spend(ctx, e.trees, 1)
 	if err != nil {
 		return FeeError(fmt.Errorf("batch funding tree: %w", err))
 	}
@@ -443,27 +463,41 @@ func (e *Engine) publishCarrier(ctx context.Context, seq uint64, beef []byte, re
 		}
 		return nil
 	}
-	var err error
-	for i := 0; ; i++ {
-		var res publish.Result
+	var res publish.Result
+	interrupted, err := e.retry(ctx, fmt.Sprintf("seq %d", seq), func() (err error) {
 		res, err = e.Legs.Facade.Submit(ctx, e.topic, beef)
-		if err == nil {
-			if res.Duplicate && !resumed {
-				e.note("seq %d: the host admitted nothing: it holds this carrier already, or refused it", seq)
-			}
-			return nil
+		return err
+	})
+	if interrupted {
+		return err
+	}
+	if err != nil {
+		return fmt.Errorf("seq %d: publish: %w; the carrier is persisted and a later run publishes it", seq, err)
+	}
+	if res.Duplicate && !resumed {
+		e.note("seq %d: the host admitted nothing: it holds this carrier already, or refused it", seq)
+	}
+	return nil
+}
+
+// retry runs one publish to the facade until it succeeds, waiting Retries
+// between the tries, and returns the last failure. When ctx ends during a
+// wait it reports that, with ctx's error.
+func (e *Engine) retry(ctx context.Context, what string, try func() error) (interrupted bool, err error) {
+	for i := 0; ; i++ {
+		if err = try(); err == nil {
+			return false, nil
 		}
 		if i == len(Retries) || ctx.Err() != nil {
-			break
+			return false, err
 		}
-		e.note("seq %d: publish failed (%v); retrying", seq, err)
+		e.note("%s: publish failed (%v); retrying", what, err)
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return true, ctx.Err()
 		case <-time.After(Retries[i]):
 		}
 	}
-	return fmt.Errorf("seq %d: publish: %w; the carrier is persisted and a later run publishes it", seq, err)
 }
 
 // nothingAdmitted are the hosts that answered with nothing admitted: they
@@ -569,7 +603,7 @@ func (e *Engine) anchor(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	tree, vout, err := e.anchorTrees.Spend(ctx, 1)
+	tree, vout, err := e.spend(ctx, e.anchorTrees, 1)
 	if err != nil {
 		return FeeError(fmt.Errorf("anchor funding tree: %w", err))
 	}
@@ -683,14 +717,25 @@ func (e *Engine) advance(ctx context.Context) error {
 }
 
 // Close collects any tree still being minted ahead, so its change reaches
-// the pool, and records a tree minted ahead and never adopted in the
-// state's Ahead list, so a sweep finds it.
+// the pool, and records every tree that is settled and was never adopted
+// (minted ahead, or recovered while the current tree had outputs left) in
+// the state's Ahead list, so a sweep finds it. Such a tree keeps the record
+// made when it was signed, and the next run's start holds it again.
 func (e *Engine) Close(ctx context.Context) error {
 	for _, t := range []*producer.Trees{e.trees, e.anchorTrees} {
 		_ = t.Wait(ctx)
-		if p := t.Prepared(); p != nil {
-			e.St.Ahead = producer.Index(e.St.Ahead, p)
+		for _, h := range t.Held() {
+			e.keepAhead(h)
 		}
 	}
 	return e.St.Save()
+}
+
+// keepAhead records a settled tree that is not adopted among the trees
+// minted ahead, once. An entry already there is left as it is: a sweep may
+// have advanced its Next.
+func (e *Engine) keepAhead(t funding.Tree) {
+	if !e.St.MintedAhead(t.Txid) {
+		e.St.Ahead = append(e.St.Ahead, t)
+	}
 }

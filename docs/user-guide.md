@@ -120,6 +120,21 @@ the next `produce` or `anchor` publishes those same bytes first, so a
 restart never forks the stream. An interrupt publishes the batch being
 built and exits 0; the next run collects the anchor in flight.
 
+The same holds for a funding tree. If a run stops while it is minting one
+(a crash, a kill, the machine switched off), the next `produce`, `anchor`
+or `sweep` asks the node what became of the tree before it spends
+anything, and tells you: `funding tree ... is recovered` when the tree
+reached the chain (nothing is lost), or `... never reached the chain: its
+fee coin ... is unspent and back in the pool` when it did not. A tree that
+is on the chain and not yet mined is waited for, 10 minutes at most; after
+that the run goes on and the next one asks again. You have nothing to do;
+`blogs doctor` shows a tree still waiting to be asked about. A tree the
+hosts could not be given is published by the next run, first thing. The
+details are in [usage.md](usage.md), An interrupted funding tree. This
+covers trees paid from the home's own pool, which is how every producer
+pays; a tree funded through a BRC-100 wallet (bcommon's `Trees.Fund`) is
+not covered.
+
 **Keep the home.** The stream's state holds its head. A producer that lost
 it must not restart the stream, because it could not avoid reusing a
 `seq`; create a new stream instead.
@@ -314,6 +329,10 @@ Common messages:
 | `another blogs command is using the home ...` | 2 | One producer per home at a time; wait, or give the other stream its own home |
 | `batch funding tree: fee input: ... (run blogs fund)` | 2 | The coin pool is empty: `blogs fund` |
 | `seq N: publish: ...; the carrier is persisted and a later run publishes it` | 2 | The facade, or too few hosts, did not take it. Fix the endpoint and run `produce` or `anchor` again |
+| `funding tree TXID: ...; the tree is adopted and recorded as not published, and the next produce, anchor or sweep publishes it` | 2 | The facade, or too few hosts, did not take a new funding tree. Fix the endpoint and run `produce` or `anchor` again; no second tree is minted |
+| `... funding tree TXID was signed by a run that stopped before it adopted the tree: asking the node what became of it ...` | 0 | An earlier run stopped while minting a tree. The lines after it say what was found; nothing to do |
+| `funding tree TXID: what became of it could not be settled now (...)` | 0 | The node could not answer, or the tree has not mined yet. The run goes on, and the next one asks again |
+| `funding tree TXID: interrupted while asking what became of it ...` | 2 | The command was interrupted while it waited for the tree to mine. Run it again |
 | `sweep TXID: published to the facade, but not to every host directly: ...` | 2 | A host in `hosts` is down. Run `blogs sweep <stream>` again once it is back |
 | `... is over the limit of ...` | 2 | A setting past a hard cap; [limits.md](limits.md) says why |
 | `REFUSED interval N: root-mismatch ...` | 1 | The producer anchored batches it did not publish, or a host answered other batches. Try another host; if every host agrees, the producer's anchor is wrong |

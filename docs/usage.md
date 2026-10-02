@@ -144,8 +144,9 @@ tx_source  = woc:main
 
 A stream's state holds its head (`seq` and commitment), the carrier
 persisted before it is published, the commitments not yet anchored, the
-anchor chain's head and the anchor in flight, the funding trees, and the
-sweeps built from them. Losing it loses the head, and a producer that lost
+anchor chain's head and the anchor in flight, the funding trees, the trees
+signed and not adopted yet with the coin each spends, and the sweeps built
+from them. Losing it loses the head, and a producer that lost
 its head must not restart the stream (specification section 12): `produce`
 refuses a stream the home does not hold, and the answer is a new stream
 from `stream new`.
@@ -244,9 +245,11 @@ to the pool. Each batch costs about 50 satoshis at 1 satoshi per byte (its
 share of its tree's fee, and the satoshi it carries) and each anchor about
 600.
 
-A tree minted ahead that a run ends without using is recorded in the state;
-its change is back in the pool, its outputs are not spent by a carrier
-again, and `blogs sweep -retire` pays them back to the pool.
+A tree minted ahead that a run ends without using is recorded in the state,
+and its change is back in the pool. The next `produce`, `anchor` or `sweep`
+holds it again and switches to it when the current tree runs out, so its
+outputs are used. `blogs sweep -retire` pays them back to the pool instead,
+and a tree retired that way is not switched to.
 
 ### Restart and crash
 
@@ -262,6 +265,78 @@ again over the same batches. An interrupt (SIGINT, SIGTERM) publishes the
 batch being built and exits 0, as does an interrupt of `anchor` or of the
 final wait; the anchor in flight is collected next time. A final wait or
 `anchor -wait` that runs out exits 2.
+
+### An interrupted funding tree
+
+A funding tree's fee coin leaves the pool when the tree is signed, and the
+tree becomes the stream's own (is adopted) only once it has mined; a tree
+minted ahead is adopted later still, when the current tree runs out. So
+that a run stopping in between loses neither, the state records every tree
+with its kind (`batch` or `anchor`) and the coin it spends before the tree
+is sent (`pendingTrees`), and the save that adopts the tree drops the
+record. A tree that cannot be recorded is not sent, and its coin stays in
+the pool.
+
+A run that stopped in between (a crash, a kill, a machine switched off)
+leaves the record, and `doctor` names it: `batch tree ... signed for coin
+... and not adopted`. The next `produce`, `anchor` or `sweep` of that
+stream asks the node what became of the tree before it spends anything,
+and says what it found on stderr, after the line `... funding tree TXID was
+signed by a run that stopped before it adopted the tree: asking the node
+what became of it ...`:
+
+| The node shows | The command does | It says |
+| --- | --- | --- |
+| the tree, and the current tree of its kind is used up or there is none | adopts the tree, takes its unspent change into the pool and publishes it | `funding tree ... is recovered`, `funding tree published: ...` |
+| the tree, and the current tree of its kind still has outputs | takes its change, holds the tree and switches to it when the current tree runs out; the record stays until then | `funding tree ... is recovered and waits for the switch` |
+| no such tree, and the coin unspent | puts the coin back in the pool and keeps the record for one more command; the second such answer drops it | `... never reached the chain: its fee coin ... is unspent and back in the pool`, then `its record is kept for one more command`; the second time `the node still does not know it, so its record is dropped` |
+| no such tree, and the coin spent by another transaction | drops the record | `... never reached the chain: its fee coin ... is spent by ...` |
+| nothing: it cannot answer, or the tree has not mined in time | keeps the record and goes on without the tree; the next command asks again | `... what became of it could not be settled now (...): its record is kept ...` |
+
+A tree that reaches the node after its coin went back is found by the next
+command, which adopts it and takes the coin, now spent, out of the pool
+(`its fee coin ... is spent and is taken out of the pool`). Nothing is lost
+unless the tree lands after two commands found nothing: then its outputs
+are lost to the stream. The command that next takes the coin has its
+transaction refused and exits 2, and the command after that finds the coin
+spent and takes it out of the pool.
+
+**The wait at the start.** A tree is used only once it has mined, so a
+tree the node knows and has not mined yet is waited for, as a new tree is.
+The wait for all such trees together is at most the wait for one proof: 10
+minutes for `produce` and `anchor`, `-wait` for `sweep`. The line above
+says so before the wait begins. When it runs out the record is kept, the
+command goes on (and mints a tree if it needs one), and the next command
+asks again. An interrupt during the wait ends the command, exit 2, with
+the record kept. So `produce -follow` under a supervisor starts reading at
+most that long after a restart, and never waits without end.
+
+Only commands that spend ask: `produce`, `anchor` and `sweep`. `read`,
+`verify-interval`, `backfill`, `archive`, `doctor`, `stream` and `fund`
+ask nothing about a tree and need no node for it. Each stream keeps its
+own records, so a stream's tree is settled by the next command on that
+stream.
+
+**A tree adopted and not published.** A tree is adopted before it is
+published to the hosts, so that a crash never leaves a tree on a host that
+the state does not know. If the publish fails (the facade is down, or in
+mode unicast fewer hosts than the quorum took it), the state records the
+tree as not published (`unpublished`) and the publish is tried again with
+the same retries as a carrier. While it still fails the command exits 2
+(`funding tree TXID: ...; the tree is adopted and recorded as not
+published, and the next produce, anchor or sweep publishes it`), and the
+next command publishes the same bytes before anything else, as it does for
+a persisted carrier. No second tree is minted. `doctor` names it: `tree
+... adopted and not confirmed published`.
+
+A producer pays for its trees from its own pool. A deployment that funded
+trees through a BRC-100 wallet instead (bcommon's `Trees.Fund`) would not
+be covered by any of this: such a wallet chooses the coins, signs and
+broadcasts inside one call, so there is no moment before the broadcast to
+record the tree in and no pool coin to put back, and a run that stopped
+after the broadcast and before the tree was adopted would leave a tree
+only that wallet knows. What else is left open is in
+[limits.md](limits.md).
 
 ## Reading
 
@@ -470,7 +545,8 @@ funding outputs.
 - **Retirement.** `-retire` spends the unused outputs of every tree no
   longer in use (batch trees, anchor fee trees, and trees minted ahead and
   never adopted) to the fund address, the fee coming out of their value,
-  and pools the result. It retracts nothing. A tree whose unused outputs
+  and pools the result. It retracts nothing. A tree minted ahead that is
+  retired is not switched to afterwards. A tree whose unused outputs
   cannot pay the fee is left and named (`left: ...`), which is the usual
   case for a batch tree of one-satoshi outputs. A retirement of a tree the
   hosts hold is published once it mines; one of a tree minted ahead, which
@@ -602,6 +678,11 @@ Results go to stdout; progress and errors to stderr, errors as one line
 | `host URL: took N object(s), missed M[: ...]` | mode unicast, at the end of `produce` and `anchor`, on stdout |
 | `a host missed objects; once it is back, copy them from the others: blogs backfill ...` | mode unicast, on stdout, after the lines above |
 | `seq N: publishing the carrier a previous run persisted` | a run resuming |
+| `<kind> funding tree TXID was signed by a run that stopped before it adopted the tree: asking the node what became of it ...` | a run settling a tree an earlier run left; the lines after it say what the node showed (An interrupted funding tree) |
+| `funding tree TXID: what became of it could not be settled now (...): its record is kept, ...` | the node could not answer, or the tree did not mine within the wait; the command goes on |
+| `blogs: funding tree TXID: interrupted while asking what became of it ...` | an interrupt during the wait at the start, exit 2 |
+| `funding tree TXID is adopted and not yet published: publishing it` | a run publishing a tree whose publish failed before |
+| `blogs: ... funding tree TXID: ...; the tree is adopted and recorded as not published, and the next produce, anchor or sweep publishes it` | the facade did not take a new funding tree, or in mode unicast fewer hosts than the quorum did, exit 2 |
 | `anchor interval K: seqs A to B, token TXID` | an anchor built and settled |
 | `anchor interval K: mined at height H and published; seqs A to B anchored` | an anchor published |
 | `seq N: the host admitted nothing: ...`, `seq N: host URL admitted nothing: ...` | a host answered a new carrier with nothing admitted: it held it already, or refused it; the answer is the same for both |
@@ -636,7 +717,9 @@ make quickstart-check                          # QUICKSTART.md, in Docker Compos
 
 `make verify` runs the command's tests in process against a local chain and
 a stand-in host (`internal/testchain`): every command path, restart and
-crash resumption, both profiles and gzip, a followed file with rotation,
+crash resumption, a funding tree a stopped run left (never sent, on the
+chain, landing late, minted ahead, adopted and not published), both
+profiles and gzip, a followed file with rotation,
 hostile answers, terminal filtering, forks and equivocation, backfill and
 the audit's refusals, retraction and retirement, archives with and without
 holes, an archive's receipts of retracted batches (including an interval's

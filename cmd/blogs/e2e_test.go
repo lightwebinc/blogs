@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/lightwebinc/blogs/internal/produce"
+	"github.com/lightwebinc/blogs/internal/state"
 )
 
 // The client end to end: the blogs command against two local reference
@@ -285,6 +286,26 @@ func TestClientE2E(t *testing.T) {
 	treeFrom("verify after restart", a.url)
 	h.env["BLOGS_ASSET"] = node
 	step("host a restarted: read and verify-interval 3 from the restored index, the fee tree still served")
+
+	// The facade is away when a run starts. The anchor fee tree the last
+	// run minted ahead is adopted at the start, its publish fails, and it
+	// is recorded as not published; the next command publishes it first.
+	a.stop()
+	h.want(h.run("x\n", append([]string{"produce", stream}, fast...)...), exitUsage, "the tree is adopted and recorded as not published")
+	st, err := state.Load(h.home, stream)
+	if err != nil || len(st.Unpublished) != 1 || st.AnchorTree == nil || st.AnchorTree.Txid != st.Unpublished[0] || st.Seq != 10 {
+		t.Fatalf("after the failed tree publish: %v, unpublished %v, seq %d", err, st.Unpublished, st.Seq)
+	}
+	a.start()
+	r = h.must("", "anchor", stream, "-poll", "50ms")
+	if !strings.Contains(r.stderr, "funding tree "+st.Unpublished[0]+" is adopted and not yet published: publishing it") ||
+		!strings.Contains(r.stderr, "funding tree published: admitted") {
+		t.Fatalf("anchor after a failed tree publish:\n%s\n%s", r.stdout, r.stderr)
+	}
+	if st, err = state.Load(h.home, stream); err != nil || len(st.Unpublished) != 0 {
+		t.Fatalf("after the tree was published: %v, unpublished %v", err, st.Unpublished)
+	}
+	step("facade down at the start: exit 2 with the fee tree adopted and recorded as not published; anchor published it")
 
 	// The facade goes away mid-publish: the carrier is persisted, and the
 	// next run publishes those same bytes.

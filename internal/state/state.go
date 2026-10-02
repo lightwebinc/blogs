@@ -16,9 +16,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"syscall"
 
+	"github.com/lightwebinc/bcommon/bwallet"
 	"github.com/lightwebinc/bcommon/funding"
 )
 
@@ -69,6 +71,18 @@ type Stream struct {
 	AnchorTrees []funding.Tree `json:"anchorTrees,omitempty"`
 	Ahead       []funding.Tree `json:"ahead,omitempty"`
 
+	// PendingTrees are the funding trees signed for a pool coin that the
+	// stream has not adopted yet, each with its kind and the coin it
+	// spends: the record made before a tree reaches the settlement leg, so
+	// a run that stops before the tree is adopted leaves what the next
+	// command needs to ask the node what became of it. Adopting a tree
+	// drops its record in the same save.
+	PendingTrees []PendingTree `json:"pendingTrees,omitempty"`
+	// Unpublished are the txids of trees adopted into Trees or AnchorTrees
+	// whose publish to the hosts failed: publish pending. The next command
+	// that spends publishes them before anything else.
+	Unpublished []string `json:"unpublished,omitempty"`
+
 	// Sweeps are the transactions built to spend funding-tree outputs, in
 	// the order they were built: retractions and retirements. One not yet
 	// Done is in flight, and the next sweep resumes it before anything else.
@@ -95,6 +109,54 @@ type Anchor struct {
 	Height  uint32 `json:"height,omitempty"`
 	// Submitted is set once the settlement leg accepted the token.
 	Submitted bool `json:"submitted,omitempty"`
+}
+
+// PendingTree is a funding tree signed for a pool coin and not yet adopted,
+// keyed by the tree's txid.
+type PendingTree struct {
+	// Kind is which trees it belongs to: "batch" or "anchor".
+	Kind string `json:"kind"`
+	// Tree is the record the tree is adopted as, without a proof.
+	Tree funding.Tree `json:"tree"`
+	// Coin is the fee coin the tree spends, as the pool held it.
+	Coin bwallet.Output `json:"coin"`
+	// ReturnedOnce is set when a command found the tree absent from the
+	// node and the coin unspent, and put the coin back: the record is kept
+	// for one more command, in case the tree reaches the node after all.
+	ReturnedOnce bool `json:"returned_once,omitempty"`
+}
+
+// KeepPendingTree records p, replacing a record of the same tree.
+func (s *Stream) KeepPendingTree(p PendingTree) {
+	if cur := s.PendingTree(p.Tree.Txid); cur != nil {
+		*cur = p
+		return
+	}
+	s.PendingTrees = append(s.PendingTrees, p)
+}
+
+// PendingTree finds the record of the tree txid, or nil.
+func (s *Stream) PendingTree(txid string) *PendingTree {
+	for i := range s.PendingTrees {
+		if s.PendingTrees[i].Tree.Txid == txid {
+			return &s.PendingTrees[i]
+		}
+	}
+	return nil
+}
+
+// DropPendingTree drops the record of the tree txid, and reports whether
+// there was one.
+func (s *Stream) DropPendingTree(txid string) bool {
+	n := len(s.PendingTrees)
+	s.PendingTrees = slices.DeleteFunc(s.PendingTrees, func(p PendingTree) bool { return p.Tree.Txid == txid })
+	return len(s.PendingTrees) != n
+}
+
+// MintedAhead reports whether txid is among the trees minted ahead and not
+// adopted.
+func (s *Stream) MintedAhead(txid string) bool {
+	return slices.ContainsFunc(s.Ahead, func(t funding.Tree) bool { return t.Txid == txid })
 }
 
 // The kinds of sweep.

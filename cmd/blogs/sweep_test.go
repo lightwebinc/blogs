@@ -102,6 +102,21 @@ func TestSweepRetractTreeAndRetire(t *testing.T) {
 	if after := pool(); after == before {
 		t.Fatalf("the pool did not change: %s", after)
 	}
+	// A retired tree minted ahead is no longer one to switch to: the
+	// record that would have the next run hold it is gone with its outputs.
+	st, _ = state.Load(h.home, stream)
+	retired := 0
+	for _, a := range st.Ahead {
+		if a.Remaining() == 0 {
+			retired++
+			if st.PendingTree(a.Txid) != nil {
+				t.Fatalf("the retired tree %s minted ahead kept its record", a.Txid)
+			}
+		}
+	}
+	if retired == 0 {
+		t.Fatalf("no tree minted ahead was retired: %+v", st.Ahead)
+	}
 	// Retired trees have no unused output left; a second retire finds only
 	// what cannot pay its fee.
 	r = h.must("", append([]string{"sweep", stream, "-retire", "-yes"}, fast...)...)

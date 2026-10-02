@@ -254,6 +254,13 @@ func (h *Host) Holds(producer []byte, stream string, seq uint64) bool {
 	return len(h.batches[key(producer, stream, seq)]) > 0
 }
 
+// HoldsTree reports whether the host admitted funding outputs of txid.
+func (h *Host) HoldsTree(txid string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.trees[txid]) > 0
+}
+
 // SetNoTrees sets NoTrees under the host's lock.
 func (h *Host) SetNoTrees(no bool) {
 	h.mu.Lock()

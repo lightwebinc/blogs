@@ -119,7 +119,8 @@ e2e: ts-build
 	cd host && $(NODE) dist/e2e.js $(abspath $(REFERENCE_HOST))
 
 # The blogs command end to end: init, fund, stream, produce (both profiles,
-# gzip, a restart, a publish that fails and is resumed), read,
+# gzip, a restart, a publish that fails and is resumed, a funding tree
+# whose publish fails and is repeated), read,
 # verify-interval, backfill, archive and sweep, against two local reference
 # hosts loading the bundle, over a local chain (internal/testchain) serving
 # the node's API and the header source. Not part of verify: it needs Docker
