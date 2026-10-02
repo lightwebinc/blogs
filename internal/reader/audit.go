@@ -59,11 +59,28 @@ type Report struct {
 	Unserved []uint64
 	// Refusals are answers refused along the way, for the trace.
 	Refusals []string
+	// Trees are the funding trees the anchors' inputs spend that were
+	// fetched for this audit, and what answered each.
+	Trees []TreeUse
+}
+
+// TreeUse is one funding tree an audit fetched.
+type TreeUse struct {
+	Interval uint64
+	Txid     string
+	// From names the source: a host, an archive, or the copy of the chain.
+	From string
 }
 
 func (r *Report) refuse(format string, args ...any) *Report {
 	r.Outcome, r.Reason = Refused, fmt.Sprintf(format, args...)
 	return r
+}
+
+func (r *Report) usedTree(interval uint64) func(txid, from string) {
+	return func(txid, from string) {
+		r.Trees = append(r.Trees, TreeUse{Interval: interval, Txid: txid, From: from})
+	}
 }
 
 func (r *Report) incomplete(format string, args ...any) *Report {
@@ -82,7 +99,9 @@ func (r *Report) incomplete(format string, args ...any) *Report {
 // reported in Unserved; one whose commitment nothing names leaves the
 // interval Incomplete. The outputs a token's inputs
 // spend are read from the predecessor token's transaction, from the funding
-// trees the interval's carriers carry, or from Txs.
+// trees the interval's carriers carry, from the tree class (the local
+// sources and the hosts, each tree's proof checked against the headers),
+// or from Txs.
 //
 // An error is no verdict: a host or the header source could not be asked.
 func (c *Client) VerifyInterval(ctx context.Context, stream string, producer []byte, n uint64) (*Report, error) {
@@ -163,7 +182,7 @@ func (c *Client) VerifyInterval(ctx context.Context, stream string, producer []b
 		if i > 0 {
 			before = r.Chain[i-1]
 		}
-		coins, missing, err := c.coins(ctx, t.Tx, before, evidence)
+		coins, missing, err := c.coins(ctx, stream, t.Tx, before, evidence, r.usedTree(t.Anchor.Interval))
 		if err != nil {
 			return nil, err
 		}
@@ -255,9 +274,12 @@ func canonical(cands []*Token, prev *Token) *Token {
 }
 
 // coins are the outputs tx's inputs spend: from the predecessor token's
-// transaction, a transaction in evidence, or Txs. missing names an input
-// whose transaction was found nowhere.
-func (c *Client) coins(ctx context.Context, tx *transaction.Transaction, prev *Token, evidence map[string]*transaction.Transaction) (logrec.Coins, string, error) {
+// transaction, a transaction in evidence, or a funding tree found by
+// fundingTree (the tree class, then Txs), which is added to evidence.
+// missing names an input whose transaction was found nowhere. Whatever the
+// source, the transaction's double SHA-256 is the txid the input names, so
+// the output read is the output spent.
+func (c *Client) coins(ctx context.Context, stream string, tx *transaction.Transaction, prev *Token, evidence map[string]*transaction.Transaction, used func(txid, from string)) (logrec.Coins, string, error) {
 	coins := logrec.Coins{}
 	for i, in := range tx.Inputs {
 		if in.SourceTXID == nil {
@@ -270,17 +292,16 @@ func (c *Client) coins(ctx context.Context, tx *transaction.Transaction, prev *T
 			src = prev.Tx
 		case evidence[id] != nil:
 			src = evidence[id]
-		case c.Txs != nil:
-			t, err := c.Fetch(ctx, id, false)
-			if errors.Is(err, ErrOtherBytes) {
+		default:
+			t, from, missing, err := c.FundingTree(ctx, stream, id)
+			if err != nil {
 				return nil, "", err
 			}
-			if err != nil {
-				return nil, fmt.Sprintf("input %d spends %s:%d, whose transaction %s did not answer (%v)", i, id, in.SourceTxOutIndex, c.Txs.Name(), err), nil
+			if t == nil {
+				return nil, fmt.Sprintf("input %d spends %s:%d, a funding tree nothing asked serves: %s", i, id, in.SourceTxOutIndex, missing), nil
 			}
 			evidence[id], src = t, t
-		default:
-			return nil, fmt.Sprintf("input %d spends %s:%d, a funding tree no answered carrier carries; configure asset (a node) or tx_source (woc:main or woc:test) to read it", i, id, in.SourceTxOutIndex), nil
+			used(id, from)
 		}
 		if int(in.SourceTxOutIndex) >= len(src.Outputs) {
 			return nil, fmt.Sprintf("input %d spends output %d of %s, which has %d", i, in.SourceTxOutIndex, id, len(src.Outputs)), nil
@@ -352,8 +373,9 @@ func (c *Client) Token(ctx context.Context, a Answer, stream string, producer []
 // keeps the chain between runs: it finds interval k's canonical token among
 // the hosts' answers, given the canonical token of interval k - 1 (nil for
 // k = 1), and holds it to the join and the anchor rules. The outputs its
-// inputs spend are read from prev, from evidence (transactions by txid),
-// or from Txs. An error is no verdict.
+// inputs spend are read from prev, from evidence (transactions by txid,
+// to which a funding tree found is added), from the tree class, or from
+// Txs. An error is no verdict.
 func (c *Client) Next(ctx context.Context, stream string, producer []byte, k uint64, prev *Token, evidence map[string]*transaction.Transaction) (*Token, *Report, error) {
 	if c.Headers == nil {
 		return nil, nil, errors.New("no header source: a proof cannot be checked")
@@ -388,7 +410,7 @@ func (c *Client) Next(ctx context.Context, stream string, producer []byte, k uin
 	if evidence == nil {
 		evidence = map[string]*transaction.Transaction{}
 	}
-	coins, missing, err := c.coins(ctx, canon.Tx, prev, evidence)
+	coins, missing, err := c.coins(ctx, stream, canon.Tx, prev, evidence, r.usedTree(k))
 	if err != nil {
 		return nil, nil, err
 	}

@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"github.com/lightwebinc/bcommon/nodeapi"
 	"github.com/lightwebinc/bcommon/termsafe"
 
+	"github.com/lightwebinc/blogs/internal/archive"
 	"github.com/lightwebinc/blogs/internal/limits"
 	"github.com/lightwebinc/blogs/internal/logrec"
 	"github.com/lightwebinc/blogs/internal/reader"
@@ -273,7 +276,7 @@ func cmdRead(ctx context.Context, g *global, args []string) error {
 	return nil
 }
 
-const verifyHelp = `usage: blogs verify-interval <stream> <producer> <n>
+const verifyHelp = `usage: blogs verify-interval <stream> <producer> <n> [-archive DIR]
 
 Audit interval n as an auditor holding block headers (specification section
 13): walk the interval class from 1 to n keeping each interval's canonical
@@ -289,20 +292,32 @@ the chain for the sweep names a retraction). One whose commitment nothing
 names (the interval's last seq, or the first of two in a row) leaves the
 interval INCOMPLETE. The outputs an anchor's inputs spend are read from the
 predecessor token, from the funding trees the interval's carriers carry, or
-from the node (asset), which an anchor's fee tree needs. Needs no producer
-home; needs hosts and header_url.
+from the funding tree itself: an anchor's fee tree is asked of the hosts by
+its txid (the tree class), which answer it with its proof however long ago
+its outputs were spent, and only when no host serves it of a copy of the
+chain (asset or tx_source), which may have pruned it. Every tree is held to
+the txid the anchor's input names, and a host's to its proof against the
+header source. -v names what answered each tree.
+
+-archive DIR adds an archive directory (blogs archive -dir DIR) as a source
+asked before the hosts: its stored tokens, carriers and funding trees are
+checked exactly as a host's answers are. With -archive and no host
+configured the audit runs from the files and the header source alone.
+
+Needs no producer home; needs header_url, and hosts or -archive.
 
 Exit 0 VERIFIED, 1 REFUSED, 3 INCOMPLETE (a host held nothing where
 evidence was needed), 2 when a host or the header source could not be asked.`
 
 func cmdVerifyInterval(ctx context.Context, g *global, args []string) error {
 	fs := g.flagSet("verify-interval", verifyHelp)
+	dir := fs.String("archive", "", "an archive directory (blogs archive -dir) to ask before the hosts")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(pos) != 3 {
-		return usage("verify-interval <stream> <producer> <n>")
+		return usage("verify-interval <stream> <producer> <n> [-archive DIR]")
 	}
 	stream := pos[0]
 	producer, err := streamAndProducer(stream, pos[1])
@@ -313,9 +328,22 @@ func cmdVerifyInterval(ctx context.Context, g *global, args []string) error {
 	if err != nil || n < 1 || n > logrec.MaxSafe {
 		return usage("interval %q is not a number from 1 to %d", termsafe.Abbrev(pos[2]), uint64(logrec.MaxSafe))
 	}
-	c, err := g.hostsReader()
-	if err != nil {
-		return err
+	var c *reader.Client
+	if *dir == "" {
+		if c, err = g.hostsReader(); err != nil {
+			return err
+		}
+	} else {
+		abs, err := filepath.Abs(*dir)
+		if err != nil {
+			return err
+		}
+		src := &archive.Archive{Dir: abs, Stream: stream, Producer: producer}
+		if _, err := os.Stat(src.Root()); err != nil {
+			return usage("-archive %s holds no archive of this stream and producer (%s is missing)", termsafe.Text(*dir), termsafe.Text(src.Root()))
+		}
+		c = readerFor(g, g.cfg.Hosts, g.cfg.Timeout)
+		c.Local = []reader.Source{src}
 	}
 	hc, err := g.headerClient()
 	if err != nil {
@@ -327,6 +355,11 @@ func cmdVerifyInterval(ctx context.Context, g *global, args []string) error {
 		return err
 	}
 	out := g.stdout
+	if g.verbose {
+		for _, t := range rep.Trees {
+			g.say("interval %d: funding tree %s from %s", t.Interval, t.Txid, termsafe.Text(t.From))
+		}
+	}
 	for _, t := range rep.Chain {
 		fmt.Fprintf(out, "interval %d  token %s  height %d  seqs %d to %d\n", t.Anchor.Interval, t.Txid, t.Height, t.Anchor.First, t.Anchor.Last())
 	}
@@ -390,9 +423,10 @@ producer are repaired after one missed submissions.
 -interval K fills the anchor chain 1 to K and the seqs interval K covers;
 -seqs A-B fills a range of seqs; -anchors K fills the anchor chain 1 to K;
 -seqs and -anchors combine. A host admits an anchor only once it holds the
-fee tree the anchor spends, which no lookup class serves, so backfill reads
-it from the node (asset) when a host does not admit a token. Needs no
-producer home.
+fee tree the anchor spends, so when a host does not admit a token backfill
+carries the tree first: it asks the siblings for it by txid (the tree
+class), reads it from the node (asset) or tx_source only when no sibling
+serves it, and submits it with its proof. Needs no producer home.
 
 A seq that neither the host nor any sibling serves is missing, unless the
 seq after it is held or filled: its prev then names the seq's commitment,
@@ -400,8 +434,8 @@ as for a retracted batch, and it is counted unserved instead (retracted,
 or not delivered to any host asked; as verify-interval and archive prove
 an interval across it).
 
-No lookup class serves a sweep, so a host that missed one still serves the
-batches it retracted. -sweeps carries them: every carrier the host holds
+No lookup class names the sweep of a batch, so a host that missed one still
+serves the batches it retracted. -sweeps carries them: every carrier the host holds
 at the seqs filled is checked for a mined spend of its funding output by
 another transaction (asset or tx_source names it; it is checked against
 header_url), and a sweep found is submitted to the host. It costs one
@@ -502,7 +536,7 @@ func cmdBackfill(ctx context.Context, g *global, args []string) error {
 		total.Refused += res.Refused
 	}
 	if !*sweeps && len(seqList) > 0 {
-		g.say("note: backfill carried batches and anchors, not sweeps: no lookup class serves a sweep, so a host that missed one still serves the batches it retracted; -sweeps checks each held batch and carries the sweep it finds")
+		g.say("note: backfill carried batches, anchors and their fee trees, not sweeps: no lookup class names the sweep of a batch, so a host that missed one still serves the batches it retracted; -sweeps checks each held batch and carries the sweep it finds")
 	}
 	switch {
 	case total.Refused > 0:

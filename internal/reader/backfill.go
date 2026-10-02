@@ -3,7 +3,6 @@ package reader
 import (
 	"context"
 	"encoding/hex"
-	"errors"
 	"fmt"
 
 	"github.com/bsv-blockchain/go-sdk/transaction"
@@ -34,8 +33,8 @@ type Backfill struct {
 	// it serves is checked for a retraction (Client.Retraction: a mined
 	// spend of its funding output by another transaction, named by Txs,
 	// which must answer spends), and a sweep found is submitted to To. No
-	// lookup class serves a sweep, so this is the only way a backfill can
-	// carry one; it costs one spend read per held carrier.
+	// lookup class names the sweep of a batch, so this is the only way a
+	// backfill can carry one; it costs one spend read per held carrier.
 	Sweeps bool
 	// Note receives one line per position.
 	Note func(format string, args ...any)
@@ -83,7 +82,7 @@ func (c *Client) Run(ctx context.Context, b Backfill) (Result, error) {
 				}
 			}
 			return "", true, nil
-		}, func(a Answer) (bool, error) { return c.feedFunding(ctx, to, topic, a, note) }); err != nil {
+		}, func(a Answer) (bool, error) { return c.feedFunding(ctx, b, to, topic, a, note) }); err != nil {
 			return r, err
 		}
 	}
@@ -151,10 +150,19 @@ func (c *Client) carrySweeps(ctx context.Context, b Backfill, to *publish.Facade
 }
 
 // feedFunding submits to the host the funding trees an anchor token's fee
-// inputs spend, read from Txs with their proofs, since no lookup class
-// serves a funding tree and a host admits an anchor only once it holds the
-// outputs it spends. It reports whether it submitted any.
-func (c *Client) feedFunding(ctx context.Context, to *publish.Facade, topic string, a Answer, note func(string, ...any)) (bool, error) {
+// inputs spend, since a host admits an anchor only once it holds the
+// outputs it spends. Each tree is asked of the siblings by the tree class
+// and, when none serves it, read from Txs; either way it comes with its
+// proof, checked against the headers when there are any, and the host
+// checks it again. It reports whether it submitted any.
+func (c *Client) feedFunding(ctx context.Context, b Backfill, to *publish.Facade, topic string, a Answer, note func(string, ...any)) (bool, error) {
+	siblings := *c
+	siblings.Hosts, siblings.Local, siblings.ProveTrees = nil, nil, true
+	for _, from := range b.From {
+		if from != b.To {
+			siblings.Hosts = append(siblings.Hosts, from)
+		}
+	}
 	_, tx, _, err := transaction.ParseBeef(a.Beef)
 	if err != nil || tx == nil {
 		return false, nil
@@ -169,16 +177,12 @@ func (c *Client) feedFunding(ctx context.Context, to *publish.Facade, topic stri
 			continue
 		}
 		id := in.SourceTXID.String()
-		if c.Txs == nil {
-			note("interval %d spends funding tree %s, which no lookup class serves; configure asset (a node) or tx_source (woc:main or woc:test) to read it", an.Interval, id)
-			continue
-		}
-		src, err := c.Fetch(ctx, id, true)
-		if errors.Is(err, ErrOtherBytes) {
+		src, from, missing, err := siblings.FundingTree(ctx, b.Stream, id)
+		if err != nil {
 			return false, err
 		}
-		if err != nil {
-			note("interval %d: funding tree %s: %v", an.Interval, id, err)
+		if src == nil {
+			note("interval %d spends funding tree %s, which nothing asked serves: %s", an.Interval, id, missing)
 			continue
 		}
 		beef, err := src.AtomicBEEF(false)
@@ -188,7 +192,7 @@ func (c *Client) feedFunding(ctx context.Context, to *publish.Facade, topic stri
 		if _, err := to.Submit(ctx, topic, beef); err != nil {
 			return false, fmt.Errorf("submitting funding tree %s: %w", id, err)
 		}
-		note("interval %d: funding tree %s submitted from %s", an.Interval, id, c.Txs.Name())
+		note("interval %d: funding tree %s submitted from %s", an.Interval, id, from)
 		fed = true
 	}
 	return fed, nil

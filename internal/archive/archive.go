@@ -28,6 +28,16 @@
 //	                                its funding output
 //	retracted/<seq>-<carrier>.sweep.beef
 //	                                that sweep, with its proof
+//	trees/<txid>.beef               each funding tree an anchor token
+//	                                spends (its fee tree), with its proof,
+//	                                kept when the anchor is first proven:
+//	                                a node that prunes spent transactions
+//	                                stops serving a tree once every output
+//	                                is spent
+//
+// The archive is itself a source for an auditor (Answer): it answers the
+// three ls_log question classes from these files, and the auditor checks
+// each answer as it checks a host's.
 //
 // Each pass first asks the host again for every seq it has stored. A stored
 // carrier the host no longer serves is checked for a retraction: a mined
@@ -85,6 +95,10 @@ type Cursor struct {
 	// the next pass continues after it, wrapping to the first, so the
 	// seqs asked about longest ago are asked first.
 	Rechecked uint64 `json:"rechecked,omitempty"`
+	// Trees is the last interval whose anchor's funding trees are kept
+	// under trees/; 1 to Trees are. It trails Intervals in an archive
+	// begun before trees were kept, until a pass catches up.
+	Trees uint64 `json:"trees,omitempty"`
 }
 
 // BatchFile is batches/<seq>-<carrier>.json.
@@ -190,6 +204,11 @@ type Summary struct {
 	// Rechecked is how many stored seqs this pass asked about again, of
 	// StoredSeqs, the seqs stored when it began.
 	Rechecked, StoredSeqs int
+	// Trees is how many funding trees this pass stored; TreesMissing says
+	// why an earlier interval's trees are still not kept, when they are
+	// not.
+	Trees        int
+	TreesMissing string
 }
 
 func (a *Archive) note(format string, args ...any) {
@@ -264,6 +283,8 @@ func (a *Archive) Pass(ctx context.Context) (*Summary, error) {
 	}
 	one := *a.Client
 	one.Hosts = []string{a.Host}
+	// A tree read from a copy of the chain is kept only with its proof.
+	one.ProveTrees = true
 	s := &Summary{}
 	if err := a.recheck(ctx, cur, s); err != nil {
 		return nil, err
@@ -288,8 +309,31 @@ func (a *Archive) Pass(ctx context.Context) (*Summary, error) {
 			return nil, err
 		}
 	}
+	// Intervals proven before trees were kept: keep their trees now, in
+	// order, stopping at the first that nothing serves.
+	for k := cur.Trees + 1; k <= cur.Intervals; k++ {
+		tok, err := a.token(ctx, k)
+		if err != nil {
+			return nil, err
+		}
+		n, missing, err := a.keepTrees(ctx, &one, tok, nil)
+		if err != nil {
+			return nil, err
+		}
+		s.Trees += n
+		if missing != "" {
+			s.TreesMissing = fmt.Sprintf("interval %d: %s", k, missing)
+			a.note("%s; its funding tree is not kept yet", s.TreesMissing)
+			break
+		}
+		cur.Trees = k
+	}
+	if err := writeJSON(a.path("archive.json"), cur); err != nil {
+		return nil, err
+	}
 	for k := cur.Intervals + 1; k <= logrec.MaxSafe; k++ {
-		tok, rep, err := one.Next(ctx, a.Stream, a.Producer, k, prev, nil)
+		evidence := map[string]*transaction.Transaction{}
+		tok, rep, err := one.Next(ctx, a.Stream, a.Producer, k, prev, evidence)
 		if err != nil {
 			return nil, err
 		}
@@ -327,6 +371,18 @@ func (a *Archive) Pass(ctx context.Context) (*Summary, error) {
 		}
 		if err := writeJSON(a.path("intervals", pad(k)+".json"), f); err != nil {
 			return nil, err
+		}
+		// The trees the token spends were just read to verify it.
+		n, missing, err := a.keepTrees(ctx, &one, tok, evidence)
+		if err != nil {
+			return nil, err
+		}
+		s.Trees += n
+		switch {
+		case missing != "":
+			s.TreesMissing = fmt.Sprintf("interval %d: %s", k, missing)
+		case cur.Trees == k-1:
+			cur.Trees = k
 		}
 		cur.Intervals = k
 		// A proven interval settles every seq it covers, held or not.
@@ -462,6 +518,113 @@ func (a *Archive) token(ctx context.Context, k uint64) (*reader.Token, error) {
 		return nil, fmt.Errorf("interval %d: the stored token no longer verifies: %s", k, why)
 	}
 	return t, nil
+}
+
+// keepTrees writes trees/<txid>.beef for every funding tree tok's inputs
+// spend that is not kept yet: from evidence when it holds the tree with a
+// proof, otherwise asked for again (the tree class, then the copy of the
+// chain with its proof), each proof checked against the headers. It
+// returns how many it wrote, and what could not be found.
+func (a *Archive) keepTrees(ctx context.Context, c *reader.Client, tok *reader.Token, evidence map[string]*transaction.Transaction) (stored int, missing string, err error) {
+	for _, in := range tok.Tx.Inputs {
+		if in.SourceTXID == nil || [32]byte(*in.SourceTXID) == tok.Anchor.Prev {
+			continue
+		}
+		id := in.SourceTXID.String()
+		if exists(a.path("trees", id+".beef")) {
+			continue
+		}
+		tree := evidence[id]
+		if tree == nil || !logrec.Mined(ctx, tree, c.Headers) {
+			var why string
+			if tree, _, why, err = c.FundingTree(ctx, a.Stream, id); err != nil {
+				return stored, "", err
+			}
+			if tree == nil || tree.MerklePath == nil {
+				return stored, fmt.Sprintf("funding tree %s: %s", id, why), nil
+			}
+		}
+		beef, err := tree.AtomicBEEF(false)
+		if err != nil {
+			return stored, "", err
+		}
+		if err := write(a.path("trees", id+".beef"), beef); err != nil {
+			return stored, "", err
+		}
+		stored++
+		a.note("interval %d: funding tree %s kept with its proof", tok.Anchor.Interval, id)
+	}
+	return stored, "", nil
+}
+
+// Name names the archive as a source.
+func (a *Archive) Name() string { return "the archive " + a.Root() }
+
+// Answer answers an ls_log question from the files, so that an auditor can
+// use the archive as it uses a host (reader.Source): the stored carriers
+// at a seq, the canonical anchor token of a proven interval, or a kept
+// funding tree. Nothing is checked here; the auditor checks every answer.
+// A question about another stream or producer answers nothing.
+func (a *Archive) Answer(q reader.Query) ([]reader.Answer, error) {
+	if q.Stream != a.Stream {
+		return nil, nil
+	}
+	read := func(path string, out uint32) ([]reader.Answer, error) {
+		beef, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		return []reader.Answer{{Host: a.Name(), Beef: beef, Output: out}}, nil
+	}
+	if q.Tree != "" {
+		if logrec.CheckTxid(q.Tree) != nil {
+			return nil, nil
+		}
+		as, err := read(a.path("trees", q.Tree+".beef"), 0)
+		if err != nil || len(as) == 0 {
+			return nil, err
+		}
+		// The lowest funding output, as a host answers.
+		if _, tx, _, err := transaction.ParseBeef(as[0].Beef); err == nil && tx != nil {
+			for i, o := range tx.Outputs {
+				if o != nil && o.LockingScript != nil && logrec.IsFundingShape(*o.LockingScript) {
+					as[0].Output = uint32(i) //nolint:gosec // an output index
+					break
+				}
+			}
+		}
+		return as, nil
+	}
+	if q.Producer != hex.EncodeToString(a.Producer) {
+		return nil, nil
+	}
+	if q.Seq > 0 {
+		names, _ := filepath.Glob(a.path("batches", pad(q.Seq)+"-*.beef"))
+		sort.Strings(names)
+		var out []reader.Answer
+		for _, n := range names {
+			as, err := read(n, 0)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, as...)
+		}
+		return out, nil
+	}
+	f, err := a.Interval(q.Interval)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if logrec.CheckTxid(f.Token) != nil || f.Vout < 0 {
+		return nil, fmt.Errorf("%s: the token is not a txid and an output", a.path("intervals", pad(q.Interval)+".json"))
+	}
+	return read(a.path("anchors", pad(q.Interval)+"-"+f.Token+".beef"), uint32(f.Vout)) //nolint:gosec // checked above
 }
 
 // position is one thing an archive holds at a seq: a stored carrier, or

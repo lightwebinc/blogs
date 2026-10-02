@@ -37,7 +37,7 @@ finished (settled, waited for, pooled, published) by the next sweep run,
 with or without flags, before anything new is built. Needs what produce
 needs; -retract-seqs needs hosts.
 
-No lookup class serves a sweep, so a host receives one only when it is
+No lookup class names a sweep, so a host receives one only when it is
 submitted to it. In mode plane a sweep goes to the facade, which the plane
 carries to every subscribed host, and directly to every other host in
 hosts, so a host off the plane receives it too; in mode unicast it goes to

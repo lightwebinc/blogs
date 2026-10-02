@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lightwebinc/bcommon/termsafe"
+
 	"github.com/lightwebinc/blogs/internal/archive"
 	"github.com/lightwebinc/blogs/internal/limits"
 	"github.com/lightwebinc/blogs/internal/reader"
@@ -34,9 +36,17 @@ its prev, and the sweep with its proof, under retracted/) and drops the
 batch's bytes; the receipt still completes the interval's root. A carrier
 the host stops serving with no such spend is kept.
 
+Each anchor's fee tree is kept too, with its proof, under trees/, when the
+anchor is first proven: the host answers it by txid (the tree class), and
+the node (asset) or tx_source is asked only when the host does not. An
+archive begun before trees were kept catches up on its next pass. With its
+trees an archive directory is a complete source for an audit:
+blogs verify-interval -archive DIR.
+
 The layout under DIR/<stream>/<producer> is in docs/usage.md. -host
-defaults to the first configured host. Needs header_url, and asset (or
-tx_source) for the funding trees anchors spend and for spends.
+defaults to the first configured host. Needs header_url; asset (or
+tx_source) is needed to find the spend that retracts a batch, and for a
+funding tree the host does not serve.
 
 Prints what it stored and proved, then one line
 "latest interval K root R token T" naming the last interval proven.
@@ -137,6 +147,12 @@ func (g *global) archiveSummary(a *archive.Archive, s *archive.Summary, final bo
 	}
 	if s.StoredSeqs > 0 {
 		fmt.Fprintf(out, "rechecked %d of %d stored seq(s)\n", s.Rechecked, s.StoredSeqs)
+	}
+	if s.Trees > 0 {
+		fmt.Fprintf(out, "kept %d funding tree(s) with their proofs in trees/\n", s.Trees)
+	}
+	if s.TreesMissing != "" {
+		g.say("archive: a funding tree is not kept yet: %s", termsafe.Text(s.TreesMissing))
 	}
 	fmt.Fprintf(out, "archive %s from %s: %d batch(es) stored, walked to seq %d, intervals 1 to %d proven, in %s\n",
 		a.Stream, a.Host, s.Stored, s.Next-1, s.Intervals, a.Root())

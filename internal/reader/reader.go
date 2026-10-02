@@ -1,8 +1,8 @@
-// Package reader asks overlay hosts the two ls_log questions and checks
+// Package reader asks overlay hosts the three ls_log questions and checks
 // every answer itself (docs/spec.md sections 7.2 and 13): a batch carrier's
 // rules, its funding parent's proof against the reader's own headers, an
-// anchor token's rules and its proof, the chain of anchors and an
-// interval's root. A host is trusted for nothing: an answer is either
+// anchor token's rules and its proof, a funding tree's txid and proof, the
+// chain of anchors and an interval's root. A host is trusted for nothing: an answer is either
 // verified here or reported as refused, and an empty answer means only that
 // the host holds nothing that answers.
 package reader
@@ -30,24 +30,34 @@ import (
 type Client struct {
 	// Hosts are the overlay hosts' base URLs, asked in order.
 	Hosts []string
+	// Local are sources asked before the hosts (an archive's files); their
+	// answers are checked as a host's are.
+	Local []Source
 	// Headers is the reader's own header source. Nil skips the proof
 	// checks, which only backfill allows: the host it submits to checks
 	// proofs itself.
 	Headers chaintracker.ChainTracker
-	// Txs, when set, answers transactions by txid: the funding trees an
-	// anchor's fee inputs spend, which no lookup class serves.
+	// Txs, when set, is a copy of the chain answering transactions by
+	// txid: a funding tree no host asked serves by the tree class, and the
+	// spender of a funding output.
 	Txs TxSource
+	// ProveTrees asks Txs for a funding tree's proof too and checks it, so
+	// that the tree can be kept or passed on with it (an archive).
+	ProveTrees bool
 	// Timeout bounds each request; HTTP, when set, is the client used (tests).
 	Timeout time.Duration
 	HTTP    *http.Client
 }
 
-// Query is one ls_log question: exactly one of Seq and Interval is set.
+// Query is one ls_log question: Producer with exactly one of Seq and
+// Interval (the batch and interval classes), or Tree alone, a txid (the
+// tree class).
 type Query struct {
 	Stream   string `json:"stream"`
-	Producer string `json:"producer"`
+	Producer string `json:"producer,omitempty"`
 	Seq      uint64 `json:"seq,omitempty"`
 	Interval uint64 `json:"interval,omitempty"`
+	Tree     string `json:"tree,omitempty"`
 }
 
 // Answer is one output a host answered, and which host.
@@ -73,20 +83,27 @@ func (c *Client) Ask(ctx context.Context, base string, q Query) ([]Answer, error
 	return out, nil
 }
 
-// AskAny asks the hosts in order and returns the first non-empty answer.
-// all asks every host and returns the union, the first copy of each
-// transaction kept. Hosts that fail are skipped; when every host failed,
-// the first failure is returned.
+// AskAny asks the local sources and then the hosts, in order, and returns
+// the first non-empty answer. all asks every one and returns the union, the
+// first copy of each transaction kept. Sources and hosts that fail are
+// skipped; when every one failed, the first failure is returned.
 func (c *Client) AskAny(ctx context.Context, q Query, all bool) ([]Answer, error) {
-	if len(c.Hosts) == 0 {
+	if len(c.Hosts) == 0 && len(c.Local) == 0 {
 		return nil, errors.New("no overlay host configured (config key hosts, or -host)")
 	}
 	var first error
 	failed := 0
 	var out []Answer
 	seen := map[string]bool{}
+	asks := make([]func() ([]Answer, error), 0, len(c.Local)+len(c.Hosts))
+	for _, s := range c.Local {
+		asks = append(asks, func() ([]Answer, error) { return s.Answer(q) })
+	}
 	for _, h := range c.Hosts {
-		as, err := c.Ask(ctx, h, q)
+		asks = append(asks, func() ([]Answer, error) { return c.Ask(ctx, h, q) })
+	}
+	for _, ask := range asks {
+		as, err := ask()
 		if err != nil {
 			failed++
 			if first == nil {
@@ -106,7 +123,7 @@ func (c *Client) AskAny(ctx context.Context, q Query, all bool) ([]Answer, error
 			return out, nil
 		}
 	}
-	if failed == len(c.Hosts) {
+	if failed == len(asks) {
 		return nil, first
 	}
 	return out, nil

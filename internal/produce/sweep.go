@@ -342,7 +342,7 @@ func (e *Engine) FinishSweeps(ctx context.Context) error {
 				return err
 			}
 			if e.Legs.Hosts != nil {
-				// No lookup class serves a sweep, so no backfill repairs a
+				// No lookup class names the sweep of a batch, so no backfill repairs a
 				// host that missed one: every host must take it.
 				o := e.Legs.Hosts.Send(ctx, "sweep "+sw.Txid, e.topic, beef, len(e.Legs.Hosts.Hosts))
 				if err := o.Err(); err != nil {

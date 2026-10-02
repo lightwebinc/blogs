@@ -242,6 +242,22 @@ func TestClientE2E(t *testing.T) {
 	}
 	step("read and verify-interval 2 and 3: both profiles")
 
+	// The node prunes the anchors' fee tree: the host serves it by txid,
+	// with its proof, and the audit does not need the node.
+	node := h.env["BLOGS_ASSET"]
+	h.env["BLOGS_ASSET"] = pruned(t)
+	treeFrom := func(what, host string) string {
+		t.Helper()
+		r := h.must("", "verify-interval", stream, producer, "3", "-v")
+		m := treeLine.FindStringSubmatch(r.stderr)
+		if !strings.Contains(r.stdout, "VERIFIED interval 3") || m == nil || m[3] != host {
+			t.Fatalf("%s:\n%s\n%s", what, r.stdout, r.stderr)
+		}
+		return m[2]
+	}
+	tree := treeFrom("verify with a pruned node", a.url)
+	step("verify-interval 3 with a node that has pruned the fee tree: VERIFIED, the tree served by host a")
+
 	// Host b missed everything: backfill it from a.
 	h.env["BLOGS_HOSTS"] = b.url
 	h.want(h.run("", "verify-interval", stream, producer, "1"), exitIncomplete, "INCOMPLETE")
@@ -250,14 +266,15 @@ func TestClientE2E(t *testing.T) {
 		if !strings.Contains(r.stdout, "0 missing, 0 refused") {
 			t.Fatalf("backfill %s:\n%s", k, r.stdout)
 		}
+		if k == "1" && !strings.Contains(r.stdout, "funding tree "+tree+" submitted from "+a.url) {
+			t.Fatalf("backfill 1 did not carry the fee tree from the sibling:\n%s", r.stdout)
+		}
 	}
-	r = h.must("", "verify-interval", stream, producer, "3")
-	if !strings.Contains(r.stdout, "VERIFIED interval 3") {
-		t.Fatalf("verify at b:\n%s", r.stdout)
-	}
-	step("backfill: host b filled from host a (anchor chain, fee trees from the node, batches); verify-interval 3 VERIFIED at b")
+	treeFrom("verify at b", b.url)
+	step("backfill: host b filled from host a (anchor chain, fee trees from host a, batches); verify-interval 3 VERIFIED at b, which serves the tree itself")
 
-	// A restarted host answers from its restored index.
+	// A restarted host answers from its restored index, the fully spent
+	// fee tree included.
 	a.stop()
 	a.start()
 	h.env["BLOGS_HOSTS"] = a.url
@@ -265,8 +282,9 @@ func TestClientE2E(t *testing.T) {
 	if !strings.HasPrefix(r.stdout, linesOf(0, 20)) {
 		t.Fatalf("read after restart: %q", r.stdout)
 	}
-	h.must("", "verify-interval", stream, producer, "3")
-	step("host a restarted: read and verify-interval 3 from the restored index")
+	treeFrom("verify after restart", a.url)
+	h.env["BLOGS_ASSET"] = node
+	step("host a restarted: read and verify-interval 3 from the restored index, the fee tree still served")
 
 	// The facade goes away mid-publish: the carrier is persisted, and the
 	// next run publishes those same bytes.
@@ -295,6 +313,16 @@ func TestClientE2E(t *testing.T) {
 		t.Fatalf("archives:\n%s\n%s\n%s\n%s", ra.stdout, ra.stderr, rb.stdout, rb.stderr)
 	}
 	step("archive: both hosts' copies stored, intervals 1 to 4 proven with the same roots")
+	if got, _ := filepath.Glob(filepath.Join(dirA, stream, producer, "trees", "*.beef")); len(got) == 0 || !strings.Contains(ra.stdout, "funding tree(s) with their proofs") {
+		t.Fatalf("archive a kept no fee tree: %v\n%s", got, ra.stdout)
+	}
+	h.env["BLOGS_HOSTS"], h.env["BLOGS_ASSET"] = "", pruned(t)
+	r = h.must("", "verify-interval", stream, producer, "4", "-archive", dirA, "-v")
+	if !strings.Contains(r.stdout, "VERIFIED interval 4") || !strings.Contains(r.stderr, "from the archive ") {
+		t.Fatalf("audit from archive a:\n%s\n%s", r.stdout, r.stderr)
+	}
+	h.env["BLOGS_ASSET"] = node
+	step("archive a keeps the fee trees with their proofs; verify-interval 4 -archive VERIFIED from the files alone, no host and a pruned node")
 
 	// A retraction on a real host: seq 7 (inside interval 2) swept. Host
 	// b is off the plane (it was filled by backfill), and is in hosts, so

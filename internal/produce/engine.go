@@ -105,7 +105,7 @@ type Options struct {
 // Facade (plane mode: one submit, which the plane delivers to every
 // subscribed host) and Hosts (unicast mode: one submit to each host).
 // SweepHosts, in plane mode, are hosts every sweep is also submitted to
-// directly: no lookup class serves a sweep, so a host off the plane
+// directly: no lookup class names the sweep of a batch, so a host off the plane
 // receives one only this way.
 type Legs struct {
 	Settler    publish.Settler
