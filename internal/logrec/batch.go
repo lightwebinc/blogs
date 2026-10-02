@@ -1,10 +1,10 @@
 package logrec
 
 import (
-	"bytes"
 	"fmt"
 
 	"github.com/lightwebinc/bcommon/cbor"
+	"github.com/lightwebinc/bcommon/record"
 )
 
 // Batch is one batch record: the payload of one carrier.
@@ -176,22 +176,7 @@ func IsBatch(payload []byte) bool {
 // claims looks for a definite-length map head (0xa0 to 0xbb), key 0, then a
 // four-byte string equal to magic. Key 0 always sorts first in a canonical
 // map with unsigned-integer keys.
-func claims(p, magic []byte) bool {
-	i := 0
-	if len(p) < 1 || p[0]>>5 != 5 {
-		return false
-	}
-	switch ai := p[0] & 0x1f; {
-	case ai < 24:
-		i = 1
-	case ai <= 27:
-		i = 1 + 1<<(ai-24)
-	default:
-		return false
-	}
-	want := append([]byte{0x00, 0x44}, magic...)
-	return len(p) >= i+len(want) && bytes.Equal(p[i:i+len(want)], want)
-}
+func claims(p, magic []byte) bool { return record.Claims(p, magic) }
 
 // DecodeBatch parses a batch record in the refusal order: the bound, then
 // canonical CBOR and the map's shape, then the magic, then each defined key
@@ -242,12 +227,12 @@ func DecodeBatch(p []byte) (*Batch, error) {
 	if b.Profile, err = needUint(f, BKProfile, 1, MaxSafe); err != nil {
 		return nil, err
 	}
-	if _, ok := f[BKContent]; ok {
+	if _, ok := f.Get(BKContent); ok {
 		if b.Content, err = needBytes(f, BKContent, 1, MaxContent); err != nil {
 			return nil, err
 		}
 	}
-	if v, ok := f[BKLocator]; ok {
+	if v, ok := f.Get(BKLocator); ok {
 		if _, isMap := v.(cbor.Map); !isMap {
 			return nil, fmt.Errorf("%w: key %d", ErrType, BKLocator)
 		}

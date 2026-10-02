@@ -2,12 +2,12 @@ package logrec
 
 import (
 	"crypto/rand"
-	"fmt"
 	"io"
 	"math/big"
 	"unicode/utf8"
 
 	"github.com/lightwebinc/bcommon/cbor"
+	"github.com/lightwebinc/bcommon/record"
 )
 
 // fieldP is the secp256k1 field prime.
@@ -128,114 +128,29 @@ func Topic(stream string) (string, error) {
 	return TopicPrefix + stream, nil
 }
 
-// decodeMap bounds b, decodes one canonical CBOR item and requires a map.
-func decodeMap(b []byte, max int) (cbor.Map, error) {
-	if len(b) > max {
-		return nil, ErrTooLarge
-	}
-	v, err := cbor.DecodeValue(b)
+func decodeMap(b []byte, max int) (cbor.Map, error) { return record.DecodeMap(b, max) }
+
+func intKeys(m cbor.Map, last uint64) (*record.Fields, cbor.Map, error) {
+	f, err := record.Split(m, last)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrCBOR, err)
+		return nil, nil, err
 	}
-	m, ok := v.(cbor.Map)
-	if !ok {
-		return nil, ErrCBOR
-	}
-	if len(m) > MaxKeys {
-		return nil, fmt.Errorf("%w: more than %d keys", ErrTooLarge, MaxKeys)
-	}
-	return m, nil
+	return f, f.Extra, nil
 }
 
-// intKeys splits a record map into its known integer keys and the unknown
-// ones above last, which are preserved. Any key that is not an unsigned
-// integer refuses the record.
-func intKeys(m cbor.Map, last uint64) (map[uint64]cbor.Value, cbor.Map, error) {
-	known := make(map[uint64]cbor.Value, len(m))
-	var extra cbor.Map
-	for _, p := range m {
-		k, ok := p.Key.(uint64)
-		if !ok {
-			return nil, nil, ErrKeyType
-		}
-		if k > last {
-			extra = append(extra, p)
-			continue
-		}
-		known[k] = p.Val
-	}
-	return known, extra, nil
+func checkMagic(f *record.Fields, magic []byte) error { return f.CheckMagic(magic) }
+
+func getBytes(f *record.Fields, k uint64) ([]byte, error) { return f.Bytes(k) }
+
+func inRange(n, lo, hi uint64, what string) error { return record.InRange(n, lo, hi, what) }
+
+func needUint(f *record.Fields, k uint64, lo, hi uint64) (uint64, error) { return f.Uint(k, lo, hi) }
+
+func needBytes(f *record.Fields, k uint64, lo, hi int) ([]byte, error) {
+	return f.BytesRange(k, lo, hi)
 }
 
-// checkMagic applies step 5: key 0 present, bytes, and equal to magic.
-func checkMagic(f map[uint64]cbor.Value, magic []byte) error {
-	b, ok := f[0].([]byte)
-	if !ok || string(b) != string(magic) {
-		return ErrMagic
-	}
-	return nil
-}
-
-func getBytes(f map[uint64]cbor.Value, k uint64) ([]byte, error) {
-	v, ok := f[k]
-	if !ok {
-		return nil, fmt.Errorf("%w: key %d", ErrMissing, k)
-	}
-	b, ok := v.([]byte)
-	if !ok {
-		return nil, fmt.Errorf("%w: key %d", ErrType, k)
-	}
-	return b, nil
-}
-
-func inRange(n, lo, hi uint64, what string) error {
-	if n < lo || n > hi {
-		return fmt.Errorf("%w: %s", ErrRange, what)
-	}
-	return nil
-}
-
-func needUint(f map[uint64]cbor.Value, k uint64, lo, hi uint64) (uint64, error) {
-	v, ok := f[k]
-	if !ok {
-		return 0, fmt.Errorf("%w: key %d", ErrMissing, k)
-	}
-	n, ok := v.(uint64)
-	if !ok {
-		return 0, fmt.Errorf("%w: key %d", ErrType, k)
-	}
-	if n < lo || n > hi {
-		return 0, fmt.Errorf("%w: key %d", ErrRange, k)
-	}
-	return n, nil
-}
-
-func needBytes(f map[uint64]cbor.Value, k uint64, lo, hi int) ([]byte, error) {
-	v, ok := f[k]
-	if !ok {
-		return nil, fmt.Errorf("%w: key %d", ErrMissing, k)
-	}
-	b, ok := v.([]byte)
-	if !ok {
-		return nil, fmt.Errorf("%w: key %d", ErrType, k)
-	}
-	if len(b) < lo || len(b) > hi {
-		return nil, fmt.Errorf("%w: key %d", ErrRange, k)
-	}
-	return b, nil
-}
-
-func needText(f map[uint64]cbor.Value, k uint64) (string, error) {
-	v, ok := f[k]
-	if !ok {
-		return "", fmt.Errorf("%w: key %d", ErrMissing, k)
-	}
-	s, ok := v.(string)
-	if !ok {
-		return "", fmt.Errorf("%w: key %d", ErrType, k)
-	}
-	return s, nil
-}
+func needText(f *record.Fields, k uint64) (string, error) { return f.Text(k) }
 
 func hash32(b []byte) [32]byte {
 	var h [32]byte
@@ -245,17 +160,7 @@ func hash32(b []byte) [32]byte {
 
 func isZero(h [32]byte) bool { return h == [32]byte{} }
 
-// checkExtra holds preserved keys to the rule that they sit above the
-// known keys, so re-encoding cannot shadow a known field.
-func checkExtra(extra cbor.Map, last uint64) error {
-	for _, p := range extra {
-		k, ok := p.Key.(uint64)
-		if !ok || k <= last {
-			return ErrKeyType
-		}
-	}
-	return nil
-}
+func checkExtra(extra cbor.Map, last uint64) error { return record.CheckExtraKeys(extra, last) }
 
 func validURL(u string) bool {
 	if len(u) < len("https://x") || len(u) > MaxURL || !utf8.ValidString(u) {

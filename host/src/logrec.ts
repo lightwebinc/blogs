@@ -12,7 +12,7 @@
  * refusal order of spec section 3.2 step for step, so both codecs refuse a
  * record for the same reason.
  */
-import { CborError, CborMap, bytesEqual, decodeValue, encode, type Pair, type Value } from '@lightwebinc/bcommon'
+import { CborError, CborMap, claimsRecord, decodeValue, encode, recordReader, type Pair, type Value } from '@lightwebinc/bcommon'
 
 /** The BRC-43 protocol, security level 1, and the key ids under it. */
 export const ProtocolName = 'blogs'
@@ -204,89 +204,19 @@ export function topic(stream: string): string {
   return TopicPrefix + stream
 }
 
-/** Keys a record carries by number, and the ones above the last defined. */
-interface Fields {
-  known: Map<number, Value>
-  extra: Pair[]
-}
-
-function decodeMap(b: Uint8Array, max: number): CborMap {
-  if (b.length > max) throw new Refusal('too-large')
-  let v: Value
-  try {
-    v = decodeValue(b)
-  } catch (e) {
-    if (e instanceof CborError) throw new Refusal('cbor', e.message)
-    throw e
-  }
-  if (!(v instanceof CborMap)) throw new Refusal('cbor', 'not a map')
-  if (v.entries.length > MaxKeys) throw new Refusal('too-large', `more than ${MaxKeys} keys`)
-  return v
-}
-
-function intKeys(m: CborMap, last: bigint): Fields {
-  const known = new Map<number, Value>()
-  const extra: Pair[] = []
-  for (const p of m.entries) {
-    if (typeof p.key !== 'bigint' || p.key < 0n) throw new Refusal('key-type')
-    if (p.key > last) {
-      extra.push(p)
-      continue
-    }
-    known.set(Number(p.key), p.val)
-  }
-  return { known, extra }
-}
-
-function checkMagic(f: Fields, magic: Uint8Array): void {
-  const b = f.known.get(0)
-  if (!(b instanceof Uint8Array) || !bytesEqual(b, magic)) throw new Refusal('magic')
-}
-
-function present(f: Fields, k: number): Value {
-  const v = f.known.get(k)
-  if (v === undefined) throw new Refusal('missing', `key ${k}`)
-  return v
-}
-
-function getBytes(f: Fields, k: number): Uint8Array {
-  const v = present(f, k)
-  if (!(v instanceof Uint8Array)) throw new Refusal('type', `key ${k}`)
-  return v
-}
-
-function needBytes(f: Fields, k: number, lo: number, hi: number): Uint8Array {
-  const b = getBytes(f, k)
-  if (b.length < lo || b.length > hi) throw new Refusal('range', `key ${k}`)
-  return b
-}
-
-function needUint(f: Fields, k: number, lo: number, hi: number): number {
-  const v = present(f, k)
-  if (typeof v !== 'bigint' || v < 0n) throw new Refusal('type', `key ${k}`)
-  if (v < BigInt(lo) || v > BigInt(hi)) throw new Refusal('range', `key ${k}`)
-  return Number(v)
-}
-
-function needText(f: Fields, k: number): string {
-  const v = present(f, k)
-  if (typeof v !== 'string') throw new Refusal('type', `key ${k}`)
-  return v
-}
-
-function inRange(n: number, lo: number, hi: number, what: string): void {
-  if (!Number.isSafeInteger(n) || n < lo || n > hi) throw new Refusal('range', what)
-}
+const rec = recordReader((reason, detail) => new Refusal(reason as Reason, detail))
+const decodeMap = rec.decodeMap
+const intKeys = rec.split
+const checkMagic = rec.checkMagic
+const getBytes = rec.bytes
+const needBytes = rec.bytesRange
+const needUint = rec.uint
+const needText = rec.text
+const inRange = rec.inRange
+const checkExtra = rec.checkExtraKeys
 
 function isZero(b: Uint8Array): boolean {
   return b.every((x) => x === 0)
-}
-
-/** Preserved keys sit above the known ones, so re-encoding cannot shadow one. */
-function checkExtra(extra: Pair[], last: bigint): void {
-  for (const p of extra) {
-    if (typeof p.key !== 'bigint' || p.key <= last) throw new Refusal('key-type')
-  }
 }
 
 function validURL(u: string): boolean {
@@ -480,22 +410,7 @@ export function encodeBatch(b: Batch): Uint8Array {
   return out
 }
 
-/**
- * Whether payload claims to be a record under magic: a definite-length map
- * head, key 0, then a four-byte string equal to magic. The carrier
- * classifier's test; it allocates nothing.
- */
-function claims(p: Uint8Array, magic: Uint8Array): boolean {
-  if (p.length < 1 || p[0]! >> 5 !== 5) return false
-  const ai = p[0]! & 0x1f
-  let i: number
-  if (ai < 24) i = 1
-  else if (ai <= 27) i = 1 + (1 << (ai - 24))
-  else return false
-  if (p.length < i + 2 + magic.length) return false
-  if (p[i] !== 0x00 || p[i + 1] !== 0x44) return false
-  return bytesEqual(p.subarray(i + 2, i + 2 + magic.length), magic)
-}
+const claims = claimsRecord
 
 export function isBatch(payload: Uint8Array): boolean {
   return claims(payload, MagicBatch)

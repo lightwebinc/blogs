@@ -19,6 +19,8 @@ import (
 	"github.com/bsv-blockchain/go-sdk/wallet"
 
 	"github.com/lightwebinc/bcommon/pushdrop"
+
+	"github.com/lightwebinc/bcommon/record"
 )
 
 // Registry values (docs/frozen.md); frozen once the first record is
@@ -155,13 +157,13 @@ const (
 // The refusals. Their texts name the rule broken; a host counts them by the
 // Reason of each.
 var (
-	ErrTooLarge     = errors.New("logrec: record exceeds its bound")
-	ErrCBOR         = errors.New("logrec: not a canonical CBOR map")
-	ErrMagic        = errors.New("logrec: wrong magic")
-	ErrKeyType      = errors.New("logrec: record key is not an unsigned integer")
-	ErrMissing      = errors.New("logrec: required key missing")
-	ErrType         = errors.New("logrec: field has the wrong type")
-	ErrRange        = errors.New("logrec: field out of range")
+	ErrTooLarge     = record.ErrTooLarge
+	ErrCBOR         = record.ErrCBOR
+	ErrMagic        = record.ErrMagic
+	ErrKeyType      = record.ErrKeyType
+	ErrMissing      = record.ErrMissing
+	ErrType         = record.ErrType
+	ErrRange        = record.ErrRange
 	ErrProducer     = errors.New("logrec: producer key is not a canonical compressed key")
 	ErrStream       = errors.New("logrec: stream identifier breaks the grammar")
 	ErrPrev         = errors.New("logrec: prev must be zero exactly on the first")

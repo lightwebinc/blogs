@@ -7,7 +7,8 @@ import (
 
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/go-sdk/script"
-	sdkpushdrop "github.com/bsv-blockchain/go-sdk/transaction/template/pushdrop"
+
+	"github.com/lightwebinc/bcommon/pushdrop"
 )
 
 // op is one parsed script element: an opcode, and for a data push the
@@ -103,33 +104,9 @@ func readPushDrop(s []byte) (*pushDrop, bool) {
 }
 
 // PushDropScript is the one canonical lock-before PushDrop for key, fields
-// and an optional field signature, exactly as bcommon pushdrop (through the
-// SDK) writes it: the 33-byte compressed key, OP_CHECKSIG, each field and
-// then the signature as one minimal push, and the fewest OP_2DROP then
-// OP_DROP that clear them. Every script a host checks is compared with this
-// byte for byte.
+// and an optional field signature (bcommon pushdrop.Script).
 func PushDropScript(key *ec.PublicKey, fields [][]byte, sig []byte) []byte {
-	ops := []*script.ScriptChunk{{Op: 33, Data: key.Compressed()}, {Op: script.OpCHECKSIG}}
-	all := append(append([][]byte{}, fields...), sig)
-	if sig == nil {
-		all = all[:len(all)-1]
-	}
-	for _, f := range all {
-		ops = append(ops, sdkpushdrop.CreateMinimallyEncodedScriptChunk(f))
-	}
-	for n := len(all); n > 0; n -= 2 {
-		if n == 1 {
-			ops = append(ops, &script.ScriptChunk{Op: script.OpDROP})
-		} else {
-			ops = append(ops, &script.ScriptChunk{Op: script.Op2DROP})
-		}
-	}
-	s, err := script.NewScriptFromScriptOps(ops)
-	if err != nil {
-		// Every chunk above is well formed; this cannot happen.
-		panic(err)
-	}
-	return *s
+	return pushdrop.Script(key, fields, sig)
 }
 
 // FundingScript is a funding-tree output locked to key:

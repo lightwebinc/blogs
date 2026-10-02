@@ -5,15 +5,15 @@
  * the same way; every script a host checks is compared byte for byte with
  * the one rebuilt here.
  */
-import { toBigInt, checkProducer, TagFunding } from './logrec.js'
+import { pushDropScript } from '@lightwebinc/bcommon'
+import { checkProducer, TagFunding } from './logrec.js'
+
+export { minimalPushBytes, pushDropScript, strictSignature } from '@lightwebinc/bcommon'
 
 const OP_0 = 0x00
 const OP_PUSHDATA1 = 0x4c
 const OP_PUSHDATA2 = 0x4d
 const OP_PUSHDATA4 = 0x4e
-const OP_1NEGATE = 0x4f
-const OP_DROP = 0x75
-const OP_2DROP = 0x6d
 const OP_CHECKSIG = 0xac
 
 /** One parsed script element. */
@@ -86,51 +86,6 @@ export function readPushDrop(s: Uint8Array): PushDropRead | undefined {
   return { key: k, fields }
 }
 
-/**
- * The minimal push of d, as the SDK's CreateMinimallyEncodedScriptChunk
- * writes it: OP_0 for nothing or a single zero byte, OP_1 to OP_16 and
- * OP_1NEGATE for the one-byte values they stand for, then a direct push, then
- * OP_PUSHDATA1, 2 and 4.
- */
-export function minimalPushBytes(d: Uint8Array): Uint8Array {
-  const n = d.length
-  if (n === 0 || (n === 1 && d[0] === 0)) return Uint8Array.of(OP_0)
-  if (n === 1 && d[0]! >= 1 && d[0]! <= 16) return Uint8Array.of(0x50 + d[0]!)
-  if (n === 1 && d[0] === 0x81) return Uint8Array.of(OP_1NEGATE)
-  let head: number[]
-  if (n <= 75) head = [n]
-  else if (n <= 255) head = [OP_PUSHDATA1, n]
-  else if (n <= 65535) head = [OP_PUSHDATA2, n & 0xff, n >> 8]
-  else head = [OP_PUSHDATA4, n & 0xff, (n >> 8) & 0xff, (n >> 16) & 0xff, (n >>> 24) & 0xff]
-  const out = new Uint8Array(head.length + n)
-  out.set(head)
-  out.set(d, head.length)
-  return out
-}
-
-function concat(parts: Uint8Array[]): Uint8Array {
-  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0))
-  let at = 0
-  for (const p of parts) {
-    out.set(p, at)
-    at += p.length
-  }
-  return out
-}
-
-/**
- * The one canonical lock-before PushDrop for a 33-byte compressed key,
- * fields and an optional field signature: the key, OP_CHECKSIG, each field
- * and then the signature as one minimal push, and the fewest OP_2DROP then
- * OP_DROP that clear them.
- */
-export function pushDropScript(key: Uint8Array, fields: Uint8Array[], sig?: Uint8Array): Uint8Array {
-  const all = sig === undefined ? fields : [...fields, sig]
-  const parts: Uint8Array[] = [Uint8Array.of(33), key, Uint8Array.of(OP_CHECKSIG), ...all.map(minimalPushBytes)]
-  for (let n = all.length; n > 0; n -= 2) parts.push(Uint8Array.of(n === 1 ? OP_DROP : OP_2DROP))
-  return concat(parts)
-}
-
 /** A funding-tree output locked to key: <key> OP_CHECKSIG <62 6c 02> OP_DROP. */
 export function fundingScript(key: Uint8Array): Uint8Array {
   return pushDropScript(key, [TagFunding])
@@ -150,29 +105,4 @@ export function isFundingShape(s: Uint8Array): boolean {
 
 export function bytesEq(a: Uint8Array, b: Uint8Array): boolean {
   return a.length === b.length && a.every((x, i) => x === b[i])
-}
-
-const order = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n
-
-function strictInt(b: Uint8Array): boolean {
-  if (b.length === 0 || (b[0]! & 0x80) !== 0) return false
-  return !(b.length > 1 && b[0] === 0 && (b[1]! & 0x80) === 0)
-}
-
-/**
- * A strict DER ECDSA signature (BIP 66) with R in [1, n-1] and S in
- * [1, n/2]: the one encoding a host accepts.
- */
-export function strictSignature(der: Uint8Array): boolean {
-  if (der.length < 8 || der.length > 72 || der[0] !== 0x30 || der[1] !== der.length - 2) return false
-  const lenR = der[3]!
-  if (der[2] !== 0x02 || lenR === 0 || 6 + lenR > der.length) return false
-  const lenS = der[5 + lenR]!
-  if (der[4 + lenR] !== 0x02 || lenS === 0 || 6 + lenR + lenS !== der.length) return false
-  const r = der.subarray(4, 4 + lenR)
-  const s = der.subarray(6 + lenR)
-  if (!strictInt(r) || !strictInt(s)) return false
-  const R = toBigInt(r)
-  const S = toBigInt(s)
-  return R > 0n && R < order && S > 0n && S <= order >> 1n
 }
