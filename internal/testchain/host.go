@@ -2,7 +2,6 @@ package testchain
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,7 +20,8 @@ import (
 
 // Host is a stand-in overlay host for blogs streams: /submit runs the
 // engine's SPV and the blogs topic manager (logrec.Admit) over the topic's
-// previous coins, and /lookup answers the two ls_log classes. Refusals the
+// previous coins, and /lookup answers the three ls_log classes, the question
+// validated by logrec.ParseQuery. Refusals the
 // specification says leave no record (anchor-input, unmined) are not
 // recorded, so the same transaction offered again is decided afresh. A
 // mined transaction admitted here that spends the funding output a held
@@ -39,8 +39,14 @@ type Host struct {
 	// funded is the batch key and carrier each held carrier's funding
 	// output belongs to.
 	funded map[transaction.Outpoint]funder
+	// trees are the held funding outputs of each mined transaction, by
+	// txid, for the tree class.
+	trees      map[string][]uint32
+	treeStream map[string]string
 	// Down answers every request with 503.
 	Down bool
+	// NoTrees refuses the tree class, as a host that predates it does.
+	NoTrees bool
 	// Drop, when set, is asked about each submission; true discards it
 	// unseen, as a plane that lost the object would.
 	Drop func(tx *transaction.Transaction) bool
@@ -64,7 +70,7 @@ type answer struct {
 func NewHost(chain *Chain) *Host {
 	return &Host{chain: chain, seen: map[string]bool{}, held: map[transaction.Outpoint]logrec.Coin{},
 		beef: map[string][]byte{}, batches: map[string][]answer{}, tokens: map[string][]answer{}, Refused: map[string]int{},
-		funded: map[transaction.Outpoint]funder{}}
+		funded: map[transaction.Outpoint]funder{}, trees: map[string][]uint32{}, treeStream: map[string]string{}}
 }
 
 func key(producer []byte, stream string, n uint64) string {
@@ -176,36 +182,40 @@ func (h *Host) submit(w http.ResponseWriter, r *http.Request) {
 			hold(uint32(i)) //nolint:gosec // an output index
 			admitted = append(admitted, uint32(i))
 		}
+		if len(admitted) > 0 {
+			h.trees[id], h.treeStream[id] = admitted, stream
+		}
 	}
 	steak(admitted)
 }
 
 func (h *Host) lookup(w http.ResponseWriter, r *http.Request) {
-	var q struct {
-		Service string `json:"service"`
-		Query   struct {
-			Stream   string `json:"stream"`
-			Producer string `json:"producer"`
-			Seq      uint64 `json:"seq"`
-			Interval uint64 `json:"interval"`
-		} `json:"query"`
+	var body struct {
+		Service string          `json:"service"`
+		Query   json.RawMessage `json:"query"`
 	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&q); err != nil || q.Service != logrec.LookupService {
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil || body.Service != logrec.LookupService {
 		http.Error(w, `{"error":"bad question"}`, http.StatusBadRequest)
 		return
 	}
-	p, err := hex.DecodeString(q.Query.Producer)
-	if err != nil || (q.Query.Seq == 0) == (q.Query.Interval == 0) {
-		http.Error(w, `{"error":"bad question"}`, http.StatusBadRequest)
-		return
-	}
+	q, err := logrec.ParseQuery(body.Query)
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if err != nil || (q.Class == logrec.ClassTree && h.NoTrees) {
+		http.Error(w, `{"error":"bad question"}`, http.StatusBadRequest)
+		return
+	}
 	var as []answer
-	if q.Query.Seq > 0 {
-		as = h.batches[key(p, q.Query.Stream, q.Query.Seq)]
-	} else {
-		as = h.tokens[key(p, q.Query.Stream, q.Query.Interval)]
+	switch q.Class {
+	case logrec.ClassBatch:
+		as = h.batches[key(q.Producer, q.Stream, q.Seq)]
+	case logrec.ClassInterval:
+		as = h.tokens[key(q.Producer, q.Stream, q.Interval)]
+	default:
+		// One output answers the tree: the lowest held.
+		if outs := h.trees[q.Tree]; len(outs) > 0 && h.treeOn(q.Tree, q.Stream) {
+			as = []answer{{q.Tree, slices.Min(outs)}}
+		}
 	}
 	sort.Slice(as, func(i, j int) bool { return as[i].txid < as[j].txid })
 	type item struct {
@@ -224,6 +234,9 @@ func (h *Host) lookup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"type": "output-list", "outputs": outs})
 }
 
+// treeOn reports whether the tree txid was admitted on stream's topic.
+func (h *Host) treeOn(txid, stream string) bool { return h.treeStream[txid] == stream }
+
 // Forget drops what the host holds for one seq, as a host that missed it.
 func (h *Host) Forget(producer []byte, stream string, seq uint64) {
 	h.mu.Lock()
@@ -239,6 +252,13 @@ func (h *Host) Holds(producer []byte, stream string, seq uint64) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return len(h.batches[key(producer, stream, seq)]) > 0
+}
+
+// SetNoTrees sets NoTrees under the host's lock.
+func (h *Host) SetNoTrees(no bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.NoTrees = no
 }
 
 // SetDown sets Down under the host's lock.

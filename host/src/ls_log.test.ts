@@ -101,6 +101,48 @@ test('a question is exactly one class, every member within its rule, or an error
   // A member given twice takes its last value, as the JSON parser gives it.
   assert.deepEqual(parseQuery(JSON.parse(`{"stream":"${v.stream}","producer":"${producer}","seq":9,"seq":1}`)), ok)
   assert.deepEqual(await ask(ls, ok), [], 'a stream this host holds nothing of answers empty')
+  // The tree class: exactly stream and tree.
+  const t = 'ab'.repeat(32)
+  assert.deepEqual(parseQuery({ stream: v.stream, tree: t }), { stream: v.stream, tree: t })
+  const badTree: unknown[] = [
+    { tree: t },
+    { stream: v.stream, tree: t, producer },
+    { stream: v.stream, tree: t, seq: 1 },
+    { stream: v.stream, tree: t, vout: 0 },
+    { stream: 'example_app', tree: t },
+    { stream: v.stream, tree: t.toUpperCase() },
+    { stream: v.stream, tree: t.slice(2) },
+    { stream: v.stream, tree: 'zz'.repeat(32) },
+    { stream: v.stream, tree: 1 },
+  ]
+  for (const q of badTree) await assert.rejects(ask(ls, q), /ls_log/, JSON.stringify(q))
+  assert.deepEqual(await ask(ls, { stream: v.stream, tree: t }), [], 'a tree this host does not hold answers empty')
+})
+
+test('the tree class answers a held funding tree by txid with one output, spent or not, and nothing else', async () => {
+  const ls = service()
+  const id = txid('funding-tree')
+  const q = { stream: v.stream, tree: id }
+  assert.deepEqual(await ask(ls, q), [])
+  admitVector(ls, 'funding-tree')
+  assert.deepEqual(await ask(ls, q), [{ txid: id, outputIndex: 0 }], 'the lowest held funding output')
+  assert.equal(ls.treeCount, 1)
+  // Spends do not change the answer: every admitted output is retained.
+  for (const n of ['carrier-seq-1', 'carrier-seq-2', 'carrier-seq-3', 'anchor-interval-1', 'anchor-interval-2']) admitVector(ls, n)
+  assert.deepEqual(await ask(ls, q), [{ txid: id, outputIndex: 0 }])
+  // A carrier and an anchor token are held coins, but not funding outputs: no tree answers them.
+  assert.deepEqual(await ask(ls, { stream: v.stream, tree: txid('carrier-seq-1') }), [])
+  assert.deepEqual(await ask(ls, { stream: v.stream, tree: txid('anchor-interval-1') }), [])
+  // A sweep's tombstone is a funding output of a mined transaction, so its txid answers too.
+  admitVector(ls, 'sweep')
+  assert.deepEqual(await ask(ls, { stream: v.stream, tree: txid('sweep') }), [{ txid: txid('sweep'), outputIndex: 0 }])
+  // Another stream's topic holds nothing of it.
+  assert.deepEqual(await ask(ls, { stream: 'example_app_hdjvnwpxle', tree: id }), [])
+  // An output the engine no longer holds leaves the answer; the last one empties it.
+  ls.outputNoLongerRetainedInHistory(id, 0, v.topic)
+  assert.deepEqual(await ask(ls, q), [{ txid: id, outputIndex: 1 }])
+  for (const i of [1, 2, 3, 4]) ls.outputEvicted(id, i)
+  assert.deepEqual(await ask(ls, q), [])
 })
 
 test('a gap is reported and closed by the late batch, in either delivery order', async () => {

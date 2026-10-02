@@ -1,0 +1,247 @@
+{
+  "classes": {
+    "batch": [
+      "stream",
+      "producer",
+      "seq"
+    ],
+    "interval": [
+      "stream",
+      "producer",
+      "interval"
+    ],
+    "tree": [
+      "stream",
+      "tree"
+    ]
+  },
+  "description": "Questions to the lookup service (docs/spec.md section 7.2). query is the question's query object as JSON text; a host parses it and validates the parsed value. Three classes, all free: batch {stream, producer, seq}, interval {stream, producer, interval} and tree {stream, tree}. A question carries exactly the members of one class; anything else is refused with an error, never answered empty and never ignored. The tree txid is a stand-in.",
+  "queries": [
+    {
+      "name": "batch",
+      "query": "{\"stream\":\"example_app_qzxkvbmwtr\",\"producer\":\"0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c\",\"seq\":1}",
+      "class": "batch",
+      "verdict": "answer",
+      "parsed": {
+        "stream": "example_app_qzxkvbmwtr",
+        "producer": "0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c",
+        "seq": 1
+      }
+    },
+    {
+      "name": "batch-seq-as-double",
+      "query": "{\"stream\":\"example_app_qzxkvbmwtr\",\"producer\":\"0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c\",\"seq\":7.0}",
+      "class": "batch",
+      "verdict": "answer",
+      "parsed": {
+        "stream": "example_app_qzxkvbmwtr",
+        "producer": "0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c",
+        "seq": 7
+      }
+    },
+    {
+      "name": "batch-seq-largest",
+      "query": "{\"stream\":\"example_app_qzxkvbmwtr\",\"producer\":\"0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c\",\"seq\":9007199254740991}",
+      "class": "batch",
+      "verdict": "answer",
+      "parsed": {
+        "stream": "example_app_qzxkvbmwtr",
+        "producer": "0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c",
+        "seq": 9007199254740991
+      }
+    },
+    {
+      "name": "batch-member-twice-last-wins",
+      "query": "{\"stream\":\"example_app_qzxkvbmwtr\",\"producer\":\"0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c\",\"seq\":9,\"seq\":2}",
+      "class": "batch",
+      "verdict": "answer",
+      "parsed": {
+        "stream": "example_app_qzxkvbmwtr",
+        "producer": "0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c",
+        "seq": 2
+      }
+    },
+    {
+      "name": "interval",
+      "query": "{\"producer\":\"0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c\",\"interval\":2,\"stream\":\"example_app_qzxkvbmwtr\"}",
+      "class": "interval",
+      "verdict": "answer",
+      "parsed": {
+        "stream": "example_app_qzxkvbmwtr",
+        "producer": "0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c",
+        "interval": 2
+      }
+    },
+    {
+      "name": "tree",
+      "query": "{\"stream\":\"example_app_qzxkvbmwtr\",\"tree\":\"80f0b46bab7c397e7669ed0fc547afc76e2787a55324438b6d77a3c09b72de48\"}",
+      "class": "tree",
+      "verdict": "answer",
+      "parsed": {
+        "stream": "example_app_qzxkvbmwtr",
+        "tree": "80f0b46bab7c397e7669ed0fc547afc76e2787a55324438b6d77a3c09b72de48"
+      }
+    },
+    {
+      "name": "tree-members-in-any-order",
+      "query": "{\"tree\":\"80f0b46bab7c397e7669ed0fc547afc76e2787a55324438b6d77a3c09b72de48\",\"stream\":\"example_app_qzxkvbmwtr\"}",
+      "class": "tree",
+      "verdict": "answer",
+      "parsed": {
+        "stream": "example_app_qzxkvbmwtr",
+        "tree": "80f0b46bab7c397e7669ed0fc547afc76e2787a55324438b6d77a3c09b72de48"
+      }
+    },
+    {
+      "name": "not-an-object",
+      "query": "[]",
+      "verdict": "refuse"
+    },
+    {
+      "name": "null",
+      "query": "null",
+      "verdict": "refuse"
+    },
+    {
+      "name": "empty",
+      "query": "{}",
+      "verdict": "refuse"
+    },
+    {
+      "name": "no-class-member",
+      "query": "{\"stream\":\"example_app_qzxkvbmwtr\",\"producer\":\"0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c\"}",
+      "verdict": "refuse"
+    },
+    {
+      "name": "batch-without-producer",
+      "query": "{\"stream\":\"example_app_qzxkvbmwtr\",\"seq\":1}",
+      "verdict": "refuse"
+    },
+    {
+      "name": "batch-without-stream",
+      "query": "{\"producer\":\"0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c\",\"seq\":1}",
+      "verdict": "refuse"
+    },
+    {
+      "name": "batch-and-interval",
+      "query": "{\"stream\":\"example_app_qzxkvbmwtr\",\"producer\":\"0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c\",\"seq\":1,\"interval\":1}",
+      "verdict": "refuse"
+    },
+    {
+      "name": "batch-unknown-member",
+      "query": "{\"stream\":\"example_app_qzxkvbmwtr\",\"producer\":\"0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c\",\"seq\":1,\"extra\":true}",
+      "verdict": "refuse"
+    },
+    {
+      "name": "stream-readable-part-alone",
+      "query": "{\"stream\":\"example_app\",\"producer\":\"0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c\",\"seq\":1}",
+      "verdict": "refuse"
+    },
+    {
+      "name": "stream-upper-case",
+      "query": "{\"stream\":\"Example_app_qzxkvbmwtr\",\"producer\":\"0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c\",\"seq\":1}",
+      "verdict": "refuse"
+    },
+    {
+      "name": "stream-not-a-string",
+      "query": "{\"stream\":7,\"producer\":\"0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c\",\"seq\":1}",
+      "verdict": "refuse"
+    },
+    {
+      "name": "producer-upper-case",
+      "query": "{\"stream\":\"example_app_qzxkvbmwtr\",\"producer\":\"0324653EAC434488002CC06BBFB7F10FE18991E35F9FE4302DBEA6D2353DC0AB1C\",\"seq\":1}",
+      "verdict": "refuse"
+    },
+    {
+      "name": "producer-short",
+      "query": "{\"stream\":\"example_app_qzxkvbmwtr\",\"producer\":\"24653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c\",\"seq\":1}",
+      "verdict": "refuse"
+    },
+    {
+      "name": "producer-not-on-curve",
+      "query": "{\"stream\":\"example_app_qzxkvbmwtr\",\"producer\":\"02ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"seq\":1}",
+      "verdict": "refuse"
+    },
+    {
+      "name": "seq-zero",
+      "query": "{\"stream\":\"example_app_qzxkvbmwtr\",\"producer\":\"0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c\",\"seq\":0}",
+      "verdict": "refuse"
+    },
+    {
+      "name": "seq-fraction",
+      "query": "{\"stream\":\"example_app_qzxkvbmwtr\",\"producer\":\"0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c\",\"seq\":1.5}",
+      "verdict": "refuse"
+    },
+    {
+      "name": "seq-over-2-53",
+      "query": "{\"stream\":\"example_app_qzxkvbmwtr\",\"producer\":\"0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c\",\"seq\":9007199254740992}",
+      "verdict": "refuse"
+    },
+    {
+      "name": "seq-a-string",
+      "query": "{\"stream\":\"example_app_qzxkvbmwtr\",\"producer\":\"0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c\",\"seq\":\"1\"}",
+      "verdict": "refuse"
+    },
+    {
+      "name": "seq-negative",
+      "query": "{\"stream\":\"example_app_qzxkvbmwtr\",\"producer\":\"0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c\",\"seq\":-1}",
+      "verdict": "refuse"
+    },
+    {
+      "name": "interval-zero",
+      "query": "{\"stream\":\"example_app_qzxkvbmwtr\",\"producer\":\"0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c\",\"interval\":0}",
+      "verdict": "refuse"
+    },
+    {
+      "name": "tree-with-producer",
+      "query": "{\"stream\":\"example_app_qzxkvbmwtr\",\"producer\":\"0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c\",\"tree\":\"80f0b46bab7c397e7669ed0fc547afc76e2787a55324438b6d77a3c09b72de48\"}",
+      "verdict": "refuse"
+    },
+    {
+      "name": "tree-with-seq",
+      "query": "{\"stream\":\"example_app_qzxkvbmwtr\",\"tree\":\"80f0b46bab7c397e7669ed0fc547afc76e2787a55324438b6d77a3c09b72de48\",\"seq\":1}",
+      "verdict": "refuse"
+    },
+    {
+      "name": "tree-with-interval",
+      "query": "{\"stream\":\"example_app_qzxkvbmwtr\",\"producer\":\"0324653eac434488002cc06bbfb7f10fe18991e35f9fe4302dbea6d2353dc0ab1c\",\"tree\":\"80f0b46bab7c397e7669ed0fc547afc76e2787a55324438b6d77a3c09b72de48\",\"interval\":1}",
+      "verdict": "refuse"
+    },
+    {
+      "name": "tree-with-output",
+      "query": "{\"stream\":\"example_app_qzxkvbmwtr\",\"tree\":\"80f0b46bab7c397e7669ed0fc547afc76e2787a55324438b6d77a3c09b72de48\",\"vout\":0}",
+      "verdict": "refuse"
+    },
+    {
+      "name": "tree-without-stream",
+      "query": "{\"tree\":\"80f0b46bab7c397e7669ed0fc547afc76e2787a55324438b6d77a3c09b72de48\"}",
+      "verdict": "refuse"
+    },
+    {
+      "name": "tree-upper-case",
+      "query": "{\"stream\":\"example_app_qzxkvbmwtr\",\"tree\":\"80F0B46BAB7C397E7669ED0FC547AFC76E2787A55324438B6D77A3C09B72DE48\"}",
+      "verdict": "refuse"
+    },
+    {
+      "name": "tree-short",
+      "query": "{\"stream\":\"example_app_qzxkvbmwtr\",\"tree\":\"f0b46bab7c397e7669ed0fc547afc76e2787a55324438b6d77a3c09b72de48\"}",
+      "verdict": "refuse"
+    },
+    {
+      "name": "tree-not-hex",
+      "query": "{\"stream\":\"example_app_qzxkvbmwtr\",\"tree\":\"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\"}",
+      "verdict": "refuse"
+    },
+    {
+      "name": "tree-not-a-string",
+      "query": "{\"stream\":\"example_app_qzxkvbmwtr\",\"tree\":1}",
+      "verdict": "refuse"
+    },
+    {
+      "name": "tree-stream-readable-part-alone",
+      "query": "{\"stream\":\"example_app\",\"tree\":\"80f0b46bab7c397e7669ed0fc547afc76e2787a55324438b6d77a3c09b72de48\"}",
+      "verdict": "refuse"
+    }
+  ],
+  "service": "ls_log"
+}

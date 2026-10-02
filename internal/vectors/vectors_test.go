@@ -157,3 +157,38 @@ func TestTransactionVectorsFromBEEF(t *testing.T) {
 		}
 	}
 }
+
+// TestQueryVectorsFromFile reads the checked-in question vectors and holds
+// the codec to each verdict.
+func TestQueryVectorsFromFile(t *testing.T) {
+	var f struct {
+		Queries []struct {
+			Name    string `json:"name"`
+			Query   string `json:"query"`
+			Class   string `json:"class"`
+			Verdict string `json:"verdict"`
+		} `json:"queries"`
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "query-v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &f); err != nil || len(f.Queries) == 0 {
+		t.Fatalf("query-v1.json: %v", err)
+	}
+	classes := map[string]bool{}
+	for _, q := range f.Queries {
+		got, err := logrec.ParseQuery([]byte(q.Query))
+		switch {
+		case q.Verdict == "refuse" && err == nil:
+			t.Errorf("%s: accepted", q.Name)
+		case q.Verdict == "answer" && (err != nil || got.Class != q.Class):
+			t.Errorf("%s: %v %v", q.Name, got, err)
+		case q.Verdict == "answer":
+			classes[got.Class] = true
+		}
+	}
+	if len(classes) != 3 {
+		t.Errorf("classes accepted: %v, want the three", classes)
+	}
+}

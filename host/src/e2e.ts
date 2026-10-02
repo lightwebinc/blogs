@@ -145,6 +145,17 @@ async function ask(h: Host, query: Record<string, unknown>): Promise<string[]> {
   return (body.outputs ?? []).map((o) => Transaction.fromBEEF(o.beef).id('hex'))
 }
 
+/** The tree class: each answered txid with its proof's block height (-1 with no proof). */
+async function askTree(h: Host, txid: string): Promise<Array<[string, number]>> {
+  const res = await fetch(`${h.url}/lookup`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ service: 'ls_log', query: { stream: v.stream, tree: txid } }) })
+  const body = (await res.json()) as { outputs?: Array<{ beef: number[] }>; error?: string }
+  if (res.status !== 200) fail(`lookup tree ${txid}: ${res.status} ${body.error}`)
+  return (body.outputs ?? []).map((o) => {
+    const tx = Transaction.fromBEEF(o.beef)
+    return [tx.id('hex'), tx.merklePath?.blockHeight ?? -1]
+  })
+}
+
 function expect(what: string, got: unknown, want: unknown): void {
   const g = JSON.stringify(got)
   const w = JSON.stringify(want)
@@ -185,6 +196,12 @@ async function main(): Promise<void> {
       expect(`${when}: seq 3`, await ask(host!, q('seq', 3)), [id('carrier-seq-3')])
       expect(`${when}: interval 1 (spent by interval 2)`, await ask(host!, q('interval', 1)), [id('anchor-interval-1')])
       expect(`${when}: interval 2`, await ask(host!, q('interval', 2)), [id('anchor-interval-2')])
+      // Every funding output of the tree is spent by now; the host still
+      // answers the tree, with its proof.
+      const tree = await askTree(host!, id('funding-tree'))
+      expect(`${when}: the fully spent funding tree, by txid`, tree.map(([t]) => t), [id('funding-tree')])
+      if (!v.headers.some((h) => h.height === tree[0]![1])) fail(`${when}: the tree's BEEF carries no proof at a vector height`)
+      expect(`${when}: a carrier is not a tree`, await askTree(host!, id('carrier-seq-3')), [])
     }
     await answers('live', false)
     expect('the sweep admits its tombstone', await submit(host, 'sweep'), [0])

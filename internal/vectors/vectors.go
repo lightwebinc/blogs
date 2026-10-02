@@ -263,6 +263,15 @@ func Generate() (map[string][]byte, error) {
 	if err := putJSON(files, "transaction-v1.json", txv); err != nil {
 		return nil, err
 	}
+
+	// Lookup questions.
+	qv, err := queryVectors(prod)
+	if err != nil {
+		return nil, err
+	}
+	if err := putJSON(files, "query-v1.json", qv); err != nil {
+		return nil, err
+	}
 	return files, nil
 }
 

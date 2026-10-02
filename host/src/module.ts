@@ -91,6 +91,7 @@ export function blogsModule(host: ModuleHost, streams: StreamConfig[], overlayTo
   host.metrics.gauge('blogs_streams', () => ls.streamCount)
   host.metrics.gauge('blogs_batches', () => ls.batchCount)
   host.metrics.gauge('blogs_anchor_tokens', () => ls.tokenCount)
+  host.metrics.gauge('blogs_funding_trees', () => ls.treeCount)
   host.metrics.gauge('blogs_retracted_batches', () => ls.retractedCount)
   host.metrics.gauge('blogs_missing_positions', () => ls.missingCount)
   host.metrics.gauge('blogs_fork_positions', () => ls.forkSeqCount)

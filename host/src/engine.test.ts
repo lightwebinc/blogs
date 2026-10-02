@@ -45,6 +45,16 @@ async function submit(e: Engine, name: string): Promise<number[]> {
   return steak[topic]?.outputsToAdmit ?? []
 }
 
+/** The tree class's answer: each answered transaction's txid, whether its BEEF carries a proof, and the output. */
+async function treeAnswer(e: Engine, id: string): Promise<Array<[string, boolean, number]>> {
+  const a = await e.lookup({ service: LookupService, query: { stream: v.stream, tree: id } })
+  if (a.type !== 'output-list') throw new Error('not an output list')
+  return a.outputs.map((o) => {
+    const tx = Transaction.fromBEEF(o.beef)
+    return [tx.id('hex'), tx.merklePath !== undefined, o.outputIndex]
+  })
+}
+
 async function answer(e: Engine, query: Record<string, unknown>): Promise<string[]> {
   const a = await e.lookup({ service: LookupService, query })
   if (a.type !== 'output-list') throw new Error('not an output list')
@@ -142,6 +152,13 @@ test('scrambled delivery, retraction, and a restore from the engine storage in a
     assert.deepEqual(await answer(e, q('seq', seq)), [txid(name)])
   }
   assert.deepEqual(await answer(e, q('interval', 1)), [txid('anchor-interval-1')], 'a spent token is still answered')
+  // The tree class: every funding output of the tree is spent by now (three
+  // carriers and two anchors), which is when a pruning node stops serving
+  // it; the host still answers it, with the proof it was admitted with.
+  const treeRows = await storage.findOutputsForTransaction(txid('funding-tree'))
+  assert.deepEqual(treeRows.map((o) => o.spent), [true, true, true, true, true], 'every funding output is retained, spent')
+  assert.deepEqual(await treeAnswer(e, txid('funding-tree')), [[txid('funding-tree'), true, 0]])
+  assert.deepEqual(await treeAnswer(e, txid('anchor-interval-1')), [], 'an anchor token is not a tree')
 
   // The sweep retracts seq 1 and 2: nothing answers them, their receipts
   // still complete interval 1.
@@ -165,5 +182,12 @@ test('scrambled delivery, retraction, and a restore from the engine storage in a
     for (const [k, n] of [['seq', 1], ['seq', 2], ['seq', 3], ['interval', 1], ['interval', 2]] as const) {
       assert.deepEqual(await again.lookup({ service: LookupService, query: q(k, n) }), await ls.lookup({ service: LookupService, query: q(k, n) }))
     }
+    // The fully spent tree, and the sweep by its tombstone, are found again from storage.
+    for (const name of ['funding-tree', 'sweep']) {
+      const tq = { service: LookupService, query: { stream: v.stream, tree: txid(name) } }
+      assert.deepEqual(await again.lookup(tq), [{ txid: txid(name), outputIndex: 0 }], name)
+      assert.deepEqual(await again.lookup(tq), await ls.lookup(tq))
+    }
+    assert.equal(again.treeCount, ls.treeCount)
   }
 })

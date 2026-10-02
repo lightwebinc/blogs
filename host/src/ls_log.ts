@@ -10,10 +10,16 @@
  * canonical chain; an interval's completeness) is a function of that set,
  * computed when asked, so arrival order and restart order never change it.
  *
- * It answers exactly the two free question classes, `{stream, producer,
- * seq}` and `{stream, producer, interval}`, and refuses every other query
- * with an error. Statuses are reported by `report`, the metrics, and the log,
- * never inside an answer: the answer is the signed contract's output list.
+ * It answers exactly the three free question classes, `{stream, producer,
+ * seq}`, `{stream, producer, interval}` and `{stream, tree}`, and refuses
+ * every other query with an error. Statuses are reported by `report`, the
+ * metrics, and the log, never inside an answer: the answer is the signed
+ * contract's output list.
+ *
+ * The tree class answers a mined funding tree by its txid, from the funding
+ * outputs the topic holds: every admitted funding output is retained once
+ * spent (spec section 8.1), so a tree whose outputs are all spent, which a
+ * pruning node no longer serves, is still answered here with its proof.
  */
 import { MerklePath, Transaction } from '@bsv/sdk'
 import type {
@@ -155,6 +161,8 @@ export class LogLookupService implements LookupService {
   private readonly byOutpoint = new Map<string, Array<{ topic: string; kind: 'batch' | 'token' | 'coin'; stream?: Stream }>>()
   /** topic | outpoint -> the admitted output, for the topic manager's previous coins. */
   private readonly held = new Map<string, Coin>()
+  /** topic | txid -> the funding outputs the topic holds of that transaction, for the tree class. */
+  private readonly trees = new Map<string, Set<number>>()
   /** Funding outpoint -> the carriers (display txid) that spend it. */
   private readonly carriersByFunding = new Map<string, Set<string>>()
   /** Outpoint -> txid -> whether that spender is mined. */
@@ -273,8 +281,16 @@ export class LogLookupService implements LookupService {
       this.addToken(topic, s, { anchor: a, txid, txidKey: hashKey(txid), outputIndex, outpoint: op, ...at, inputs: inputsOf(tx) })
       return
     }
-    // A funding output: held so that a later spend of it can be read.
-    if (!isFundingShape(script)) this.host.log('ls_log indexed an output of no known kind', { topic, outpoint: op })
+    // A funding output: held so that a later spend of it can be read, and
+    // so that the tree class can answer its transaction.
+    if (!isFundingShape(script)) {
+      this.host.log('ls_log indexed an output of no known kind', { topic, outpoint: op })
+      return
+    }
+    const k = `${topic}|${txid}`
+    let vouts = this.trees.get(k)
+    if (vouts === undefined) this.trees.set(k, (vouts = new Set()))
+    vouts.add(outputIndex)
   }
 
   private hold(topic: string, op: string, coin: Coin): void {
@@ -384,11 +400,26 @@ export class LogLookupService implements LookupService {
     for (const r of refs) {
       if (topic !== undefined && r.topic !== topic) continue
       this.held.delete(`${r.topic}|${op}`)
+      if (r.kind === 'coin') this.dropTree(r.topic, op)
       if (r.kind === 'batch' && r.stream !== undefined) this.dropBatch(r.stream, op)
       if (r.kind === 'token' && r.stream !== undefined) this.dropToken(r.stream, op)
     }
     if (keep.length === 0) this.byOutpoint.delete(op)
     else this.byOutpoint.set(op, keep)
+  }
+
+  private dropTree(topic: string, op: string): void {
+    const dot = op.lastIndexOf('.')
+    const k = `${topic}|${op.slice(0, dot)}`
+    const vouts = this.trees.get(k)
+    if (vouts === undefined) return
+    vouts.delete(Number(op.slice(dot + 1)))
+    if (vouts.size === 0) this.trees.delete(k)
+  }
+
+  /** How many funding trees (and sweeps, by their tombstones) the tree class can answer. */
+  get treeCount(): number {
+    return this.trees.size
   }
 
   private dropBatch(s: Stream, op: string): void {
@@ -557,6 +588,13 @@ export class LogLookupService implements LookupService {
   async lookup(question: LookupQuestion): Promise<LookupFormula> {
     if (question.service !== LookupServiceName) throw new Error(`ls_log: this service is ${LookupServiceName}, not ${String(question.service)}`)
     const q = parseQuery(question.query)
+    if ('tree' in q) {
+      // One output answers the whole transaction: the engine hydrates it as
+      // the tree's BEEF, with the proof it was admitted with.
+      const vouts = this.trees.get(`${TopicPrefix}${q.stream}|${q.tree}`)
+      if (vouts === undefined || vouts.size === 0) return []
+      return [{ txid: q.tree, outputIndex: Math.min(...vouts) }]
+    }
     const s = this.streams.get(`${q.producer}|${q.stream}`)
     if (s === undefined) return []
     if ('seq' in q) {
@@ -589,6 +627,7 @@ export class LogLookupService implements LookupService {
     this.streams.clear()
     this.byOutpoint.clear()
     this.held.clear()
+    this.trees.clear()
     this.carriersByFunding.clear()
     this.spenders.clear()
     this.retracted.clear()
@@ -654,12 +693,15 @@ export class LogLookupService implements LookupService {
     return [
       '# ls_log',
       '',
-      'Two free question classes, for every blogs stream this host carries:',
+      'Three free question classes, for every blogs stream this host carries:',
       '',
       '- `{"stream": s, "producer": p, "seq": n}`: the admitted, unretracted batch',
       '  carriers of p on s at seq n (at most 8, by commitment);',
       '- `{"stream": s, "producer": p, "interval": k}`: the admitted anchor tokens of',
-      '  p on s for interval k (at most 8, canonical first).',
+      '  p on s for interval k (at most 8, canonical first);',
+      '- `{"stream": s, "tree": t}`: the mined funding tree with txid t whose funding',
+      '  outputs the topic of s holds, spent or not (one output, the lowest held; its',
+      '  BEEF is the tree with its proof).',
       '',
       'Any other member, a missing member or a value out of range is refused with',
       'an error. An empty answer means only that this host holds nothing that answers.',
@@ -667,11 +709,14 @@ export class LogLookupService implements LookupService {
   }
 
   async getMetaData(): Promise<LookupServiceMetaData> {
-    return { name: LookupServiceName, shortDescription: 'Answers blogs batches by seq and anchor tokens by interval.' }
+    return { name: LookupServiceName, shortDescription: 'Answers blogs batches by seq, anchor tokens by interval and funding trees by txid.' }
   }
 }
 
-export type Query = { stream: string; producer: string; seq: number } | { stream: string; producer: string; interval: number }
+export type Query =
+  | { stream: string; producer: string; seq: number }
+  | { stream: string; producer: string; interval: number }
+  | { stream: string; tree: string }
 
 /**
  * Validates a question as parsed (spec section 7.2): exactly the members of
@@ -682,10 +727,12 @@ export function parseQuery(query: unknown): Query {
   if (typeof query !== 'object' || query === null || Array.isArray(query)) throw new Error('ls_log: the query is not an object')
   const q = query as Record<string, unknown>
   const members = Object.keys(q).sort()
-  const cls = members.includes('seq') ? 'seq' : 'interval'
-  const want = ['producer', cls, 'stream'].sort()
-  if (members.length !== 3 || members.some((m, i) => m !== want[i])) {
-    throw new Error(`ls_log: a query has exactly stream, producer and one of seq or interval; got ${members.join(', ') || 'nothing'}`)
+  const cls = members.includes('tree') ? 'tree' : members.includes('seq') ? 'seq' : 'interval'
+  const want = (cls === 'tree' ? ['stream', 'tree'] : ['producer', cls, 'stream']).sort()
+  if (members.length !== want.length || members.some((m, i) => m !== want[i])) {
+    throw new Error(
+      `ls_log: a query has exactly stream, producer and one of seq or interval, or exactly stream and tree; got ${members.join(', ') || 'nothing'}`,
+    )
   }
   const stream = q['stream']
   if (typeof stream !== 'string') throw new Error('ls_log: stream is not a string')
@@ -693,6 +740,11 @@ export function parseQuery(query: unknown): Query {
     checkStream(stream)
   } catch {
     throw new Error('ls_log: stream is not a stream identifier <name>_<suffix>')
+  }
+  if (cls === 'tree') {
+    const tree = q['tree']
+    if (typeof tree !== 'string' || !/^[0-9a-f]{64}$/.test(tree)) throw new Error('ls_log: tree is not a txid of 64 lowercase hex characters')
+    return { stream, tree }
   }
   const producer = q['producer']
   if (typeof producer !== 'string' || !/^[0-9a-f]{66}$/.test(producer)) throw new Error('ls_log: producer is not 66 lowercase hex characters')

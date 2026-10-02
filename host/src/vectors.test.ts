@@ -37,6 +37,7 @@ import { admit, fromHex, outpointKey, toHex, type Coin, type Policy } from './ad
 import { checkFetched, expand } from './content.js'
 import { intervalRoot, leafHash, pathIndex, prove, verifyBatch, type Step } from './merkle.js'
 import { fundingScript } from './script.js'
+import { parseQuery } from './ls_log.js'
 
 const dir = new URL('../../testdata/vectors/', import.meta.url)
 const read = (name: string): string => readFileSync(new URL(name, dir), 'utf8')
@@ -68,6 +69,7 @@ const covered = new Set([
   'derivation-v1.json',
   'refusal-v1.json',
   'transaction-v1.json',
+  'query-v1.json',
 ])
 
 test('every vector file is run', () => {
@@ -329,4 +331,31 @@ test('every transaction is admitted or refused as the Go codec does', async () =
   }
   assert.equal(admitted + refused, v.transactions.length)
   assert.ok(admitted > 0 && refused > 0)
+})
+
+interface QueryVector {
+  name: string
+  query: string
+  class?: 'batch' | 'interval' | 'tree'
+  verdict: 'answer' | 'refuse'
+  parsed?: { stream: string; producer?: string; seq?: number; interval?: number; tree?: string }
+}
+
+test('lookup questions: each class is read as the Go codec read it, and every refusal is refused', () => {
+  const f = json<{ service: string; classes: Record<string, string[]>; queries: QueryVector[] }>('query-v1.json')
+  assert.equal(f.service, LookupService)
+  assert.deepEqual(Object.keys(f.classes).sort(), ['batch', 'interval', 'tree'])
+  assert.ok(f.queries.length > 0)
+  for (const q of f.queries) {
+    const parsed: unknown = JSON.parse(q.query)
+    if (q.verdict === 'refuse') {
+      assert.throws(() => parseQuery(parsed), /ls_log/, q.name)
+      continue
+    }
+    const got = parseQuery(parsed)
+    assert.deepEqual(got, q.parsed, q.name)
+    const cls = 'tree' in got ? 'tree' : 'seq' in got ? 'batch' : 'interval'
+    assert.equal(cls, q.class, q.name)
+    assert.deepEqual(Object.keys(got).sort(), [...f.classes[cls]!].sort(), q.name)
+  }
 })
