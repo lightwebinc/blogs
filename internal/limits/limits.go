@@ -81,7 +81,10 @@ const (
 	DefaultRate = 2
 	MaxRate     = 50
 	// DefaultTreeCount and MaxTreeCount bound a batch funding tree's
-	// outputs; every carrier's BEEF carries its tree. PlaneTreeCountWarn
+	// outputs; every carrier's BEEF carries its tree. MaxTreeCount bounds an
+	// anchor fee tree too, under bcommon's mint.MaxFundingOutputs (1023), so
+	// a larger tree is refused before a run rather than at its mint.
+	// PlaneTreeCountWarn
 	// is where the tree alone is about 10 fragments.
 	DefaultTreeCount   = 100
 	MaxTreeCount       = 1000
@@ -114,19 +117,20 @@ const (
 
 // Producer is a producer's settings, as the checks see them.
 type Producer struct {
-	Plane         bool
-	Hosts         int
-	Need          int
-	Digest        bool
-	Gzip          bool
-	MaxBytes      int
-	MaxLines      int
-	MaxWait       time.Duration
-	Interval      time.Duration
-	AnchorBatches int
-	Rate          float64
-	TreeCount     int
-	ObjectBound   int
+	Plane           bool
+	Hosts           int
+	Need            int
+	Digest          bool
+	Gzip            bool
+	MaxBytes        int
+	MaxLines        int
+	MaxWait         time.Duration
+	Interval        time.Duration
+	AnchorBatches   int
+	Rate            float64
+	TreeCount       int
+	AnchorTreeCount int
+	ObjectBound     int
 }
 
 // DefaultMaxBytes is -max-bytes when none is given, by mode and profile.
@@ -186,6 +190,8 @@ func (p Producer) Check() (warnings []string, err error) {
 		return nil, over("-max-rate", p.Rate, MaxRate, "every subscribed host receives every batch, and a subscriber's delivery budget (hundreds of objects a second) is shared by all its topics")
 	case p.TreeCount > MaxTreeCount:
 		return nil, over("-tree-count", p.TreeCount, MaxTreeCount, "every carrier's BEEF carries its whole funding tree")
+	case p.AnchorTreeCount > MaxTreeCount:
+		return nil, over("-anchor-tree-count", p.AnchorTreeCount, MaxTreeCount, "the bound of -tree-count; a funding tree is one transaction")
 	case p.ObjectBound > MaxObjectBound:
 		return nil, over("object_bound", p.ObjectBound, MaxObjectBound, "no plane admits a larger object (BRC-149)")
 	case !p.Plane && p.Hosts > MaxHosts:

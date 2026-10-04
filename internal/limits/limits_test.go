@@ -4,11 +4,13 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/lightwebinc/bcommon/mint"
 )
 
 func base(plane bool) Producer {
 	p := Producer{Plane: plane, MaxLines: DefaultMaxLines, MaxWait: DefaultMaxWait, Interval: DefaultInterval,
-		AnchorBatches: DefaultAnchorBatches, Rate: DefaultRate, TreeCount: DefaultTreeCount, ObjectBound: OpenObjectBound}
+		AnchorBatches: DefaultAnchorBatches, Rate: DefaultRate, TreeCount: DefaultTreeCount, AnchorTreeCount: 8, ObjectBound: OpenObjectBound}
 	p.MaxBytes = DefaultMaxBytes(plane, false, false)
 	if !plane {
 		p.Hosts, p.Need = 2, 2
@@ -37,15 +39,16 @@ func TestTheDefaultsPass(t *testing.T) {
 
 func TestHardCapsRefuseNamingTheLimit(t *testing.T) {
 	for name, change := range map[string]func(*Producer){
-		"-max-bytes":      func(p *Producer) { p.MaxBytes = UnicastMaxBytes + 1 },
-		"-max-lines":      func(p *Producer) { p.MaxLines = MaxLines + 1 },
-		"-max-wait":       func(p *Producer) { p.MaxWait = time.Millisecond },
-		"-interval":       func(p *Producer) { p.Interval = 25 * time.Hour },
-		"-anchor-batches": func(p *Producer) { p.AnchorBatches = MaxAnchorBatches + 1 },
-		"-max-rate":       func(p *Producer) { p.Rate = MaxRate + 1 },
-		"-tree-count":     func(p *Producer) { p.TreeCount = MaxTreeCount + 1 },
-		"object_bound":    func(p *Producer) { p.ObjectBound = MaxObjectBound + 1 },
-		"hosts":           func(p *Producer) { p.Hosts, p.Need = MaxHosts+1, 1 },
+		"-max-bytes":         func(p *Producer) { p.MaxBytes = UnicastMaxBytes + 1 },
+		"-max-lines":         func(p *Producer) { p.MaxLines = MaxLines + 1 },
+		"-max-wait":          func(p *Producer) { p.MaxWait = time.Millisecond },
+		"-interval":          func(p *Producer) { p.Interval = 25 * time.Hour },
+		"-anchor-batches":    func(p *Producer) { p.AnchorBatches = MaxAnchorBatches + 1 },
+		"-max-rate":          func(p *Producer) { p.Rate = MaxRate + 1 },
+		"-tree-count":        func(p *Producer) { p.TreeCount = MaxTreeCount + 1 },
+		"-anchor-tree-count": func(p *Producer) { p.AnchorTreeCount = MaxTreeCount + 1 },
+		"object_bound":       func(p *Producer) { p.ObjectBound = MaxObjectBound + 1 },
+		"hosts":              func(p *Producer) { p.Hosts, p.Need = MaxHosts+1, 1 },
 	} {
 		p := base(false)
 		change(&p)
@@ -59,6 +62,22 @@ func TestHardCapsRefuseNamingTheLimit(t *testing.T) {
 	p.Gzip, p.MaxBytes = true, 1<<20
 	if _, err := p.Check(); err != nil {
 		t.Error(err)
+	}
+}
+
+// Both funding trees take up to MaxTreeCount outputs, which bcommon mints:
+// the bound is under its mint.MaxFundingOutputs, so a tree the limits pass
+// never fails at its mint with mint.ErrTreeTooLarge.
+func TestTreeCountsAtTheBoundPass(t *testing.T) {
+	if MaxTreeCount > mint.MaxFundingOutputs {
+		t.Fatalf("MaxTreeCount %d is over mint.MaxFundingOutputs %d", MaxTreeCount, mint.MaxFundingOutputs)
+	}
+	for _, plane := range []bool{true, false} {
+		p := base(plane)
+		p.TreeCount, p.AnchorTreeCount = MaxTreeCount, MaxTreeCount
+		if _, err := p.Check(); err != nil {
+			t.Errorf("plane %v: %v", plane, err)
+		}
 	}
 }
 

@@ -229,7 +229,7 @@ tree running out does not stop the stream for a block.
 | `-tree-count` | 100 | outputs per batch tree, at most 1000. Each carrier's BEEF carries its tree, about 49 bytes an output, so this is per-batch overhead |
 | `-tree-sats` | 1 | satoshis per batch output. A carrier carries its output's whole value and is never mined, so this value stays with the batch until a sweep |
 | `-ahead` | 25 | mint the next batch tree at this many outputs left |
-| `-anchor-tree-count` | 8 | outputs per anchor fee tree |
+| `-anchor-tree-count` | 8 | outputs per anchor fee tree, at most 1000 |
 | `-anchor-tree-sats` | 1000 | satoshis per anchor fee output; one pays an anchor's fee (at 1 sat/byte, about 450 to 550) |
 | `-anchor-ahead` | 2 | mint the next anchor fee tree at this many outputs left |
 | `-poll` | `5s` | how often proofs are asked for |

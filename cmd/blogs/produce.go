@@ -68,7 +68,7 @@ func engineFlags(fs *flag.FlagSet, f *produceFlags) {
 	fs.IntVar(&f.treeCount, "tree-count", limits.DefaultTreeCount, fmt.Sprintf("outputs per batch funding tree (each carrier's BEEF carries its tree; at most %d)", limits.MaxTreeCount))
 	fs.Uint64Var(&f.treeSats, "tree-sats", 1, "satoshis per batch funding output (a carrier carries its output's value)")
 	fs.UintVar(&f.ahead, "ahead", 25, "mint the next batch tree when this few outputs are left")
-	fs.IntVar(&f.anchorTreeCount, "anchor-tree-count", 8, "outputs per anchor fee tree")
+	fs.IntVar(&f.anchorTreeCount, "anchor-tree-count", 8, fmt.Sprintf("outputs per anchor fee tree (at most %d)", limits.MaxTreeCount))
 	fs.Uint64Var(&f.anchorTreeSats, "anchor-tree-sats", 1000, "satoshis per anchor fee output (one pays an anchor's fee)")
 	fs.UintVar(&f.anchorAhead, "anchor-ahead", 2, "mint the next anchor fee tree when this few outputs are left")
 	fs.IntVar(&f.anchorBatches, "anchor-batches", limits.DefaultAnchorBatches, fmt.Sprintf("anchor early once this many batches are unanchored; the most one anchor covers (at most %d)", limits.MaxAnchorBatches))
@@ -81,7 +81,7 @@ func engineFlags(fs *flag.FlagSet, f *produceFlags) {
 func (g *global) checkLimits(f *produceFlags, o produce.Options, legs produce.Legs) error {
 	p := limits.Producer{Plane: legs.Hosts == nil, Digest: o.Profile == logrec.ProfileDigest, Gzip: o.Encoding == logrec.EncodingLinesGzip,
 		MaxBytes: f.maxBytes, MaxLines: f.maxLines, MaxWait: f.maxWait, Interval: f.interval, AnchorBatches: f.anchorBatches,
-		Rate: f.maxRate, TreeCount: f.treeCount, ObjectBound: g.cfg.ObjectBound}
+		Rate: f.maxRate, TreeCount: f.treeCount, AnchorTreeCount: f.anchorTreeCount, ObjectBound: g.cfg.ObjectBound}
 	if legs.Hosts != nil {
 		p.Hosts, p.Need = len(legs.Hosts.Hosts), legs.Hosts.Need
 	}

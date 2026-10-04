@@ -23,6 +23,7 @@ func TestLimitsAreEnforced(t *testing.T) {
 		{[]string{"-anchor-batches", "65537"}, "-anchor-batches 65537 is over the limit"},
 		{[]string{"-max-rate", "51"}, "-max-rate 51 is over the limit of 50"},
 		{[]string{"-tree-count", "1001"}, "-tree-count 1001 is over the limit of 1000"},
+		{[]string{"-anchor-tree-count", "1001"}, "-anchor-tree-count 1001 is over the limit of 1000"},
 	} {
 		h.want(h.run("x\n", append([]string{"produce", stream}, tc.flags...)...), exitUsage, tc.want)
 	}
