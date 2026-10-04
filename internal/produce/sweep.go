@@ -9,9 +9,11 @@ import (
 	"github.com/bsv-blockchain/go-sdk/script"
 	"github.com/bsv-blockchain/go-sdk/transaction"
 
+	"github.com/lightwebinc/bcommon/bwallet"
 	"github.com/lightwebinc/bcommon/carrier"
 	"github.com/lightwebinc/bcommon/funding"
 	"github.com/lightwebinc/bcommon/mint"
+	"github.com/lightwebinc/bcommon/producer"
 
 	"github.com/lightwebinc/blogs/internal/state"
 )
@@ -85,14 +87,10 @@ func (e *Engine) Tree(txid string) (TreeInfo, bool) {
 	return TreeInfo{}, false
 }
 
-// InFlight reports whether a sweep is built and not yet finished.
+// InFlight reports whether a sweep is built and neither finished nor
+// given up on.
 func (e *Engine) InFlight() bool {
-	for _, s := range e.St.Sweeps {
-		if !s.Done {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(e.St.Sweeps, state.Sweep.InFlight)
 }
 
 // Retract builds and persists one sweep of the batch tree txid over vouts
@@ -118,7 +116,7 @@ func (e *Engine) Retract(ctx context.Context, txid string, vouts []uint32, seqs 
 		return nil, err
 	}
 	payer := e.newPayer()
-	fee, err := payer.Take(ctx)
+	fee, coin, err := e.sweepFee(ctx, payer)
 	if err != nil {
 		return nil, e.feeError(fmt.Errorf("sweep fee: %w", err))
 	}
@@ -133,7 +131,7 @@ func (e *Engine) Retract(ctx context.Context, txid string, vouts []uint32, seqs 
 		payer.GiveBack()
 		return nil, err
 	}
-	sw, err := e.record(tx, state.SweepRetract, info, vouts, seqs, true)
+	sw, err := e.record(tx, state.SweepRetract, info, vouts, seqs, true, coin)
 	if err != nil {
 		payer.GiveBack()
 	}
@@ -189,7 +187,31 @@ func (e *Engine) Retire(ctx context.Context, txid string) (*state.Sweep, error) 
 	}
 	// A tree minted ahead was never published, so the hosts hold none of
 	// what its retirement spends.
-	return e.record(tx, state.SweepRetire, info, vouts, nil, info.Kind != AheadTree)
+	return e.record(tx, state.SweepRetire, info, vouts, nil, info.Kind != AheadTree, nil)
+}
+
+// sweepFee takes a retraction's fee coin, and the coin as the pool held
+// it, so a refused retraction can give it back. A coin that reached the
+// pool inside the take (a tree minted ahead, collected by the take) is
+// given back and taken again, so that it is recorded as the pool holds it.
+func (e *Engine) sweepFee(ctx context.Context, payer *producer.Payer) (mint.Input, *bwallet.Output, error) {
+	for try := 0; ; try++ {
+		before := e.Pool.Outputs()
+		fee, err := payer.Take(ctx)
+		if err != nil {
+			return mint.Input{}, nil, err
+		}
+		op := fmt.Sprintf("%s.%d", fee.Tx.TxID(), fee.Vout)
+		for i := range before {
+			if before[i].Outpoint() == op {
+				return fee, &before[i], nil
+			}
+		}
+		if try > 0 {
+			return fee, nil, nil
+		}
+		payer.GiveBack()
+	}
 }
 
 // retireTx spends vouts of tree to pay, the fee coming out of their value,
@@ -244,7 +266,7 @@ func outputs(t funding.Tree, vouts []uint32) ([]uint32, error) {
 
 // record persists a sweep before it is settled, and marks the swept outputs
 // as used in every record of the tree, so no carrier or anchor spends them.
-func (e *Engine) record(tx *transaction.Transaction, kind string, info TreeInfo, vouts []uint32, seqs []uint64, publish bool) (*state.Sweep, error) {
+func (e *Engine) record(tx *transaction.Transaction, kind string, info TreeInfo, vouts []uint32, seqs []uint64, publish bool, fee *bwallet.Output) (*state.Sweep, error) {
 	beef, err := funding.KeepBEEF(tx, nil)
 	if err != nil {
 		return nil, err
@@ -269,7 +291,7 @@ func (e *Engine) record(tx *transaction.Transaction, kind string, info TreeInfo,
 		st.DropPendingTree(info.Tree.Txid)
 	}
 	st.Sweeps = append(st.Sweeps, state.Sweep{Kind: kind, Tree: info.Tree.Txid, Vouts: vouts, Seqs: seqs,
-		Txid: tx.TxID().String(), RawHex: tx.Hex(), BeefHex: beef, Publish: publish})
+		Txid: tx.TxID().String(), RawHex: tx.Hex(), BeefHex: beef, Publish: publish, Fee: fee})
 	if err := st.Save(); err != nil {
 		return nil, err
 	}
@@ -304,13 +326,17 @@ func rebuildSweep(sw *state.Sweep) (*transaction.Transaction, error) {
 
 // FinishSweeps settles every sweep in flight, waits for it to mine, adds
 // its change to the pool, and publishes it once, with its proof, to the
-// stream's topic when the hosts hold what it spends. An error leaves the
-// sweep persisted for the next run.
+// stream's topic when the hosts hold what it spends. A sweep the network
+// refuses for good (the node names another transaction as the spender of
+// one of its inputs) is marked failed, its fee coin given back when the
+// node shows it unspent, and a *SweepRefusedError returned: it is no
+// longer in flight, so the next sweep goes on. Any other error leaves the
+// sweep in flight for the next run.
 func (e *Engine) FinishSweeps(ctx context.Context) error {
 	st := e.St
 	for i := range st.Sweeps {
 		sw := &st.Sweeps[i]
-		if sw.Done {
+		if !sw.InFlight() {
 			continue
 		}
 		tx, err := rebuildSweep(sw)
@@ -323,6 +349,9 @@ func (e *Engine) FinishSweeps(ctx context.Context) error {
 			if perr != nil {
 				if !sw.Submitted {
 					if err := e.Legs.Settler.Submit(ctx, tx); err != nil {
+						if why := e.refusal(ctx, tx, err); why != "" {
+							return e.failSweep(ctx, sw, why)
+						}
 						return fmt.Errorf("sweep %s: settle via %s: %w; it is persisted and the next sweep resumes it", sw.Txid, e.Legs.Settler.Name(), err)
 					}
 					sw.Submitted = true
@@ -330,7 +359,15 @@ func (e *Engine) FinishSweeps(ctx context.Context) error {
 						return err
 					}
 				}
+				// A leg with no answer, or a verdict that came later: the
+				// node's view of the inputs says before any wait.
+				if why := e.refusal(ctx, tx, nil); why != "" {
+					return e.failSweep(ctx, sw, why)
+				}
 				if mp, height, err = e.payer.Await(ctx, what, tx); err != nil {
+					if why := e.refusal(ctx, tx, nil); why != "" {
+						return e.failSweep(ctx, sw, why)
+					}
 					return fmt.Errorf("sweep %s: %w; it is persisted and the next sweep resumes it", sw.Txid, err)
 				}
 			}

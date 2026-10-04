@@ -671,10 +671,26 @@ func (e *Engine) anchor(ctx context.Context) error {
 }
 
 // submit hands the anchor in flight to the settlement leg. A failure is a
-// note: the next tick sends the same transaction again.
+// note: the next tick sends the same transaction again. A refusal for good
+// is not: when the node names another transaction as the spender of the
+// anchor's fee output, these bytes can never mine, and the anchor is given
+// up and built again from the next output, as one refused after the leg
+// accepted it is (advance). When the node names another spender of the
+// previous anchor token, no anchor can follow it: a rebuild would only
+// spend fee outputs, so the anchor stays in flight with a warning, and
+// batches go on being published.
 func (e *Engine) submit(ctx context.Context, tok *transaction.Transaction) error {
+	inf := e.St.Inflight
 	if err := e.Legs.Settler.Submit(ctx, tok); err != nil {
-		e.note("anchor interval %d: settle via %s failed (%v); sent again on the next tick", e.St.Inflight.Interval, e.Legs.Settler.Name(), err)
+		var se *nodeapi.SpentError
+		if _, _, perr := e.Legs.Asset.Proof(ctx, inf.Txid); perr != nil && errors.As(e.Legs.Asset.SpentElsewhere(ctx, tok), &se) {
+			if a := e.St.Anchor; a == nil || se.Outpoint != fmt.Sprintf("%s.%d", a.Txid, a.Vout) {
+				return e.giveUpAnchor(fmt.Errorf("%w: %w (%w)", producer.ErrRefused, se, err))
+			}
+			e.note("WARNING: anchor interval %d: the previous anchor token %s is spent by %s, not by this stream's next anchor, so no anchor can follow it; it stays in flight and is sent again on the next tick", inf.Interval, se.Outpoint, se.By)
+			return nil
+		}
+		e.note("anchor interval %d: settle via %s failed (%v); sent again on the next tick", inf.Interval, e.Legs.Settler.Name(), err)
 		return nil
 	}
 	e.St.Inflight.Submitted = true
@@ -703,11 +719,7 @@ func (e *Engine) advance(ctx context.Context) error {
 		Refused: func(err error) { refused = err },
 	}}, inf.Txid)
 	if refused != nil {
-		// Never mined, so never published: the next anchor is built again
-		// over the same batches with the same interval number.
-		e.note("WARNING: anchor interval %d %s: %v; it is built again", inf.Interval, inf.Txid, refused)
-		st.Inflight = nil
-		return st.Save()
+		return e.giveUpAnchor(refused)
 	}
 	if inf.BumpHex == "" {
 		return nil
@@ -752,6 +764,26 @@ func (e *Engine) advance(ctx context.Context) error {
 	}
 	e.note("anchor interval %d: mined at height %d and published; seqs %d to %d anchored", inf.Interval, inf.Height, inf.First, inf.First+inf.Count-1)
 	return nil
+}
+
+// giveUpAnchor drops the anchor in flight, which the network refused for
+// good. Never mined, so never published: the next anchor is built again
+// over the same batches with the same interval number, from the next fee
+// output. Change the pool took from it when the leg accepted it is
+// forgotten, since it will never exist.
+func (e *Engine) giveUpAnchor(why error) error {
+	st := e.St
+	inf := st.Inflight
+	e.note("WARNING: anchor interval %d %s: %v; it is built again", inf.Interval, inf.Txid, why)
+	for _, o := range e.Pool.Outputs() {
+		if o.TxID == inf.Txid {
+			if _, err := e.Pool.Remove(o); err != nil {
+				return err
+			}
+		}
+	}
+	st.Inflight = nil
+	return st.Save()
 }
 
 // Close collects any tree still being minted ahead, so its change reaches

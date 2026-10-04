@@ -84,8 +84,9 @@ type Stream struct {
 	Unpublished []string `json:"unpublished,omitempty"`
 
 	// Sweeps are the transactions built to spend funding-tree outputs, in
-	// the order they were built: retractions and retirements. One not yet
-	// Done is in flight, and the next sweep resumes it before anything else.
+	// the order they were built: retractions and retirements. One neither
+	// Done nor Failed is in flight, and the next sweep resumes it before
+	// anything else.
 	Sweeps []Sweep `json:"sweeps,omitempty"`
 
 	// Tail is where a file being followed was read to.
@@ -191,7 +192,19 @@ type Sweep struct {
 	Publish   bool `json:"publish,omitempty"`
 	Submitted bool `json:"submitted,omitempty"`
 	Done      bool `json:"done,omitempty"`
+	// Fee is the pool coin that pays a retraction's fee, as the pool held
+	// it, so a retraction the network refuses can give it back. A
+	// retirement pays its fee from the outputs it spends and has none.
+	Fee *bwallet.Output `json:"fee,omitempty"`
+	// Failed is why the network refused it, once it did: the node named
+	// another transaction as the spender of one of its inputs. It is no
+	// longer in flight, retracts or retires nothing, and is never Done.
+	Failed string `json:"failed,omitempty"`
 }
+
+// InFlight reports whether the sweep is built and neither finished nor
+// given up on.
+func (s Sweep) InFlight() bool { return !s.Done && s.Failed == "" }
 
 // Tail is a followed file's position.
 type Tail struct {

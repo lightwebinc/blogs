@@ -494,6 +494,18 @@ func cmdDoctor(ctx context.Context, g *global, args []string) error {
 			for _, id := range st.Unpublished {
 				fmt.Fprintf(out, "            tree %s adopted and not confirmed published; the next produce, anchor or sweep publishes it\n", id)
 			}
+			for _, sw := range st.Sweeps {
+				switch {
+				case sw.Failed != "":
+					verb := "retracts"
+					if sw.Kind == state.SweepRetire {
+						verb = "retires"
+					}
+					fmt.Fprintf(out, "            sweep %s (%s) FAILED: %s; it %s nothing\n", sw.Txid, sw.Kind, termsafe.Text(sw.Failed), verb)
+				case sw.InFlight():
+					fmt.Fprintf(out, "            sweep %s (%s) in flight; the next sweep finishes it\n", sw.Txid, sw.Kind)
+				}
+			}
 			if st.Tail != nil {
 				fmt.Fprintf(out, "            following %s at offset %d\n", st.Tail.Path, st.Tail.Offset)
 			}

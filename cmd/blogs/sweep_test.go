@@ -2,6 +2,8 @@ package main
 
 import (
 	"net/http/httptest"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -181,4 +183,140 @@ func TestPlaneSweepReachesHostsOffThePlane(t *testing.T) {
 	if !strings.Contains(r.stderr, "seqs 4 retracted") || off.Retracted != 3 {
 		t.Fatalf("finish: off-plane host %d\n%s", off.Retracted, r.stderr)
 	}
+}
+
+// A sweep the network refuses for good, because the node names another
+// transaction as the spender of one of its inputs, is marked failed and is
+// not in flight any more: a later sweep of the stream goes on. Its fee coin
+// is unspent, so it goes back to the pool.
+func TestSweepRefusedForGoodDoesNotBlockTheNext(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	stream, _ := h.producer()
+	h.produce(linesOf(0, 4), stream, "-max-lines", "1")
+	plan := regexp.MustCompile(`retract seqs 2: tree ([0-9a-f]{64}) outputs (\d+)`).FindStringSubmatch(h.must("", "sweep", stream, "-retract-seqs", "2").stdout)
+	if plan == nil {
+		t.Fatal("no plan for seq 2")
+	}
+	vout, _ := strconv.ParseUint(plan[2], 10, 32)
+	other := strings.Repeat("ab", 32)
+	h.chain.SpendElsewhere(plan[1], uint32(vout), other)
+
+	first := h.run("", append([]string{"sweep", stream, "-retract-seqs", "2", "-yes"}, fast...)...)
+	if first.code == 0 || h.host.Retracted != 0 {
+		t.Fatalf("a sweep whose input is spent elsewhere retracted:\n%s\n%s", first.stdout, first.stderr)
+	}
+
+	// The later sweep is not blocked by the one refused.
+	r := h.run("", append([]string{"sweep", stream, "-retract-seqs", "3", "-yes"}, fast...)...)
+	if r.code != 0 || !strings.Contains(r.stderr, "seqs 3 retracted") || h.host.Retracted != 1 {
+		t.Fatalf("the sweep after one refused for good: exit %d\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+
+	// How the refusal was worded, and what became of the fee coin.
+	h.want(first, exitRefused, "refused by the network")
+	if !strings.Contains(first.stderr, "is spent by "+other) || !strings.Contains(first.stderr, "is back in the pool") {
+		t.Fatalf("refused sweep:\n%s\n%s", first.stdout, first.stderr)
+	}
+	st, _ := state.Load(h.home, stream)
+	if len(st.Sweeps) != 2 || st.Sweeps[0].Done || !st.Sweeps[1].Done {
+		t.Fatalf("recorded sweeps: %+v", st.Sweeps)
+	}
+	d := h.must("", "doctor").stdout
+	if !strings.Contains(d, "FAILED") || strings.Contains(d, "in flight") {
+		t.Fatalf("doctor:\n%s", d)
+	}
+	h.produce("still going\n", stream)
+}
+
+// Only the node naming another spender gives a sweep up. One that has not
+// mined while its inputs are unspent stays in flight and is finished by the
+// next sweep; one whose fee coin is spent elsewhere is given up, and that
+// coin is not given back.
+func TestSweepGivenUpOnlyForAnotherSpender(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	stream, _ := h.producer()
+	h.produce(linesOf(0, 4), stream, "-max-lines", "1")
+
+	h.chain.SetHold(true)
+	r := h.run("", append([]string{"sweep", stream, "-retract-seqs", "2", "-yes", "-wait", "300ms"}, fast...)...)
+	h.want(r, exitUsage, "the next sweep resumes it")
+	if sw := h.state(stream).Sweeps; len(sw) != 1 || !sw[0].InFlight() {
+		t.Fatalf("recorded sweeps: %+v", sw)
+	}
+	if d := h.must("", "doctor").stdout; !strings.Contains(d, "in flight") || strings.Contains(d, "FAILED") {
+		t.Fatalf("doctor:\n%s", d)
+	}
+	h.chain.SetHold(false)
+	h.chain.Mine()
+	r = h.must("", append([]string{"sweep", stream}, fast...)...)
+	if !strings.Contains(r.stderr, "seqs 2 retracted") || h.host.Retracted != 1 {
+		t.Fatalf("finish:\n%s\n%s", r.stdout, r.stderr)
+	}
+
+	other := strings.Repeat("cd", 32)
+	for op := range h.poolCoins() {
+		txid, vout, _ := strings.Cut(op, ".")
+		n, _ := strconv.ParseUint(vout, 10, 32)
+		h.chain.SpendElsewhere(txid, uint32(n), other)
+	}
+	r = h.run("", append([]string{"sweep", stream, "-retract-seqs", "3", "-yes"}, fast...)...)
+	h.want(r, exitRefused, "refused by the network")
+	if !strings.Contains(r.stderr, "is spent by "+other+" and was not given back") || h.host.Retracted != 1 {
+		t.Fatalf("refused sweep:\n%s\n%s", r.stdout, r.stderr)
+	}
+	sw := h.state(stream).Sweeps
+	if len(sw) != 2 || sw[1].Failed == "" || sw[1].Fee == nil || h.poolCoins()[sw[1].Fee.Outpoint()] {
+		t.Fatalf("recorded sweeps: %+v", sw)
+	}
+	if l := h.must("", append([]string{"sweep", stream}, fast...)...).stdout; !strings.Contains(l, "FAILED: input") {
+		t.Fatalf("list:\n%s", l)
+	}
+}
+
+// An anchor the settlement leg refuses because the node names another
+// spender of its fee output is given up and built again from the next
+// output, as one refused after it was accepted is; it does not stay in
+// flight to be sent again until the wait runs out.
+func TestAnchorRefusedBeforeAcceptanceIsBuiltAgain(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	stream, producer := h.producer()
+	h.produce(linesOf(0, 2), stream, "-max-lines", "1")
+	at := h.state(stream).AnchorTree
+	other := strings.Repeat("ef", 32)
+	h.chain.SpendElsewhere(at.Txid, at.Next, other)
+	h.produce(linesOf(2, 2), stream, "-max-lines", "1", "-anchor-wait", "0")
+	r := h.run("", append([]string{"anchor", stream, "-wait", "5s"}, fast...)...)
+	if r.code != 0 || !strings.Contains(r.stderr, "is spent by "+other) || !strings.Contains(r.stderr, "seqs 3 to 4 anchored") {
+		t.Fatalf("anchor: exit %d\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	if v := h.must("", "verify-interval", stream, producer, "2"); !strings.Contains(v.stdout, "VERIFIED interval 2") {
+		t.Fatalf("verify-interval:\n%s", v.stdout)
+	}
+}
+
+// An anchor whose predecessor token another transaction spends can never
+// be followed: it is not rebuilt, which would only spend fee outputs, and
+// stays in flight with a warning while batches go on.
+func TestAnchorWithPredecessorSpentElsewhereStaysInFlight(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	stream, _ := h.producer()
+	h.produce(linesOf(0, 2), stream, "-max-lines", "1")
+	st := h.state(stream)
+	other := strings.Repeat("ef", 32)
+	h.chain.SpendElsewhere(st.Anchor.Txid, st.Anchor.Vout, other)
+	next := st.AnchorTree.Next
+	h.produce(linesOf(2, 2), stream, "-max-lines", "1", "-anchor-wait", "0")
+	r := h.run("", append([]string{"anchor", stream, "-wait", "3s"}, fast...)...)
+	if r.code == 0 || !strings.Contains(r.stderr, "is spent by "+other+", not by this stream's next anchor") {
+		t.Fatalf("anchor: exit %d\n%s\n%s", r.code, r.stdout, r.stderr)
+	}
+	st = h.state(stream)
+	if st.Inflight == nil || st.AnchorTree.Next != next+1 {
+		t.Fatalf("in flight %+v, anchor tree next %d (was %d)", st.Inflight, st.AnchorTree.Next, next)
+	}
+	h.produce("still going\n", stream, "-anchor-wait", "0")
 }

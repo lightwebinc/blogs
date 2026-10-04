@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lightwebinc/bcommon/termsafe"
+
 	"github.com/lightwebinc/blogs/internal/logrec"
 	"github.com/lightwebinc/blogs/internal/produce"
 )
@@ -34,8 +36,13 @@ outputs cannot pay the fee is left and named.
 Without -yes it prints what it would sweep and changes nothing. Each sweep
 is written to the stream's state before it is settled; a sweep in flight is
 finished (settled, waited for, pooled, published) by the next sweep run,
-with or without flags, before anything new is built. Needs what produce
-needs; -retract-seqs needs hosts.
+with or without flags, before anything new is built. A sweep the network
+refuses for good, because the node names another transaction as the
+spender of one of its inputs, is marked failed: it retracts or retires
+nothing, its fee coin goes back to the pool when the node shows it
+unspent, the run exits 1, and the next sweep goes on. Any other failure
+leaves the sweep in flight. Needs what produce needs; -retract-seqs needs
+hosts.
 
 No lookup class names a sweep, so a host receives one only when it is
 submitted to it. In mode plane a sweep goes to the facade, which the plane
@@ -85,9 +92,14 @@ func cmdSweep(ctx context.Context, g *global, args []string) error {
 	}
 	defer unlock()
 	defer closeEngine(e)
+	var gaveUp error
 	if e.InFlight() {
 		g.say("finishing the sweep in flight first")
-		if err := e.FinishSweeps(ctx); err != nil {
+		if err := e.FinishSweeps(ctx); produce.IsSweepRefused(err) {
+			// It failed for good, which frees this run to go on.
+			g.say("%v", err)
+			gaveUp = refused("%v", err)
+		} else if err != nil {
 			return err
 		}
 	}
@@ -107,7 +119,7 @@ func cmdSweep(ctx context.Context, g *global, args []string) error {
 		if _, err := e.Retract(ctx, *tree, nil, nil); err != nil {
 			return err
 		}
-		return e.FinishSweeps(ctx)
+		return sweepErr(e.FinishSweeps(ctx))
 	case *seqs != "":
 		plan, err := g.retractPlan(ctx, e, lo, hi)
 		if err != nil {
@@ -131,20 +143,33 @@ func cmdSweep(ctx context.Context, g *global, args []string) error {
 				return err
 			}
 			if err := e.FinishSweeps(ctx); err != nil {
-				return err
+				return sweepErr(err)
 			}
 		}
 		return nil
 	case n == 0 && !e.InFlight():
 		// Nothing asked and nothing in flight: say what is recorded.
 		for _, sw := range e.St.Sweeps {
+			if sw.Failed != "" {
+				fmt.Fprintf(g.stdout, "sweep %s  %s  tree %s  %d output(s)  FAILED: %s\n", sw.Txid, sw.Kind, sw.Tree, len(sw.Vouts), termsafe.Text(sw.Failed))
+				continue
+			}
 			fmt.Fprintf(g.stdout, "sweep %s  %s  tree %s  %d output(s)  height %d\n", sw.Txid, sw.Kind, sw.Tree, len(sw.Vouts), sw.Height)
 		}
 		if len(e.St.Sweeps) == 0 {
 			fmt.Fprintln(g.stdout, "no sweeps; give -retract-seqs, -retract-tree or -retire")
 		}
+		return gaveUp
 	}
 	return nil
+}
+
+// sweepErr is a sweep's error, a refusal by the network exiting 1.
+func sweepErr(err error) error {
+	if produce.IsSweepRefused(err) {
+		return refused("%v", err)
+	}
+	return err
 }
 
 func (g *global) retire(ctx context.Context, e *produce.Engine, yes bool) error {
@@ -169,7 +194,7 @@ func (g *global) retire(ctx context.Context, e *produce.Engine, yes bool) error 
 			return err
 		}
 		if err := e.FinishSweeps(ctx); err != nil {
-			return err
+			return sweepErr(err)
 		}
 	}
 	return nil
