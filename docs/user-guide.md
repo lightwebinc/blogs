@@ -147,10 +147,13 @@ $ blogs read app_qzxkvbmwtr 02c0ffee... -from 120 -to 140 -meta
 $ blogs read app_qzxkvbmwtr 02c0ffee... -json | jq -r '.lines[]'
 ```
 
-For each `seq`, `read` asks the hosts in order until one answers, checks
-the carrier (the producer's signature, the `seq`, its funding parent's
-proof against your headers), follows the `prev` links, and prints the
-lines. Every line is filtered before it reaches your terminal: control
+For each `seq`, `read` asks every host, checks every carrier answered (the
+producer's signature, the `seq`, its funding parent's proof against your
+headers), follows the `prev` links, and prints the lines. A host that
+answers something that does not verify is named and nothing it answered
+is used (exit 3): what you see comes from the hosts whose answers verify.
+A `seq` every host answered only with what does not verify is not read,
+and is not called a hole. Every line is filtered before it reaches your terminal: control
 characters, escape sequences and invisible characters are removed, since
 log content is text someone else wrote.
 
@@ -176,6 +179,12 @@ hosts for every batch of the interval, and requires the root over their
 commitments to be the one the anchor committed. VERIFIED means every line
 of the interval was signed by the producer, sits where it says, and was
 committed no later than the block named.
+
+Every host is asked every question. A host (or, with `-archive`, a file)
+that answers something that does not verify is named, `host ...:
+REFUSED ...`, and is not used: the interval is proven from what verified,
+the VERIFIED line is printed, and the exit is 3. A `seq` answered only
+with what does not verify is listed `unverified`, never `unserved`.
 
 **Unserved positions.** A `seq` no host serves takes its commitment from
 the next batch's `prev`, so the interval is still proven:
@@ -276,8 +285,10 @@ backfill app_qzxkvbmwtr to https://logs-b.example.com: 0 held, 3 filled, 0 missi
 ```
 
 A backfill asks each host for each position and copies what it lacks from
-a sibling, checked. It needs no producer home, so a host operator can
-repair their own host. Add `-sweeps` when a host may have missed a sweep.
+the first sibling whose answer verifies. A sibling that answers something
+that does not verify is named and the next is asked; it does not fail the
+repair. It needs no producer home, so a host operator can repair their
+own host. Add `-sweeps` when a host may have missed a sweep.
 
 ## 11. Limits
 
@@ -313,10 +324,10 @@ forgery from an outage by them.
 
 | Exit | Meaning | What to do |
 | --- | --- | --- |
-| 0 | Done; for a reader, every answer verified | Nothing |
-| 1 | Refused: an answer contradicts what was asked (a bad signature or proof, another `seq` or producer, a fork nothing resolves, a broken link, a root mismatch) | Do not trust the host that answered it; tell its operator. Run with `-v` to see every refused answer |
-| 2 | Usage, configuration, local or transport error: nothing was decided | Read the message; run `blogs doctor` |
-| 3 | Incomplete: a host held nothing where evidence was needed, which proves nothing either way | Ask another host, wait for delivery, or backfill |
+| 0 | Done; for a reader, every answer verified; for `backfill`, every position held or filled | Nothing |
+| 1 | Refused: what verified contradicts what was asked (a fork nothing resolves, a broken link, a root mismatch); for `archive`, which follows one host, an answer of that host that does not verify | If every host agrees, the producer is at fault; for `archive`, look at the named host |
+| 2 | Usage, configuration, local or transport error, including a host or header source that could not be asked: nothing was decided | Read the message; run `blogs doctor` |
+| 3 | Incomplete: a host held nothing where evidence was needed, or a host answered something that does not verify (named, and not used), which proves nothing either way | Ask another host, wait for delivery, or backfill. For a named host, tell its operator |
 
 Common messages:
 
@@ -344,6 +355,10 @@ Common messages:
 | `INCOMPLETE interval N: ... a funding tree nothing asked serves: ...` | 3 | No source served the fee tree an anchor spends; the line says what each did. A host that `did not answer the tree class` runs an older module, and one that `holds no such tree` never received it: ask another host, add `-archive DIR`, or `backfill -anchors` the host from a sibling that has it |
 | `INCOMPLETE interval N: ... cannot be recovered from the next batch's prev` | 3 | The interval's last batch is served by no host (retracted, or not delivered). An archive that stored it, or its receipt, still proves the interval |
 | `seq N: MISSING: no host holds it` | 3 | A hole: not delivered, or retracted. `backfill` fills the first kind |
+| `host ...: REFUSED ...` | 3 | A host answered something that does not verify (bytes changed on the way, or by the host). It is not used; what you see comes from the other hosts. Look at the named host. In `archive` this is exit 1 |
+| `seq N: NOT READ: ... none verifies against the header source ...`, `... none verifies against the header source ...` | 3 | Every answer was refused. Check `header_url` (`blogs doctor`) before blaming the hosts: a header source that is behind fails every answer the same way |
+| `could not verify: the header source URL did not answer: ...` | 2 | The header source is down or unreachable. Fix `header_url`, or wait for it |
+| `unverified seqs N: ...` before `VERIFIED` | 3 | The interval is proven; those positions were answered only with what does not verify, each named |
 | `unserved seqs N: ...` before `VERIFIED` | 0 | The interval is proven; those positions are empty at every host asked. An archive tells a retraction from a loss |
 
 ## 13. Where to go next

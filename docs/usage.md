@@ -362,10 +362,18 @@ blogs read app_qzxkvbmwtr 02c0ffee... -content-dir /srv/logs -allow-host logs.ex
 
 (`02c0ffee...` stands for the producer's 66-character key.)
 
-For each `seq` from `-from`, `read` asks the hosts in order until one
-answers, and checks every carrier answered: the carrier rules of
-specification section 8.1 with this producer as the only producer, the
-asked `seq`, and SPV through its funding parent against `header_url`. It
+For each `seq` from `-from`, `read` asks every host, and checks every
+carrier answered: the carrier rules of specification section 8.1 with this
+producer as the only producer, the asked `seq`, and SPV through its funding
+parent against `header_url`. A host that answers something that does not
+verify is named (`host URL: REFUSED seq N: <CODE> <reason>`), what it
+answered is not used, and the exit is 3: what is printed comes from the
+hosts whose answers verify, and one host at fault does not make the read
+fail. A `seq` every host answered only with what does not verify is not
+read and is not called absent (`seq N: NOT READ: ... none verifies against
+the header source URL; it is not absent`): a header source that is behind
+fails every answer the same way. A header source that cannot be asked
+stops the read, exit 2, naming it. It
 follows the `prev` links, and where a host answers several candidates for a
 `seq` (a fork), the next batch's `prev` chooses. It decodes the content and
 prints its lines, each filtered for the terminal (`termsafe`: controls,
@@ -420,7 +428,7 @@ The auditor's check of specification section 13, needing no producer home:
    ago its outputs were spent, so the audit does not depend on a node that
    prunes spent transactions. The tree must hash to the txid the anchor's
    input names, and its proof must hold against `header_url`; an answer
-   that fails either is refused and the next host is asked. Only when no
+   that fails either is refused and named, and every host is asked. Only when no
    host serves the tree is `asset` (a node's asset API) or `tx_source` (a
    public service) asked, its answer held to the txid. `-v` prints
    `interval K: funding tree T from <source>` for each tree fetched;
@@ -429,8 +437,23 @@ The auditor's check of specification section 13, needing no producer home:
    token's root. A `seq` no host serves takes its commitment from the next
    batch's `prev`, as an archive proves an interval across a retraction
    (specification section 8.4), and is reported **unserved** (retracted, or
-   not delivered). The `seq` before such a hole must then have a single
+   not delivered). A `seq` the hosts answered only with what does not
+   verify is treated the same way and reported **unverified**, never
+   unserved. The `seq` before such a hole must then have a single
    candidate, since nothing names its commitment.
+
+Every host, and the archive with `-archive`, is asked every question: the
+interval class, the batch class and the tree class. An answer that does
+not verify is named on stderr with what answered it (`host URL: REFUSED
+<what>: <CODE> <reason>`, or `the archive DIR: REFUSED ...`) and is not
+used. The interval is proven from what verified: the VERIFIED line is
+printed, and the exit is 3, since one source at fault does not make the
+audit fail. When nothing answered for an interval verifies, the audit is
+INCOMPLETE and names the header source it checked against (`the hosts
+answered N time(s), each answer named, and none verifies against the
+header source URL`): a header source that does not answer, or is behind,
+fails every answer the same way. A header source that cannot be asked at
+all stops the audit, exit 2, naming it.
 
 It prints each interval's canonical token, each batch, and one verdict line:
 
@@ -452,19 +475,20 @@ names the position and not the cause. An archive, which finds the mined
 spend, is what says `retracted`; a backfill fills a batch that was only
 undelivered.
 
-`REFUSED interval n: <reason>` (exit 1) names the rule broken, for example
+`REFUSED interval n: <reason>` (exit 1) names the rule broken by what
+verified, for example
 `anchor-join` or `root-mismatch`. `INCOMPLETE interval n: <reason>` (exit 3)
 means evidence was not found: no host answered an interval, a `seq`
 whose commitment nothing names was answered by no host (the interval's
 last `seq`, or the first of two in a row), or an input's funding tree was
-served by nothing asked. The reason then names the tree and what each
-source did, for example
+served by nothing asked, or nothing answered for an interval verifies. The
+reason then names the tree and what each source did, for example
 `interval 1: input 0 spends T:0, a funding tree nothing asked serves: URL
 holds no such tree; the node URL did not answer (...)`: a host that
 predates the tree class `did not answer the tree class`, one that never
 received the tree `holds no such tree`, and one whose answer failed a check
-`answered something refused`. With `-v`, answers refused along
-the way are listed on stderr.
+`answered something refused`. Every answer refused along the way is
+listed on stderr, with or without `-v`.
 
 `-archive DIR` adds an archive directory (`blogs archive -dir DIR`) as a
 source asked before the hosts. Its stored tokens, carriers and funding
@@ -485,10 +509,15 @@ blogs backfill app_qzxkvbmwtr 02c0ffee... -seqs 1-120 -anchors 3   # every confi
 blogs backfill app_qzxkvbmwtr 02c0ffee... -seqs 1-120 -sweeps       # and carry the sweeps a host missed
 ```
 
-Each position is asked of the host being filled first, and fetched from the
-first sibling that holds it only when that host holds nothing; the answer is
-checked (the carrier rules, and its proof when `header_url` is set) and
-submitted to the host's submit route. `-to` names the host to fill, and
+Each position is asked of the host being filled first and, only when that
+host holds nothing, fetched from the first sibling whose answer is checked
+(the carrier rules, and its proof when `header_url` is set) and submitted
+to the host's submit route. A sibling that answers what does not verify is
+named (`seq N: the sibling URL answered something REFUSED: ...; it is not
+used`) and the next sibling is asked: a repair names a bad answer and does
+not fail on it. A position every sibling answered only with what does not
+verify is `MISSING` and is not called absent. A header source that cannot
+be asked stops the run, exit 2, naming it. `-to` names the host to fill, and
 without it every configured host is filled in turn; `-from` names the
 sibling, and without it the siblings are the other configured hosts. With
 neither, the configured hosts are brought into step with each other, which
@@ -504,7 +533,7 @@ its inputs spend by txid (the tree class), reads one from `asset` (or
 (`interval K: funding tree T submitted from <source>`), and offers the
 token again.
 One line per position (`held`, `filled from the sibling URL`, `MISSING`,
-`REFUSED`), then a count per host filled:
+and a line for each `REFUSED` answer), then a count per host filled:
 `backfill S to URL: H held, F filled, M missing, R refused, U unserved, W
 sweep(s) carried`. A `seq` that neither the host nor any sibling serves is
 missing, unless the `seq` after it is held or filled: that batch's `prev`
@@ -678,19 +707,24 @@ but does not rewrite the interval file, whose proof still holds.
 
 It prints one line per interval proven, a summary, and last
 `latest interval K root R token T`, so two archives are compared by that
-line. Exit 0 when the pass is done, 1 when the host answered something
-refused or the chain or a root does not hold, 3 when an interval the host
-answers cannot be proven from what it holds (for example its last `seq`
-retracted and never stored, with no receipt).
+line. An archive follows one host and asks no other beside it: an answer
+of that host that does not verify is named on stderr, with or without
+`-v` (`host URL: REFUSED <what>: ...; what it answered does not verify, so
+it is not stored`), and the pass ends `the host URL answered N time(s) what
+does not verify against the header source URL`, exit 1. Exit 0 when the
+pass is done, 1 when the host answered something that does not verify or
+the chain or a root does not hold, 3 when an interval the host answers
+cannot be proven from what it holds (for example its last `seq` retracted
+and never stored, with no receipt).
 
 ## Exit codes
 
 | Code | Meaning |
 | --- | --- |
-| 0 | done; for a reader, every answer verified |
-| 1 | refused: an answer contradicts what was asked (a bad signature or proof, another `seq` or producer, a fork nothing resolves, a broken link, a root mismatch, invalid content) |
-| 2 | usage, configuration, local or transport error: nothing was decided |
-| 3 | incomplete: a host held nothing where evidence was needed, which proves nothing either way |
+| 0 | done; for a reader, every answer verified; for `backfill`, every position held, filled or unserved, whatever a sibling answered that does not verify (each is named) |
+| 1 | refused: what verified contradicts what was asked (a fork nothing resolves, a broken link, a root mismatch, an anchor that does not join, invalid content); for `archive`, which follows one host and asks no other, an answer of that host that does not verify (named) |
+| 2 | usage, configuration, local or transport error, including a host or header source that could not be asked (named): nothing was decided |
+| 3 | incomplete: a host held nothing where evidence was needed, or a host answered something that does not verify (it is named and not used: what is printed or proven comes from what verified). It proves nothing either way |
 
 A help request (`-h`, `help`) exits 0.
 
@@ -723,10 +757,14 @@ Results go to stdout; progress and errors to stderr, errors as one line
 | `anchor interval K: mined at height H and published; seqs A to B anchored` | an anchor published |
 | `seq N: the host admitted nothing: ...`, `seq N: host URL admitted nothing: ...` | a host answered a new carrier with nothing admitted: it held it already, or refused it; the answer is the same for both |
 | `note: N line(s) held something a terminal must be protected from (termsafe); published` (or `dropped`) | `-unsafe` |
-| `seq N: <CODE> <reason>` | `read`: a refused answer (`REFUSED-SEQ`, `REFUSED-KEY`, `REFUSED-SIG`, `REFUSED-BUMP`, `REFUSED-DECODE`, ...) |
+| `host URL: REFUSED <what>: <CODE> <reason>; what it answered does not verify, so it is not used` | `read`, `verify-interval`, `sweep -retract-seqs`: an answer that does not verify (`REFUSED-SEQ`, `REFUSED-KEY`, `REFUSED-SIG`, `REFUSED-BUMP`, `REFUSED-DECODE`, ...), where `<what>` is `seq N`, `interval K` or `funding tree T`; `the archive DIR: REFUSED ...` for a file of `-archive`; `... so it is not stored` in `archive`. Exit 3 (1 in `archive`) |
+| `seq N: NOT READ: the hosts answered it K time(s), each answer named above, and none verifies against the header source URL; it is not absent` | `read`, exit 3 |
 | `seq N: FORK: ...`, `seq N: BROKEN LINK: ...`, `seq N: MISSING: ...` | `read` |
+| `... none verifies against the header source URL ...` | `verify-interval`, `archive`, `sweep -retract-seqs`: every answer to a question was refused; check the header source (`blogs doctor`) before blaming the hosts, exit 3 |
+| `blogs: could not verify: the header source URL did not answer: ...` | a header source that could not be asked, exit 2 |
 | `VERIFIED interval ...`, `REFUSED interval N: ...`, `INCOMPLETE interval N: ...` | `verify-interval`, on stdout |
 | `unserved seqs N: no host serves them (retracted, or not delivered); each commitment is the next batch's prev` | `verify-interval`, on stdout, before VERIFIED |
+| `unverified seqs N: the hosts answered them only with what does not verify (each answer named); each commitment is the next batch's prev` | `verify-interval`, on stdout, before VERIFIED; exit 3 |
 | `sweep TXID: mined at height H and published; seqs ... retracted` | a retraction done |
 | `retire <kind> tree T: left: ...` | a tree whose unused outputs cannot pay the fee |
 | `latest interval K root R token T` | `archive`, on stdout |
@@ -734,6 +772,7 @@ Results go to stdout; progress and errors to stderr, errors as one line
 | `rechecked N of M stored seq(s)` | `archive`, on stdout |
 | `backfill S to URL: H held, F filled, M missing, R refused, U unserved, W sweep(s) carried` | `backfill`, on stdout, one per host filled |
 | `seq N: served by no host (retracted, or not delivered); seq N+1's prev names it: unserved` | `backfill`, on stdout |
+| `seq N: the sibling URL answered something REFUSED: ...; it is not used` | `backfill`, on stdout: the next sibling is asked; it fails nothing |
 | `note: backfill carried batches and anchors, not sweeps: ...` | `backfill` without `-sweeps` |
 | `note: sweep TXID goes to the facade only: ...` | mode plane, a sweep with no host but the facade configured |
 | `sweep TXID: published to the facade, but not to every host directly: ...` | mode plane, a host in `hosts` did not take a sweep, exit 2 |

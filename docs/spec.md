@@ -909,7 +909,7 @@ below.
    input names. A tree answered by a host or kept by an archive comes with
    its proof, which the auditor checks against its own headers; an answer
    with another transaction, with no proof, or with a proof its headers do
-   not hold is refused and the next source is asked. A tree from a copy of
+   not hold is refused and named, and every other source is still asked. A tree from a copy of
    the chain needs no proof of its own: the token's proof shows the spend
    was mined, and the txid binds the output it spent. A tree no source
    serves leaves the audit incomplete, naming the tree and each source
@@ -926,7 +926,10 @@ below.
    interval. Hosts serve nothing for a retracted batch, so the auditor
    cannot tell a retraction from a batch no host it asked received; the
    report names the position, not the cause, and only an archive that
-   found the mined spend calls it retracted. A
+   found the mined spend calls it retracted. A `seq` the sources answered
+   only with what does not verify is recovered the same way and reported
+   unverified, not unserved: an answer is either verified or refused, and
+   a refused one is not an absence. A
    `seq` whose commitment nothing names (the interval's last, or the first
    of two in a row) leaves the audit incomplete;
 4. for a digest-only batch, the fetched bytes against the locator.
