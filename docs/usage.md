@@ -261,7 +261,13 @@ bytes before anything else: the same txid, which a host that already holds
 it answers as a duplicate. So a restart continues at the next `seq`, and no
 two carriers are ever built for one. An anchor built and not yet published
 is collected by the next run, and an anchor the network refused is built
-again over the same batches. An interrupt (SIGINT, SIGTERM) publishes the
+again over the same batches from the next anchor fee output. Refused means
+the node names another transaction as the spender of one of its inputs,
+whether the settlement leg refused the anchor or accepted it first; any
+other failure to settle is tried again on the next tick. When the input
+spent elsewhere is the previous anchor token, no anchor can follow it: the
+anchor stays in flight with a `WARNING` rather than being rebuilt, and
+batches go on being published. An interrupt (SIGINT, SIGTERM) publishes the
 batch being built and exits 0, as does an interrupt of `anchor` or of the
 final wait; the anchor in flight is collected next time. A final wait or
 `anchor -wait` that runs out exits 2.
@@ -579,6 +585,26 @@ sends it again. A host that was named nowhere is given it later by
 when a run stops is finished by the next `sweep` run, with or without
 flags, before anything new is built. `sweep` holds the home's lock, like
 `produce`.
+
+A refused sweep. A sweep is given up only when the node names another
+transaction as the spender of one of its inputs: then its bytes can never
+mine. The run prints `sweep T refused by the network: input N (OUTPOINT)
+is spent by OTHER ...; it is marked failed and retracts nothing; ...` and
+exits 1. The state records the sweep as failed with that reason, so it is
+no longer in flight and the next `sweep` goes on. A retraction's fee coin
+goes back to the pool when the node shows it unspent (`its fee coin ... is
+back in the pool`); a coin the node shows spent, or cannot answer for, is
+not given back, and the message says which. A retirement pays its fee from
+the outputs it spends, so it has no coin to give back. A sweep whose inputs
+the node shows unspent, or spent by the sweep itself, stays in flight
+whatever a settlement leg said, since a leg answers a second submission of
+a transaction it already holds the same way: a timeout, a busy leg or a
+leg's refusal exits 2 and the next `sweep` sends it again. `doctor` lists a
+sweep in flight (`sweep T (retract) in flight`) and a failed one (`sweep T
+(retract) FAILED: ...`), and `sweep <stream>` with no flags lists every
+sweep with its height or its failure. The outputs a failed sweep named stay
+marked used: a retraction may be asked for again, and builds a new sweep
+with a new fee coin; a retirement's outputs are not offered again.
 
 ## Archive
 

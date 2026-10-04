@@ -335,6 +335,8 @@ Common messages:
 | `funding tree TXID: what became of it could not be settled now (...)` | 0 | The node could not answer, or the tree has not mined yet. The run goes on, and the next one asks again |
 | `funding tree TXID: interrupted while asking what became of it ...` | 2 | The command was interrupted while it waited for the tree to mine. Run it again |
 | `sweep TXID: published to the facade, but not to every host directly: ...` | 2 | A host in `hosts` is down. Run `blogs sweep <stream>` again once it is back |
+| `sweep TXID refused by the network: input N (...) is spent by ...; it is marked failed ...` | 1 | Another transaction spent one of the sweep's inputs, so it can never mine. It is recorded as failed and no longer blocks; the message says whether its fee coin went back to the pool. Run the sweep again if it is still wanted |
+| `sweep TXID: ...; it is persisted and the next sweep resumes it` | 2 | The sweep did not settle or mine in time, and its inputs are not spent elsewhere. Run `blogs sweep <stream>` again |
 | `... is over the limit of ...` | 2 | A setting past a hard cap; [limits.md](limits.md) says why |
 | `REFUSED interval N: root-mismatch ...` | 1 | The producer anchored batches it did not publish, or a host answered other batches. Try another host; if every host agrees, the producer's anchor is wrong |
 | `seq N: BROKEN LINK: ...`, `seq N: FORK: ...` | 1 | A host answered a batch that does not continue the stream, or the producer signed two batches for one `seq` |
