@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/bsv-blockchain/go-sdk/transaction"
@@ -37,6 +38,8 @@ type Client struct {
 	// checks, which only backfill allows: the host it submits to checks
 	// proofs itself.
 	Headers chaintracker.ChainTracker
+	// HeaderSource names Headers in messages (its URL).
+	HeaderSource string
 	// Txs, when set, is a copy of the chain answering transactions by
 	// txid: a funding tree no host asked serves by the tree class, and the
 	// spender of a funding output.
@@ -84,9 +87,10 @@ func (c *Client) Ask(ctx context.Context, base string, q Query) ([]Answer, error
 }
 
 // AskAny asks the local sources and then the hosts, in order, and returns
-// the first non-empty answer. all asks every one and returns the union, the
-// first copy of each transaction kept. Sources and hosts that fail are
-// skipped; when every one failed, the first failure is returned.
+// the first non-empty answer. all asks every one and returns every answer
+// each gave, so that one that does not verify is named whatever else
+// answered beside it. Sources and hosts that fail are skipped; when every
+// one failed, the first failure is returned.
 func (c *Client) AskAny(ctx context.Context, q Query, all bool) ([]Answer, error) {
 	if len(c.Hosts) == 0 && len(c.Local) == 0 {
 		return nil, errors.New("no overlay host configured (config key hosts, or -host)")
@@ -94,7 +98,6 @@ func (c *Client) AskAny(ctx context.Context, q Query, all bool) ([]Answer, error
 	var first error
 	failed := 0
 	var out []Answer
-	seen := map[string]bool{}
 	asks := make([]func() ([]Answer, error), 0, len(c.Local)+len(c.Hosts))
 	for _, s := range c.Local {
 		asks = append(asks, func() ([]Answer, error) { return s.Answer(q) })
@@ -111,14 +114,7 @@ func (c *Client) AskAny(ctx context.Context, q Query, all bool) ([]Answer, error
 			}
 			continue
 		}
-		for _, a := range as {
-			id := subjectID(a.Beef)
-			if seen[id] {
-				continue
-			}
-			seen[id] = true
-			out = append(out, a)
-		}
+		out = append(out, as...)
 		if len(out) > 0 && !all {
 			return out, nil
 		}
@@ -129,12 +125,25 @@ func (c *Client) AskAny(ctx context.Context, q Query, all bool) ([]Answer, error
 	return out, nil
 }
 
-func subjectID(beef []byte) string {
-	_, _, id, err := transaction.ParseBeef(beef)
-	if err != nil || id == nil {
-		return hex.EncodeToString(beef)
+// Refusal is one answer that did not verify: what was asked, what answered
+// it (a host's URL, or a local source's name), and why. What it answered
+// is not used.
+type Refusal struct {
+	What   string
+	Host   string
+	Reason string
+}
+
+// SourceName names what answered: "host URL", or a local source's own name.
+func SourceName(name string) string {
+	if strings.HasPrefix(name, "the ") {
+		return name
 	}
-	return id.String()
+	return "host " + name
+}
+
+func (r Refusal) String() string {
+	return fmt.Sprintf("%s: REFUSED %s: %s", SourceName(r.Host), r.What, r.Reason)
 }
 
 // Verdict is the outcome of checking one answer.
@@ -195,15 +204,17 @@ func (c *Client) CheckCarrier(ctx context.Context, a Answer, stream string, prod
 		return nil, Verdict{verify.RefusedSeq, fmt.Sprintf("asked for seq %d, answered seq %d", seq, adm.Carrier.Batch.Seq)}
 	}
 	if c.Headers != nil {
-		if v := spv(ctx, tx, c.Headers); !v.OK() {
+		if v := c.spv(ctx, tx); !v.OK() {
 			return nil, v
 		}
 	}
 	return &Candidate{Carrier: adm.Carrier, Tx: tx, Beef: a.Beef, Host: a.Host}, Verdict{Code: verify.Verified}
 }
 
-func spv(ctx context.Context, tx *transaction.Transaction, t chaintracker.ChainTracker) Verdict {
-	switch k, err := verify.Check(ctx, tx, t); k {
+// spv checks tx's proof against the reader's headers. Error is no verdict:
+// the header source could not be asked, and it is named.
+func (c *Client) spv(ctx context.Context, tx *transaction.Transaction) Verdict {
+	switch k, err := verify.Check(ctx, tx, c.Headers); k {
 	case verify.Passed:
 		return Verdict{Code: verify.Verified}
 	case verify.ProofRefused, verify.AncestryMissing:
@@ -211,29 +222,36 @@ func spv(ctx context.Context, tx *transaction.Transaction, t chaintracker.ChainT
 	case verify.ScriptRefused:
 		return Verdict{verify.RefusedSig, "an input does not satisfy the output it spends: " + err.Error()}
 	default:
-		return Verdict{verify.Error, "could not verify: " + err.Error()}
+		return Verdict{verify.Error, fmt.Sprintf("could not verify: the header source %s did not answer: %v", c.HeaderSource, err)}
 	}
 }
 
 // Batch asks for the batch at seq and checks every answer. all asks every
-// host (a fork check); otherwise the first host that answers is used.
-func (c *Client) Batch(ctx context.Context, stream string, producer []byte, seq uint64, all bool) ([]*Candidate, []Verdict, error) {
+// host, so that a fork is seen and a host that answers what does not verify
+// is named whatever another answered; otherwise the first host that answers
+// is used. Each transaction is one candidate however many hosts answered
+// it; each answer refused is returned with what answered it.
+func (c *Client) Batch(ctx context.Context, stream string, producer []byte, seq uint64, all bool) ([]*Candidate, []Refusal, error) {
 	as, err := c.AskAny(ctx, Query{Stream: stream, Producer: hex.EncodeToString(producer), Seq: seq}, all)
 	if err != nil {
 		return nil, nil, err
 	}
 	var cands []*Candidate
-	var refused []Verdict
+	var refused []Refusal
+	seen := map[string]bool{}
 	for _, a := range as {
 		cand, v := c.CheckCarrier(ctx, a, stream, producer, seq)
 		if v.Code == verify.Error {
 			return nil, nil, errors.New(v.Reason)
 		}
 		if !v.OK() {
-			refused = append(refused, v)
+			refused = append(refused, Refusal{What: fmt.Sprintf("seq %d", seq), Host: a.Host, Reason: string(v.Code) + " " + v.Reason})
 			continue
 		}
-		cands = append(cands, cand)
+		if id := cand.Tx.TxID().String(); !seen[id] {
+			seen[id] = true
+			cands = append(cands, cand)
+		}
 	}
 	return cands, refused, nil
 }

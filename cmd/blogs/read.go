@@ -38,6 +38,9 @@ var wocBase string
 
 func readerFor(g *global, hosts []string, timeout time.Duration) *reader.Client {
 	c := &reader.Client{Hosts: hosts, Timeout: timeout, HTTP: httpClient}
+	if g != nil {
+		c.HeaderSource = g.cfg.HeaderURL
+	}
 	switch {
 	case g == nil:
 	case g.cfg.Asset != "":
@@ -69,18 +72,22 @@ func (g *global) hostsReader() (*reader.Client, error) {
 
 const readHelp = `usage: blogs read <stream> <producer> [flags]
 
-Ask the hosts for the producer's batches from -from on, check each answer
+Ask every host for the producer's batches from -from on, check each answer
 (the carrier rules, the producer's signature, the seq, the funding parent's
 proof against the header source), follow the prev links, decode the content
-and print its lines, filtered for the terminal. Without -to it reads until
-no host holds the next seq, which may be the stream's end or a hole: an
-empty answer proves nothing. One read covers at most 65536 seqs; without
+and print its lines, filtered for the terminal. A host that answers what
+does not verify is named and what it answered is not used; a seq the hosts
+answered only with what does not verify is not read, and is not called
+absent. Without -to it reads until no host holds the next seq, which may be
+the stream's end or a hole: an empty answer proves nothing. One read covers at most 65536 seqs; without
 -to it stops there and names the -from to continue with. A digest-only batch's content is read from
 -content-dir, or fetched from a locator hint whose host is on -allow-host.
 Needs hosts and header_url.
 
-Exit 0 when every batch read verified and linked, 1 when an answer was
-refused or the links broke, 3 when -to was given and a seq was missing.`
+Exit 0 when every batch read verified and linked; 1 when the links broke,
+a fork was not resolved or content was invalid; 3 when a host answered
+something that does not verify (it is named, and not used), or -to was
+given and a seq was missing.`
 
 // renderer prints text from a record safely.
 type renderer struct {
@@ -147,7 +154,7 @@ func cmdRead(ctx context.Context, g *global, args []string) error {
 		return usage("-from must be at least 1 and -to, when given, at least -from")
 	}
 	if *to != 0 && *to-*from >= limits.MaxReadBatches {
-		return usage("-from %d -to %d is %d seqs, over the limit of %d per read: each seq is a lookup and a proof check (docs/limits.md); read it in parts", *from, *to, *to-*from+1, limits.MaxReadBatches)
+		return usage("-from %d -to %d is %d seqs, over the limit of %d per read: each seq is a lookup of every host and a proof check of every answer (docs/limits.md); read it in parts", *from, *to, *to-*from+1, limits.MaxReadBatches)
 	}
 	c, err := g.hostsReader()
 	if err != nil {
@@ -162,29 +169,43 @@ func cmdRead(ctx context.Context, g *global, args []string) error {
 	fetch := reader.Fetch{Dirs: dirs, Allow: allow, Timeout: g.cfg.Timeout, HTTP: httpClient}
 	enc := json.NewEncoder(g.stdout)
 
+	type asked struct {
+		cands   []*reader.Candidate
+		refused int
+	}
 	var prev *reader.Candidate
-	ahead := map[uint64][]*reader.Candidate{}
-	bad, missing, read := 0, 0, 0
-	get := func(seq uint64) ([]*reader.Candidate, error) {
-		if cs, ok := ahead[seq]; ok {
+	ahead := map[uint64]asked{}
+	bad, missing, unverified, refusals, read := 0, 0, 0, 0, 0
+	// Every host is asked: a host that answers what does not verify is
+	// named whatever another answered, and is not used.
+	get := func(seq uint64) (asked, error) {
+		if a, ok := ahead[seq]; ok {
 			delete(ahead, seq)
-			return cs, nil
+			return a, nil
 		}
-		cs, refusedAnswers, err := c.Batch(ctx, stream, producer, seq, false)
-		for _, v := range refusedAnswers {
-			bad++
-			g.say("seq %d: %s %s", seq, v.Code, termsafe.Text(v.Reason))
+		cs, refusedAnswers, err := c.Batch(ctx, stream, producer, seq, true)
+		for _, r := range refusedAnswers {
+			refusals++
+			g.say("%s; what it answered does not verify, so it is not used", termsafe.Text(r.String()))
 		}
-		return cs, err
+		return asked{cs, len(refusedAnswers)}, err
 	}
 	for seq := *from; *to == 0 || seq <= *to; seq++ {
 		if *to == 0 && seq-*from >= limits.MaxReadBatches {
 			g.say("read stopped at the limit of %d seqs per read (docs/limits.md); continue with -from %d", limits.MaxReadBatches, seq)
 			break
 		}
-		cands, err := get(seq)
+		got, err := get(seq)
 		if err != nil {
 			return err
+		}
+		cands := got.cands
+		if len(cands) == 0 && got.refused > 0 {
+			// Answered, and nothing answered verifies: not an absence.
+			unverified++
+			prev = nil
+			g.say("seq %d: NOT READ: the hosts answered it %d time(s), each answer named above, and none verifies against the header source %s; it is not absent", seq, got.refused, g.cfg.HeaderURL)
+			continue
 		}
 		if len(cands) == 0 {
 			if *to == 0 {
@@ -204,8 +225,8 @@ func cmdRead(ctx context.Context, g *global, args []string) error {
 			}
 			ahead[seq+1] = next
 			var nextOne *reader.Candidate
-			if len(next) == 1 {
-				nextOne = next[0]
+			if len(next.cands) == 1 {
+				nextOne = next.cands[0]
 			}
 			var ok bool
 			if cand, ok = reader.Link(cands, nextOne); !ok {
@@ -267,11 +288,21 @@ func cmdRead(ctx context.Context, g *global, args []string) error {
 		}
 	}
 	g.say("read %d batch(es) of %s", read, stream)
+	var also []string
+	if refusals > 0 {
+		also = append(also, fmt.Sprintf("%d answer(s) did not verify (each host named, and what it answered not used)", refusals))
+	}
+	if unverified > 0 {
+		also = append(also, fmt.Sprintf("%d seq(s) not read: none of their answers verifies against the header source %s", unverified, g.cfg.HeaderURL))
+	}
+	if missing > 0 {
+		also = append(also, fmt.Sprintf("%d seq(s) missing", missing))
+	}
 	switch {
 	case bad > 0:
-		return refused("%d answer(s) refused, forked, broken or invalid", bad)
-	case missing > 0:
-		return incomplete("%d seq(s) missing", missing)
+		return refused("%s", strings.Join(append([]string{fmt.Sprintf("%d fork(s), broken link(s) or invalid content", bad)}, also...), "; "))
+	case len(also) > 0:
+		return incomplete("%s", strings.Join(also, "; "))
 	}
 	return nil
 }
@@ -299,6 +330,15 @@ chain (asset or tx_source), which may have pruned it. Every tree is held to
 the txid the anchor's input names, and a host's to its proof against the
 header source. -v names what answered each tree.
 
+Every host (and the archive, with -archive) is asked every question. An
+answer that does not verify is named with what answered it and is not
+used: the interval is proven from what did, and the audit exits 3. A seq
+answered only with what does not verify is reported unverified, not
+unserved; its commitment is the next batch's prev, as for an unserved seq.
+When nothing answered for an interval verifies, the audit names the header
+source it checked against: one that does not answer, or is behind, fails
+every answer the same way.
+
 -archive DIR adds an archive directory (blogs archive -dir DIR) as a source
 asked before the hosts: its stored tokens, carriers and funding trees are
 checked exactly as a host's answers are. With -archive and no host
@@ -307,7 +347,8 @@ configured the audit runs from the files and the header source alone.
 Needs no producer home; needs header_url, and hosts or -archive.
 
 Exit 0 VERIFIED, 1 REFUSED, 3 INCOMPLETE (a host held nothing where
-evidence was needed), 2 when a host or the header source could not be asked.`
+evidence was needed) or VERIFIED beside an answer that does not verify (it
+is named), 2 when a host or the header source could not be asked.`
 
 func cmdVerifyInterval(ctx context.Context, g *global, args []string) error {
 	fs := g.flagSet("verify-interval", verifyHelp)
@@ -369,19 +410,27 @@ func cmdVerifyInterval(ctx context.Context, g *global, args []string) error {
 	if len(rep.Unserved) > 0 {
 		fmt.Fprintf(out, "unserved seqs %s: no host serves them (retracted, or not delivered); each commitment is the next batch's prev\n", seqList(rep.Unserved))
 	}
+	if len(rep.Unverified) > 0 {
+		fmt.Fprintf(out, "unverified seqs %s: the hosts answered them only with what does not verify (each answer named); each commitment is the next batch's prev\n", seqList(rep.Unverified))
+	}
 	if len(rep.Missing) > 0 {
 		fmt.Fprintf(out, "missing seqs %s\n", seqList(rep.Missing))
 	}
-	if g.verbose {
-		for _, s := range rep.Refusals {
-			g.say("refused answer: %s", termsafe.Text(s))
-		}
+	// Every answer that did not verify is named, with what answered it:
+	// it is not used, and the audit is incomplete for it.
+	for _, r := range rep.Refusals {
+		g.say("%s; what it answered does not verify, so it is not used", termsafe.Text(r.String()))
 	}
 	switch rep.Outcome {
 	case reader.Verified:
 		last := rep.Chain[len(rep.Chain)-1]
 		fmt.Fprintf(out, "VERIFIED interval %d of %s by %s: seqs %d to %d, root %s, committed no later than block %d\n",
 			n, stream, pos[1], last.Anchor.First, last.Anchor.Last(), hex.EncodeToString(last.Anchor.Root[:]), last.Height)
+		if len(rep.Refusals) > 0 {
+			// The interval is proven from what verified; one source at
+			// fault does not make the audit fail, and it is named.
+			return incomplete("%d answer(s) did not verify (each named above, and not used): the interval is proven from what did", len(rep.Refusals))
+		}
 		return nil
 	case reader.Refused:
 		fmt.Fprintf(out, "REFUSED interval %d: %s\n", n, termsafe.Text(ownReason(rep.Reason, n)))
@@ -410,9 +459,12 @@ func seqList(s []uint64) string {
 const backfillHelp = `usage: blogs backfill <stream> <producer> [-from URL] [-to URL] [-sweeps] (-seqs A-B | -interval K | -anchors K)
 
 Fill holes in a host from its siblings. Each position is asked of the host
-first and fetched from the first sibling that holds it only when the host
-holds nothing; the answer is checked (the carrier rules and, with
-header_url set, the proof) and submitted to the host.
+first and, only when the host holds nothing, fetched from the first sibling
+whose answer is checked (the carrier rules and, with header_url set, the
+proof) and submitted to the host. A sibling that answers what does not
+verify is named, what it answered is not used, and the next sibling is
+asked: a repair names a bad answer and does not fail on it. A header source
+that cannot be asked stops the run (exit 2), naming it.
 
 -to names the host to fill; without it every configured host is filled in
 turn. -from names the sibling; without it the siblings are the configured
@@ -442,8 +494,9 @@ header_url), and a sweep found is submitted to the host. It costs one
 spend read per held carrier. Without -sweeps, backfill says it carried
 none.
 
-Exit 0 when every position is held (or unserved), 1 when a sibling
-answered something refused, 3 when a position is still missing.`
+Exit 0 when every position is held, filled or unserved, whatever a sibling
+answered that does not verify (each is named); 3 when a position is still
+missing.`
 
 func cmdBackfill(ctx context.Context, g *global, args []string) error {
 	fs := g.flagSet("backfill", backfillHelp)
@@ -538,9 +591,9 @@ func cmdBackfill(ctx context.Context, g *global, args []string) error {
 	if !*sweeps && len(seqList) > 0 {
 		g.say("note: backfill carried batches, anchors and their fee trees, not sweeps: no lookup class names the sweep of a batch, so a host that missed one still serves the batches it retracted; -sweeps checks each held batch and carries the sweep it finds")
 	}
+	// A sibling's answer that does not verify is named on its line and
+	// counted; it fails nothing, as long as the position was filled.
 	switch {
-	case total.Refused > 0:
-		return &exitError{exitRefused, ""}
 	case runErr != nil:
 		return runErr
 	case total.Missing > 0:

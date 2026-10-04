@@ -197,8 +197,10 @@ type Summary struct {
 	// Stopped says why the interval walk stopped, when it did short of
 	// what the host holds.
 	Stopped string
-	// Refused counts answers refused.
-	Refused int
+	// Refused counts answers refused; Refusals are they, each with what
+	// answered it.
+	Refused  int
+	Refusals []reader.Refusal
 	// Retracted are the seqs whose stored batch this pass found retracted.
 	Retracted []uint64
 	// Rechecked is how many stored seqs this pass asked about again, of
@@ -209,6 +211,11 @@ type Summary struct {
 	// not.
 	Trees        int
 	TreesMissing string
+}
+
+func (s *Summary) refuse(rs []reader.Refusal) {
+	s.Refused += len(rs)
+	s.Refusals = append(s.Refusals, rs...)
 }
 
 func (a *Archive) note(format string, args ...any) {
@@ -316,7 +323,7 @@ func (a *Archive) Pass(ctx context.Context) (*Summary, error) {
 		if err != nil {
 			return nil, err
 		}
-		n, missing, err := a.keepTrees(ctx, &one, tok, nil)
+		n, missing, err := a.keepTrees(ctx, &one, tok, nil, s)
 		if err != nil {
 			return nil, err
 		}
@@ -337,7 +344,7 @@ func (a *Archive) Pass(ctx context.Context) (*Summary, error) {
 		if err != nil {
 			return nil, err
 		}
-		s.Refused += len(rep.Refusals)
+		s.refuse(rep.Refusals)
 		if rep.Outcome != reader.Verified {
 			if rep.Outcome == reader.Refused || !strings.Contains(rep.Reason, "no host answered") {
 				s.Stopped = rep.Reason
@@ -373,7 +380,7 @@ func (a *Archive) Pass(ctx context.Context) (*Summary, error) {
 			return nil, err
 		}
 		// The trees the token spends were just read to verify it.
-		n, missing, err := a.keepTrees(ctx, &one, tok, evidence)
+		n, missing, err := a.keepTrees(ctx, &one, tok, evidence, s)
 		if err != nil {
 			return nil, err
 		}
@@ -418,10 +425,7 @@ func (a *Archive) fetch(ctx context.Context, seq uint64, s *Summary) (stored int
 	if err != nil {
 		return 0, false, err
 	}
-	for _, v := range refused {
-		s.Refused++
-		a.note("seq %d: %s %s", seq, v.Code, v.Reason)
-	}
+	s.refuse(refused)
 	for _, cand := range cands {
 		n, err := a.store(ctx, cand)
 		if err != nil {
@@ -525,7 +529,7 @@ func (a *Archive) token(ctx context.Context, k uint64) (*reader.Token, error) {
 // proof, otherwise asked for again (the tree class, then the copy of the
 // chain with its proof), each proof checked against the headers. It
 // returns how many it wrote, and what could not be found.
-func (a *Archive) keepTrees(ctx context.Context, c *reader.Client, tok *reader.Token, evidence map[string]*transaction.Transaction) (stored int, missing string, err error) {
+func (a *Archive) keepTrees(ctx context.Context, c *reader.Client, tok *reader.Token, evidence map[string]*transaction.Transaction, s *Summary) (stored int, missing string, err error) {
 	for _, in := range tok.Tx.Inputs {
 		if in.SourceTXID == nil || [32]byte(*in.SourceTXID) == tok.Anchor.Prev {
 			continue
@@ -537,7 +541,10 @@ func (a *Archive) keepTrees(ctx context.Context, c *reader.Client, tok *reader.T
 		tree := evidence[id]
 		if tree == nil || !logrec.Mined(ctx, tree, c.Headers) {
 			var why string
-			if tree, _, why, err = c.FundingTree(ctx, a.Stream, id); err != nil {
+			var refused []reader.Refusal
+			tree, _, why, refused, err = c.FundingTree(ctx, a.Stream, id)
+			s.refuse(refused)
+			if err != nil {
 				return stored, "", err
 			}
 			if tree == nil || tree.MerklePath == nil {
@@ -798,10 +805,11 @@ func (a *Archive) recheck(ctx context.Context, cur *Cursor, s *Summary) error {
 		if len(stored) == 0 {
 			continue
 		}
-		live, _, err := c.Batch(ctx, a.Stream, a.Producer, seq, false)
+		live, refused, err := c.Batch(ctx, a.Stream, a.Producer, seq, false)
 		if err != nil {
 			return err
 		}
+		s.refuse(refused)
 		served := map[string]bool{}
 		for _, l := range live {
 			served[l.Tx.TxID().String()] = true

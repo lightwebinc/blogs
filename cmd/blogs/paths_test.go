@@ -255,20 +255,29 @@ func TestReadRefusesAnAnswerForAnotherPosition(t *testing.T) {
 	h.produce("a\nb\n", stream, "-max-lines", "1")
 	liar := lying(t, h.hostS.URL, map[string]any{"stream": stream, "producer": producer, "seq": 1})
 	h.env["BLOGS_HOSTS"] = liar.URL
+	// A host that answers what does not verify is named, and the read is
+	// incomplete (exit 3): the seq is not read, and not called absent.
 	r := h.run("", "read", stream, producer, "-to", "2")
-	h.want(r, exitRefused, "REFUSED-SEQ")
+	h.want(r, exitIncomplete, "host "+liar.URL+": REFUSED seq 2: REFUSED-SEQ")
+	if !strings.Contains(r.stderr, "seq 2: NOT READ") || strings.Contains(r.stderr, "seq 2: MISSING") {
+		t.Fatalf("a refused seq read as missing:\n%s", r.stderr)
+	}
 	// Another producer's key: the lying host's carrier is refused too.
 	other := "02" + strings.Repeat("11", 32)
 	for !isKey(other) {
 		other = "02" + strings.Repeat("12", 32)
 	}
-	h.want(h.run("", "read", stream, other, "-to", "1"), exitRefused, "REFUSED-KEY")
+	h.want(h.run("", "read", stream, other, "-to", "1"), exitIncomplete, "REFUSED-KEY")
 	// A header source without the funding tree's block refuses the proof.
 	empty := httptest.NewServer(testchain.New(1))
 	t.Cleanup(empty.Close)
 	h.env["BLOGS_HOSTS"], h.env["BLOGS_HEADER_URL"] = h.hostS.URL, empty.URL
-	h.want(h.run("", "read", stream, producer, "-to", "1"), exitRefused, "REFUSED-BUMP")
-	h.want(h.run("", "verify-interval", stream, producer, "1"), exitIncomplete, "no answered token")
+	// Every answer refused against it: the header source is named, and
+	// nothing is called absent.
+	r = h.run("", "read", stream, producer, "-to", "1")
+	h.want(r, exitIncomplete, "REFUSED-BUMP")
+	h.want(r, exitIncomplete, "none verifies against the header source "+empty.URL+"; it is not absent")
+	h.want(h.run("", "verify-interval", stream, producer, "1"), exitIncomplete, "none verifies against the header source "+empty.URL)
 }
 
 func isKey(h string) bool {

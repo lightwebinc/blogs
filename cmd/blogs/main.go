@@ -5,9 +5,10 @@
 // and reads, audits, backfills and archives streams from overlay hosts,
 // checking every answer itself.
 //
-// Exit codes: 0 done or verified; 1 refused (the evidence contradicts what
+// Exit codes: 0 done or verified; 1 refused (what verified contradicts what
 // was asked); 2 usage, configuration, local or transport error; 3
-// incomplete (a host held nothing where evidence was needed, which proves
+// incomplete (a host held nothing where evidence was needed, or answered
+// something that does not verify, which is named and not used; it proves
 // nothing either way). docs/usage.md is the reference.
 package main
 

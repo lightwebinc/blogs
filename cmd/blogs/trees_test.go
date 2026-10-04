@@ -91,9 +91,14 @@ func TestHostsServeTheFeeTreesAPrunedNodeNoLongerHas(t *testing.T) {
 	t.Cleanup(liar.Close)
 	h.env["BLOGS_HOSTS"], h.env["BLOGS_ASSET"] = liar.URL, pruned(t)
 	h.want(h.run("", "verify-interval", stream, producer, "2"), exitIncomplete, "answered something refused: REFUSED-DECODE asked for transaction "+tree)
-	// The honest host beside it still serves the audit.
+	// The honest host beside it still serves the audit, and the liar is
+	// named: the audit is incomplete for it (exit 3), not refused.
 	h.env["BLOGS_HOSTS"] = liar.URL + "," + h.hostS.URL
-	h.must("", "verify-interval", stream, producer, "2")
+	r = h.run("", "verify-interval", stream, producer, "2")
+	h.want(r, exitIncomplete, "host "+liar.URL+": REFUSED funding tree "+tree+": REFUSED-DECODE asked for transaction "+tree)
+	if !strings.Contains(r.stdout, "VERIFIED interval 2") || strings.Contains(r.stderr, "host "+h.hostS.URL+": REFUSED") {
+		t.Fatalf("an honest host beside a liar:\n%s\n%s", r.stdout, r.stderr)
+	}
 
 	// Backfill carries the tree from the sibling, not the node.
 	sibling := httptest.NewServer(testchain.NewHost(h.chain))
@@ -147,9 +152,14 @@ func TestArchiveKeepsFeeTreesAndIsAnAuditSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.want(h.run("", "verify-interval", stream, producer, "2", "-archive", dir), exitIncomplete, "answered something refused: REFUSED-DECODE asked for transaction")
-	// With a host beside the archive, the host's copy serves.
+	// With a host beside the archive, the host's copy serves, and the
+	// archive's file is still named (exit 3).
 	h.env["BLOGS_HOSTS"] = hosts
-	h.must("", "verify-interval", stream, producer, "2", "-archive", dir)
+	r = h.run("", "verify-interval", stream, producer, "2", "-archive", dir)
+	h.want(r, exitIncomplete, "the archive "+root+": REFUSED funding tree")
+	if !strings.Contains(r.stdout, "VERIFIED interval 2") {
+		t.Fatalf("a host beside a refused archive file:\n%s\n%s", r.stdout, r.stderr)
+	}
 
 	// An archive begun before trees were kept catches up on its next pass.
 	if err := os.RemoveAll(filepath.Join(root, "trees")); err != nil {

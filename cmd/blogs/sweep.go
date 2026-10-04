@@ -219,9 +219,15 @@ func (g *global) retractPlan(ctx context.Context, e *produce.Engine, lo, hi uint
 	}
 	plan := map[string]*retraction{}
 	for seq := lo; seq <= hi; seq++ {
-		cands, _, err := c.Batch(ctx, e.St.Stream, producer, seq, true)
+		cands, refusedAnswers, err := c.Batch(ctx, e.St.Stream, producer, seq, true)
 		if err != nil {
 			return nil, err
+		}
+		for _, r := range refusedAnswers {
+			g.say("%s; what it answered does not verify, so it is not used", termsafe.Text(r.String()))
+		}
+		if len(cands) == 0 && len(refusedAnswers) > 0 {
+			return nil, incomplete("seq %d: the hosts answered its carrier only with what does not verify against the header source %s (each named above), so the output it spent is not known; nothing was built", seq, g.cfg.HeaderURL)
 		}
 		if len(cands) == 0 {
 			return nil, incomplete("seq %d: no host holds its carrier, so the output it spent is not known (already retracted, or not yet delivered)", seq)

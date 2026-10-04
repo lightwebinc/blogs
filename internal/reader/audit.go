@@ -57,8 +57,15 @@ type Report struct {
 	// and a lookup cannot tell the two apart, so the auditor names the
 	// position, not the cause. Batches holds none for them.
 	Unserved []uint64
-	// Refusals are answers refused along the way, for the trace.
-	Refusals []string
+	// Unverified are seqs of a verified interval that hosts answered only
+	// with what does not verify: each answer is in Refusals and none is
+	// used, and each commitment is taken from the next batch's prev, as
+	// for an unserved seq. Batches holds none for them.
+	Unverified []uint64
+	// Refusals are the answers refused along the way, each with what
+	// answered it: a host that answers what does not verify is named, and
+	// the audit is incomplete for it whatever else verified.
+	Refusals []Refusal
 	// Trees are the funding trees the anchors' inputs spend that were
 	// fetched for this audit, and what answered each.
 	Trees []TreeUse
@@ -77,10 +84,31 @@ func (r *Report) refuse(format string, args ...any) *Report {
 	return r
 }
 
-func (r *Report) usedTree(interval uint64) func(txid, from string) {
-	return func(txid, from string) {
-		r.Trees = append(r.Trees, TreeUse{Interval: interval, Txid: txid, From: from})
+// noneVerifies is the reason for a question the sources answered only with
+// what does not verify: not an absence, and as likely the header source
+// as the hosts.
+func (c *Client) noneVerifies(what string, n int) string {
+	return fmt.Sprintf("%s: the hosts answered %d time(s), each answer named, and none verifies against the header source %s: "+
+		"nothing is proven. A header source that does not answer, or is behind, fails every answer the same way", what, n, c.HeaderSource)
+}
+
+// tokens checks the answered tokens for interval k, recording each refusal.
+func (c *Client) tokens(ctx context.Context, r *Report, as []Answer, stream string, producer []byte, k uint64) ([]*Token, int, error) {
+	var cands []*Token
+	refused := 0
+	for _, a := range as {
+		t, why, err := c.candidate(ctx, a, stream, producer, k)
+		if err != nil {
+			return nil, 0, err
+		}
+		if why != "" {
+			refused++
+			r.Refusals = append(r.Refusals, Refusal{What: fmt.Sprintf("interval %d", k), Host: a.Host, Reason: why})
+			continue
+		}
+		cands = append(cands, t)
 	}
+	return cands, refused, nil
 }
 
 func (r *Report) incomplete(format string, args ...any) *Report {
@@ -119,22 +147,17 @@ func (c *Client) VerifyInterval(ctx context.Context, stream string, producer []b
 		if err != nil {
 			return nil, err
 		}
-		var cands []*Token
-		for _, a := range as {
-			t, why, err := c.candidate(ctx, a, stream, producer, k)
-			if err != nil {
-				return nil, err
-			}
-			if why != "" {
-				r.Refusals = append(r.Refusals, fmt.Sprintf("interval %d: %s", k, why))
-				continue
-			}
-			cands = append(cands, t)
+		cands, refused, err := c.tokens(ctx, r, as, stream, producer, k)
+		if err != nil {
+			return nil, err
 		}
 		canon := canonical(cands, prev)
 		if canon == nil {
-			if len(as) == 0 {
+			switch {
+			case len(as) == 0:
 				return r.incomplete("interval %d: no host answered; an empty answer proves nothing", k), nil
+			case len(cands) == 0:
+				return r.incomplete("%s", c.noneVerifies(fmt.Sprintf("interval %d", k), refused)), nil
 			}
 			return r.incomplete("interval %d: no answered token continues the chain (%d answered)", k, len(as)), nil
 		}
@@ -148,15 +171,16 @@ func (c *Client) VerifyInterval(ctx context.Context, stream string, producer []b
 	last := r.Chain[len(r.Chain)-1].Anchor
 	// Every batch the interval covers, from every host: forks included.
 	held := map[uint64][]*Candidate{}
+	refusedOnly := map[uint64]bool{}
 	for seq := last.First; seq <= last.Last(); seq++ {
 		cands, refused, err := c.Batch(ctx, stream, producer, seq, true)
 		if err != nil {
 			return nil, err
 		}
-		for _, v := range refused {
-			r.Refusals = append(r.Refusals, fmt.Sprintf("seq %d: %s %s", seq, v.Code, v.Reason))
-		}
+		r.Refusals = append(r.Refusals, refused...)
 		if len(cands) == 0 {
+			// Answered only with what does not verify is not absent.
+			refusedOnly[seq] = len(refused) > 0
 			r.Missing = append(r.Missing, seq)
 			continue
 		}
@@ -182,7 +206,7 @@ func (c *Client) VerifyInterval(ctx context.Context, stream string, producer []b
 		if i > 0 {
 			before = r.Chain[i-1]
 		}
-		coins, missing, err := c.coins(ctx, stream, t.Tx, before, evidence, r.usedTree(t.Anchor.Interval))
+		coins, missing, err := c.coins(ctx, stream, t.Tx, before, evidence, r, t.Anchor.Interval)
 		if err != nil {
 			return nil, err
 		}
@@ -196,6 +220,16 @@ func (c *Client) VerifyInterval(ctx context.Context, stream string, producer []b
 	chosen, holes, ok := choose(held, last)
 	switch {
 	case !ok && len(r.Missing) > 0:
+		unverified := 0
+		for _, seq := range r.Missing {
+			if refusedOnly[seq] {
+				unverified++
+			}
+		}
+		if unverified > 0 {
+			return r.incomplete("interval %d: of %d seqs, %d answered by no host and %d answered only with what does not verify against the header source %s (each answer named), and their commitments cannot be recovered from the next batch's prev",
+				n, last.Count, len(r.Missing)-unverified, unverified, c.HeaderSource), nil
+		}
 		return r.incomplete("interval %d: %d of %d seqs answered by no host, and their commitments cannot be recovered from the next batch's prev", n, len(r.Missing), last.Count), nil
 	case !ok:
 		return r.refuse("interval %d: root-mismatch: no choice of the answered batches reproduces the anchor's root", n), nil
@@ -205,7 +239,14 @@ func (c *Client) VerifyInterval(ctx context.Context, stream string, producer []b
 			r.Batches = append(r.Batches, b)
 		}
 	}
-	r.Unserved, r.Missing = holes, nil
+	for _, seq := range holes {
+		if refusedOnly[seq] {
+			r.Unverified = append(r.Unverified, seq)
+		} else {
+			r.Unserved = append(r.Unserved, seq)
+		}
+	}
+	r.Missing = nil
 	r.Outcome = Verified
 	return r, nil
 }
@@ -232,7 +273,7 @@ func (c *Client) candidate(ctx context.Context, a Answer, stream string, produce
 	case uint32(at) != a.Output: //nolint:gosec // an output index
 		return nil, fmt.Sprintf("REFUSED-DECODE the answered output %d is not the anchor output %d", a.Output, at), nil
 	}
-	v := spv(ctx, tx, c.Headers)
+	v := c.spv(ctx, tx)
 	if v.Code == verify.Error {
 		return nil, "", errors.New(v.Reason)
 	}
@@ -275,11 +316,12 @@ func canonical(cands []*Token, prev *Token) *Token {
 
 // coins are the outputs tx's inputs spend: from the predecessor token's
 // transaction, a transaction in evidence, or a funding tree found by
-// fundingTree (the tree class, then Txs), which is added to evidence.
-// missing names an input whose transaction was found nowhere. Whatever the
-// source, the transaction's double SHA-256 is the txid the input names, so
-// the output read is the output spent.
-func (c *Client) coins(ctx context.Context, stream string, tx *transaction.Transaction, prev *Token, evidence map[string]*transaction.Transaction, used func(txid, from string)) (logrec.Coins, string, error) {
+// fundingTree (the tree class, then Txs), which is added to evidence and
+// recorded in r with the answers refused on the way. missing names an
+// input whose transaction was found nowhere. Whatever the source, the
+// transaction's double SHA-256 is the txid the input names, so the output
+// read is the output spent.
+func (c *Client) coins(ctx context.Context, stream string, tx *transaction.Transaction, prev *Token, evidence map[string]*transaction.Transaction, r *Report, interval uint64) (logrec.Coins, string, error) {
 	coins := logrec.Coins{}
 	for i, in := range tx.Inputs {
 		if in.SourceTXID == nil {
@@ -293,15 +335,16 @@ func (c *Client) coins(ctx context.Context, stream string, tx *transaction.Trans
 		case evidence[id] != nil:
 			src = evidence[id]
 		default:
-			t, from, missing, err := c.FundingTree(ctx, stream, id)
+			t, from, missing, refused, err := c.FundingTree(ctx, stream, id)
 			if err != nil {
 				return nil, "", err
 			}
+			r.Refusals = append(r.Refusals, refused...)
 			if t == nil {
 				return nil, fmt.Sprintf("input %d spends %s:%d, a funding tree nothing asked serves: %s", i, id, in.SourceTxOutIndex, missing), nil
 			}
 			evidence[id], src = t, t
-			used(id, from)
+			r.Trees = append(r.Trees, TreeUse{Interval: interval, Txid: id, From: from})
 		}
 		if int(in.SourceTxOutIndex) >= len(src.Outputs) {
 			return nil, fmt.Sprintf("input %d spends output %d of %s, which has %d", i, in.SourceTxOutIndex, id, len(src.Outputs)), nil
@@ -385,22 +428,16 @@ func (c *Client) Next(ctx context.Context, stream string, producer []byte, k uin
 	if err != nil {
 		return nil, nil, err
 	}
-	var cands []*Token
-	for _, a := range as {
-		t, why, err := c.candidate(ctx, a, stream, producer, k)
-		if err != nil {
-			return nil, nil, err
-		}
-		if why != "" {
-			r.Refusals = append(r.Refusals, fmt.Sprintf("interval %d: %s", k, why))
-			continue
-		}
-		cands = append(cands, t)
+	cands, refused, err := c.tokens(ctx, r, as, stream, producer, k)
+	if err != nil {
+		return nil, nil, err
 	}
 	canon := canonical(cands, prev)
 	switch {
 	case canon == nil && len(as) == 0:
 		return nil, r.incomplete("interval %d: no host answered; an empty answer proves nothing", k), nil
+	case canon == nil && len(cands) == 0:
+		return nil, r.incomplete("%s", c.noneVerifies(fmt.Sprintf("interval %d", k), refused)), nil
 	case canon == nil:
 		return nil, r.incomplete("interval %d: no answered token continues the chain (%d answered)", k, len(as)), nil
 	case prev != nil && canon.Anchor.First != prev.Anchor.First+prev.Anchor.Count:
@@ -410,7 +447,7 @@ func (c *Client) Next(ctx context.Context, stream string, producer []byte, k uin
 	if evidence == nil {
 		evidence = map[string]*transaction.Transaction{}
 	}
-	coins, missing, err := c.coins(ctx, stream, canon.Tx, prev, evidence, r.usedTree(k))
+	coins, missing, err := c.coins(ctx, stream, canon.Tx, prev, evidence, r, k)
 	if err != nil {
 		return nil, nil, err
 	}

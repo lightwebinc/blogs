@@ -51,9 +51,13 @@ funding tree the host does not serve.
 Prints what it stored and proved, then one line
 "latest interval K root R token T" naming the last interval proven.
 
-Exit 0 when the pass is done, 1 when the host answered something refused or
-the chain or a root does not hold, 3 when an interval the host answers
-cannot be proven from what it holds.`
+An archive follows one host and asks no other: an answer of that host that
+does not verify is named, with the header source it was checked against,
+and is not stored, and the pass exits 1.
+
+Exit 0 when the pass is done, 1 when the host answered something that does
+not verify or the chain or a root does not hold, 3 when an interval the
+host answers cannot be proven from what it holds.`
 
 func cmdArchive(ctx context.Context, g *global, args []string) error {
 	fs := g.flagSet("archive", archiveHelp)
@@ -163,6 +167,10 @@ func (g *global) archiveSummary(a *archive.Archive, s *archive.Summary, final bo
 		}
 		fmt.Fprintf(out, "latest interval %d root %s token %s\n", f.Interval, f.Root, f.Token)
 	}
+	// Every answer that did not verify is named, whether or not -v is set.
+	for _, r := range s.Refusals {
+		g.say("%s; what it answered does not verify, so it is not stored", termsafe.Text(r.String()))
+	}
 	if s.Stopped != "" {
 		g.say("archive: stopped: %s", s.Stopped)
 	}
@@ -170,8 +178,16 @@ func (g *global) archiveSummary(a *archive.Archive, s *archive.Summary, final bo
 		return nil
 	}
 	switch {
-	case s.Refused > 0 || strings.Contains(s.Stopped, "anchor-join") || strings.Contains(s.Stopped, "root-mismatch") || strings.Contains(s.Stopped, "REFUSED"):
-		return refused("%d answer(s) refused; %s", s.Refused, s.Stopped)
+	case s.Refused > 0:
+		// One host, and no other asked beside it: what it answered that
+		// does not verify is a refusal of that host's copy.
+		msg := fmt.Sprintf("the host %s answered %d time(s) what does not verify against the header source %s (each named above)", a.Host, s.Refused, g.cfg.HeaderURL)
+		if s.Stopped != "" {
+			msg += "; " + s.Stopped
+		}
+		return refused("%s", msg)
+	case strings.Contains(s.Stopped, "anchor-join") || strings.Contains(s.Stopped, "root-mismatch") || strings.Contains(s.Stopped, "REFUSED"):
+		return refused("%s", s.Stopped)
 	case s.Stopped != "":
 		return incomplete("%s", s.Stopped)
 	}

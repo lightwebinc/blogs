@@ -50,6 +50,10 @@ type Host struct {
 	// Drop, when set, is asked about each submission; true discards it
 	// unseen, as a plane that lost the object would.
 	Drop func(tx *transaction.Transaction) bool
+	// Rewrite, when set, is given the class of each lookup and each
+	// answered BEEF, and its result is answered instead: a host that
+	// substitutes bytes for what it holds (SetRewrite).
+	Rewrite func(class string, beef []byte) []byte
 	// Submits counts submissions; Refused counts refusals by reason;
 	// Retracted counts carriers retracted.
 	Submits   int
@@ -225,6 +229,9 @@ func (h *Host) lookup(w http.ResponseWriter, r *http.Request) {
 	outs := []item{}
 	for _, a := range as {
 		b := h.beef[a.txid]
+		if h.Rewrite != nil {
+			b = h.Rewrite(q.Class, append([]byte(nil), b...))
+		}
 		nums := make([]int, len(b))
 		for i, c := range b {
 			nums[i] = int(c)
@@ -273,4 +280,11 @@ func (h *Host) SetDown(down bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.Down = down
+}
+
+// SetRewrite sets Rewrite under the host's lock.
+func (h *Host) SetRewrite(f func(class string, beef []byte) []byte) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.Rewrite = f
 }

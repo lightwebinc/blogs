@@ -3,19 +3,22 @@ package reader
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 
 	"github.com/bsv-blockchain/go-sdk/transaction"
 
 	"github.com/lightwebinc/bcommon/publish"
+	"github.com/lightwebinc/bcommon/verify"
 
 	"github.com/lightwebinc/blogs/internal/logrec"
 )
 
 // Backfill fills holes in one host (To) from its siblings (From): the
 // anchor tokens of intervals 1 to Intervals and the batches at Seqs, each
-// asked of To first and fetched from the first sibling that holds it only
-// when To holds nothing, checked, and submitted to To's submit route
+// asked of To first and, only when To holds nothing, fetched from the
+// first sibling whose answer verifies (a sibling that answers what does
+// not verify is named, and the next is asked), and submitted to To's submit route
 // (docs/spec.md section 12, Archive). It is also how a host that missed a
 // unicast producer's submissions is repaired from the hosts that took them.
 type Backfill struct {
@@ -77,8 +80,12 @@ func (c *Client) Run(ctx context.Context, b Backfill) (Result, error) {
 				return "not this producer's token for this interval", false, nil
 			}
 			if c.Headers != nil {
-				if v := spv(ctx, tx, c.Headers); !v.OK() || !logrec.Mined(ctx, tx, c.Headers) {
-					return "not mined in the header source", false, nil
+				v := c.spv(ctx, tx)
+				if v.Code == verify.Error {
+					return "", false, errors.New(v.Reason)
+				}
+				if !v.OK() || !logrec.Mined(ctx, tx, c.Headers) {
+					return "not mined in the header source " + c.HeaderSource, false, nil
 				}
 			}
 			return "", true, nil
@@ -94,6 +101,9 @@ func (c *Client) Run(ctx context.Context, b Backfill) (Result, error) {
 		q := Query{Stream: b.Stream, Producer: p, Seq: seq}
 		st, have, err := c.fill(ctx, b, to, topic, q, what, &r, note, func(a Answer) (string, bool, error) {
 			_, v := c.CheckCarrier(ctx, a, b.Stream, b.Producer, seq)
+			if v.Code == verify.Error {
+				return "", false, errors.New(v.Reason)
+			}
 			if !v.OK() {
 				return string(v.Code) + " " + v.Reason, false, nil
 			}
@@ -177,9 +187,12 @@ func (c *Client) feedFunding(ctx context.Context, b Backfill, to *publish.Facade
 			continue
 		}
 		id := in.SourceTXID.String()
-		src, from, missing, err := siblings.FundingTree(ctx, b.Stream, id)
+		src, from, missing, refused, err := siblings.FundingTree(ctx, b.Stream, id)
 		if err != nil {
 			return false, err
+		}
+		for _, r := range refused {
+			note("interval %d: %s: what it answered does not verify, so it is not used", an.Interval, r)
 		}
 		if src == nil {
 			note("interval %d spends funding tree %s, which nothing asked serves: %s", an.Interval, id, missing)
@@ -219,9 +232,13 @@ func (c *Client) fill(ctx context.Context, b Backfill, to *publish.Facade, topic
 		note("%s: held", what)
 		return held, have, nil
 	}
+	// The first sibling whose answer verifies is used. One that answers
+	// only what does not verify is named and the next is asked: a repair
+	// names a bad answer and does not fail on it.
 	var got []Answer
 	var askErr error
 	source := ""
+	refused := 0
 	for _, from := range b.From {
 		if from == b.To {
 			continue
@@ -233,8 +250,22 @@ func (c *Client) fill(ctx context.Context, b Backfill, to *publish.Facade, topic
 			askErr = fmt.Errorf("%s: asking %s: %w", what, from, err)
 			continue
 		}
-		if len(as) > 0 {
-			got, source = as, from
+		var good []Answer
+		for _, a := range as {
+			why, ok, err := check(a)
+			if err != nil {
+				return notFilled, nil, err
+			}
+			if !ok {
+				refused++
+				r.Refused++
+				note("%s: the sibling %s answered something REFUSED: %s; it is not used", what, from, why)
+				continue
+			}
+			good = append(good, a)
+		}
+		if len(good) > 0 {
+			got, source = good, from
 			break
 		}
 	}
@@ -243,20 +274,15 @@ func (c *Client) fill(ctx context.Context, b Backfill, to *publish.Facade, topic
 			return notFilled, nil, askErr
 		}
 		r.Missing++
+		if refused > 0 {
+			note("%s: MISSING: the siblings answered it %d time(s), each named above, and none verifies%s: it is not absent", what, refused, c.against())
+			return notFilled, nil, nil
+		}
 		note("%s: MISSING: no sibling holds it either", what)
 		return unservedAnywhere, nil, nil
 	}
 	admitted := 0
 	for _, a := range got {
-		why, ok, err := check(a)
-		if err != nil {
-			return notFilled, nil, err
-		}
-		if !ok {
-			r.Refused++
-			note("%s: the sibling %s answered something REFUSED: %s", what, source, why)
-			continue
-		}
 		res, err := to.Submit(ctx, topic, a.Beef)
 		if err != nil {
 			return notFilled, nil, fmt.Errorf("%s: submitting to %s: %w", what, b.To, err)
@@ -284,4 +310,13 @@ func (c *Client) fill(ctx context.Context, b Backfill, to *publish.Facade, topic
 	r.Filled++
 	note("%s: filled from the sibling %s", what, source)
 	return filled, nil, nil
+}
+
+// against names the header source answers were checked against, when there
+// is one.
+func (c *Client) against() string {
+	if c.Headers == nil {
+		return ""
+	}
+	return " against the header source " + c.HeaderSource
 }

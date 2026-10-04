@@ -45,7 +45,7 @@ func (c *Client) CheckTree(ctx context.Context, a Answer, txid string) (tx *tran
 	if c.Headers == nil {
 		return tx, "", nil
 	}
-	v := spv(ctx, tx, c.Headers)
+	v := c.spv(ctx, tx)
 	if v.Code == verify.Error {
 		return nil, "", errors.New(v.Reason)
 	}
@@ -57,46 +57,52 @@ func (c *Client) CheckTree(ctx context.Context, a Answer, txid string) (tx *tran
 
 // Tree asks for the mined funding tree txid of stream by the tree class
 // (docs/spec.md section 7.2): the local sources first, then the hosts in
-// order, each answer held to CheckTree. The first answer that passes is
-// returned with the name of what answered it. With none, tried says what
-// each source did: held nothing, answered something refused, or could not
-// be asked (a host that predates the tree class refuses the question).
-func (c *Client) Tree(ctx context.Context, stream, txid string) (tx *transaction.Transaction, from string, tried []string, err error) {
+// order, each answer held to CheckTree. Every source is asked, so that one
+// that answers what does not verify is named whatever another answered;
+// the first answer that passes is returned with the name of what answered
+// it, and every answer refused in refused. With none, tried says what each
+// source did: held nothing, answered something refused, or could not be
+// asked (a host that predates the tree class refuses the question).
+func (c *Client) Tree(ctx context.Context, stream, txid string) (tx *transaction.Transaction, from string, tried []string, refused []Refusal, err error) {
 	q := Query{Stream: stream, Tree: txid}
-	check := func(name string, as []Answer, askErr error) (*transaction.Transaction, error) {
+	check := func(name string, as []Answer, askErr error) error {
 		if askErr != nil {
 			tried = append(tried, fmt.Sprintf("%s did not answer the tree class (%v)", name, askErr))
-			return nil, nil
+			return nil
 		}
 		if len(as) == 0 {
 			tried = append(tried, name+" holds no such tree")
-			return nil, nil
+			return nil
 		}
 		for _, a := range as {
 			t, why, err := c.CheckTree(ctx, a, txid)
 			if err != nil {
-				return nil, err
+				return err
 			}
-			if why == "" {
-				return t, nil
+			if why != "" {
+				tried = append(tried, name+" answered something refused: "+why)
+				refused = append(refused, Refusal{What: "funding tree " + txid, Host: name, Reason: why})
+				continue
 			}
-			tried = append(tried, name+" answered something refused: "+why)
+			if tx == nil {
+				tx, from = t, name
+			}
 		}
-		return nil, nil
+		return nil
 	}
 	for _, s := range c.Local {
 		as, askErr := s.Answer(q)
-		if tx, err = check(s.Name(), as, askErr); tx != nil || err != nil {
-			return tx, s.Name(), tried, err
+		if err := check(s.Name(), as, askErr); err != nil {
+			return nil, "", tried, refused, err
 		}
 	}
 	for _, h := range c.Hosts {
 		as, askErr := c.Ask(ctx, h, q)
-		if tx, err = check(h, as, askErr); tx != nil || err != nil {
-			return tx, h, tried, err
+		if err := check(h, as, askErr); err != nil {
+			return nil, "", tried, refused, err
 		}
 	}
-	return nil, "", tried, nil
+	return tx, from, tried, refused, nil
 }
 
 // FundingTree finds the transaction txid whose output an anchor's input
@@ -104,33 +110,34 @@ func (c *Client) Tree(ctx context.Context, stream, txid string) (tx *transaction
 // Txs (a copy of the chain). A tree from the tree class always comes with a
 // proof checked against the headers; one from Txs is held to the txid, and
 // comes with a checked proof when ProveTrees is set. from names what
-// answered it; missing says where it was looked for when nothing did.
-func (c *Client) FundingTree(ctx context.Context, stream, txid string) (tx *transaction.Transaction, from, missing string, err error) {
-	tx, from, tried, err := c.Tree(ctx, stream, txid)
+// answered it; missing says where it was looked for when nothing did;
+// refused are the tree class's answers that did not verify, each named.
+func (c *Client) FundingTree(ctx context.Context, stream, txid string) (tx *transaction.Transaction, from, missing string, refused []Refusal, err error) {
+	tx, from, tried, refused, err := c.Tree(ctx, stream, txid)
 	if err != nil || tx != nil {
-		return tx, from, "", err
+		return tx, from, "", refused, err
 	}
 	if c.Txs != nil {
 		t, ferr := c.Fetch(ctx, txid, c.ProveTrees)
 		switch {
 		case errors.Is(ferr, ErrOtherBytes):
-			return nil, "", "", ferr
+			return nil, "", "", refused, ferr
 		case ferr != nil:
 			tried = append(tried, fmt.Sprintf("%s did not answer (%v)", c.Txs.Name(), ferr))
 		case c.ProveTrees && c.Headers != nil:
-			v := spv(ctx, t, c.Headers)
+			v := c.spv(ctx, t)
 			if v.Code == verify.Error {
-				return nil, "", "", errors.New(v.Reason)
+				return nil, "", "", refused, errors.New(v.Reason)
 			}
 			if v.OK() {
-				return t, c.Txs.Name(), "", nil
+				return t, c.Txs.Name(), "", refused, nil
 			}
 			tried = append(tried, c.Txs.Name()+" answered a proof that is not in the header source")
 		default:
-			return t, c.Txs.Name(), "", nil
+			return t, c.Txs.Name(), "", refused, nil
 		}
 	} else {
 		tried = append(tried, "no copy of the chain is configured (asset, or tx_source woc:main or woc:test)")
 	}
-	return nil, "", strings.Join(tried, "; "), nil
+	return nil, "", strings.Join(tried, "; "), refused, nil
 }
