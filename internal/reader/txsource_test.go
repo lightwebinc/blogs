@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bsv-blockchain/go-sdk/chainhash"
 	ec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/go-sdk/script"
 	"github.com/bsv-blockchain/go-sdk/transaction"
@@ -138,5 +139,69 @@ func TestSpenderFromTheNodeAndWhatsOnChain(t *testing.T) {
 	}
 	if _, err := (AssetSource{Asset: &nodeapi.Asset{Base: node.URL}}).Spender(ctx, strings.Repeat("2", 64), 0); err == nil {
 		t.Fatal("an unknown transaction answered")
+	}
+}
+
+// A retraction is looked for only on the node's evidence: an output the
+// node shows OK is noted unspent, and every answer that is not evidence
+// (a status other than OK or SPENT, a SPENT naming no spender, a
+// transaction the node does not serve) is noted as undecided and never as
+// unspent, as nodeapi.Asset.Spender answers it.
+func TestRetractionNotesUnspentOnlyOnTheNodesWord(t *testing.T) {
+	fund := strings.Repeat("1", 64)
+	answers := map[uint32]string{
+		0: `{"vout":0,"status":"OK"}`,
+		1: `{"vout":1,"status":"NOT_FOUND"}`,
+		2: `{"vout":2,"status":"IMMATURE"}`,
+		3: `{"vout":3,"status":"SPENT"}`,
+		4: `{"vout":4,"status":"FROZEN","spendingData":{"txId":"` + strings.Repeat("ab", 32) + `"}}`,
+	}
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/utxos/"+fund+"/json" {
+			http.NotFound(w, r)
+			return
+		}
+		body := "["
+		for v := uint32(0); v < uint32(len(answers)); v++ {
+			if v > 0 {
+				body += ","
+			}
+			body += answers[v]
+		}
+		_, _ = w.Write([]byte(body + "]"))
+	}))
+	defer node.Close()
+	src := AssetSource{Asset: &nodeapi.Asset{Base: node.URL}}
+	c := &Client{Headers: testchain.New(100), Txs: src}
+	ctx := context.Background()
+	retraction := func(txid string, vout uint32) string {
+		t.Helper()
+		k := cand(1, 1, 0)
+		h, err := chainhash.NewHashFromHex(txid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		k.Carrier.Funding = transaction.Outpoint{Txid: *h, Index: vout}
+		k.Tx = transaction.NewTransaction()
+		sweep, why, err := c.Retraction(ctx, k)
+		if err != nil || sweep != nil {
+			t.Fatalf("%s:%d: %v %v", txid, vout, sweep, err)
+		}
+		return why
+	}
+	if why := retraction(fund, 0); !strings.Contains(why, "is unspent") {
+		t.Fatalf("status OK: %q", why)
+	}
+	for _, at := range []struct {
+		txid string
+		vout uint32
+	}{{fund, 1}, {fund, 2}, {fund, 3}, {fund, 4}, {fund, 9}, {strings.Repeat("2", 64), 0}} {
+		if _, err := src.Spender(ctx, at.txid, at.vout); !errors.Is(err, nodeapi.ErrSpendUnknown) {
+			t.Fatalf("%s:%d: Spender answered %v, not ErrSpendUnknown", at.txid, at.vout, err)
+		}
+		why := retraction(at.txid, at.vout)
+		if strings.Contains(why, "unspent") || !strings.Contains(why, "does not say whether") {
+			t.Fatalf("%s:%d: %q", at.txid, at.vout, why)
+		}
 	}
 }

@@ -676,7 +676,11 @@ The receipt keeps the position: it completes the interval's root, and its
 `prev` lets a proof continue past it, so an archive holding the receipt of
 an interval's last `seq` still proves that interval. A carrier the host
 stops serving with no such spend is kept and noted: an empty answer proves
-nothing.
+nothing. The note says `its funding output ... is unspent` only when the
+source shows it unspent (the node's status `OK`); a node that does not say
+(another status, a spent output naming no spender, a transaction it does
+not serve) is noted `the node does not say whether its funding output ...
+is spent`, and the next pass that asks about that seq asks again.
 
 The layout, under `DIR/<stream>/<producer>/`:
 

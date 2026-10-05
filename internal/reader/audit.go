@@ -10,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/go-sdk/chainhash"
 	"github.com/bsv-blockchain/go-sdk/transaction"
 
+	"github.com/lightwebinc/bcommon/nodeapi"
 	"github.com/lightwebinc/bcommon/verify"
 
 	"github.com/lightwebinc/blogs/internal/logrec"
@@ -468,7 +469,10 @@ func (c *Client) Next(ctx context.Context, stream string, producer []byte, k uin
 // must also be a SpendSource to name the spender, whose answer is only a
 // lead: the spender is fetched with its proof by txid and checked here.
 // With no such transaction, why says what was found; an error is a source
-// that answered other bytes for a txid, or no header source.
+// that answered other bytes for a txid, or no header source. Only the
+// source's evidence notes the output unspent: a source that cannot say
+// (nodeapi.ErrSpendUnknown, or any other error) notes that, and nothing
+// is concluded.
 func (c *Client) Retraction(ctx context.Context, cand *Candidate) (sweep *transaction.Transaction, why string, err error) {
 	if c.Headers == nil {
 		return nil, "", errors.New("no header source: a proof cannot be checked")
@@ -480,6 +484,8 @@ func (c *Client) Retraction(ctx context.Context, cand *Candidate) (sweep *transa
 	fund := cand.Carrier.Funding
 	id, err := ss.Spender(ctx, fund.Txid.String(), fund.Index)
 	switch {
+	case errors.Is(err, nodeapi.ErrSpendUnknown):
+		return nil, fmt.Sprintf("the node does not say whether its funding output %s is spent, so it is asked again on a later pass: %v", fund.String(), err), nil
 	case err != nil:
 		return nil, fmt.Sprintf("the spend of %s could not be read: %v", fund.String(), err), nil
 	case id == "":

@@ -158,7 +158,8 @@ var errNoTxSource = errors.New("no transaction source: configure asset (a node's
 // that it spends the output and is mined in the reader's headers.
 type SpendSource interface {
 	// Spender is the txid of the transaction that spent txid:vout, or ""
-	// while the output is unspent.
+	// with a nil error only on the source's evidence that the output is
+	// unspent. A source that cannot say answers an error, never "".
 	Spender(ctx context.Context, txid string, vout uint32) (string, error)
 }
 
@@ -191,36 +192,13 @@ func getBounded(ctx context.Context, c *http.Client, timeout time.Duration, url 
 	return body, nil
 }
 
-// Spender reads the node's UTXO view of txid (/api/v1/utxos/<txid>/json)
-// and names the spender of output vout, if it is spent.
+// Spender is the node's answer (nodeapi.Asset.Spender): the spender of
+// output vout of txid, or "" with a nil error only when the node shows the
+// output unspent (status OK). Every other answer, a status that is neither
+// OK nor SPENT, a SPENT naming no spender, a transaction the node does not
+// serve or a failed read, is an error wrapping nodeapi.ErrSpendUnknown.
 func (s AssetSource) Spender(ctx context.Context, txid string, vout uint32) (string, error) {
-	body, err := getBounded(ctx, s.Asset.Client, 30*time.Second, strings.TrimRight(s.Asset.Base, "/")+"/api/v1/utxos/"+txid+"/json")
-	if err != nil {
-		return "", err
-	}
-	if body == nil {
-		return "", fmt.Errorf("the node does not know transaction %s", txid)
-	}
-	var outs []struct {
-		Vout     uint32 `json:"vout"`
-		Status   string `json:"status"`
-		Spending *struct {
-			TxID string `json:"txId"`
-		} `json:"spendingData"`
-	}
-	if err := json.Unmarshal(body, &outs); err != nil {
-		return "", fmt.Errorf("the node's UTXO view of %s: %w", txid, err)
-	}
-	for _, o := range outs {
-		if o.Vout != vout {
-			continue
-		}
-		if o.Status == "SPENT" && o.Spending != nil && o.Spending.TxID != "" {
-			return o.Spending.TxID, nil
-		}
-		return "", nil
-	}
-	return "", fmt.Errorf("the node's UTXO view of %s has no output %d", txid, vout)
+	return s.Asset.Spender(ctx, txid, vout)
 }
 
 // Spender asks WhatsOnChain (/tx/<txid>/<vout>/spent), which answers 404
