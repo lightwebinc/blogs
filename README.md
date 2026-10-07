@@ -72,7 +72,7 @@ make quickstart-check  # QUICKSTART.md, run as written, in Docker Compose
 
 `NODE=/path/to/node` selects a Node 24 binary that is not on `PATH`. Two
 direct Go dependencies, both pinned exactly and asserted by `make verify`:
-[go-sdk](https://github.com/bsv-blockchain/go-sdk) at v1.5.2 and
+[go-sdk](https://github.com/bsv-blockchain/go-sdk) at v1.7.1 and
 [bcommon](https://github.com/lightwebinc/bcommon), whose TypeScript package
 at the same version is vendored under `host/vendor`. Moving bcommon, the
 vectors and the end-to-end targets are described in

@@ -847,4 +847,4 @@ side with `go get github.com/lightwebinc/bcommon@<tag>`, pack the library's
 `host/vendor/lightwebinc-bcommon-<version>.tgz`, point `host/package.json`
 at it, and reinstall (`cd host && npm install`). A test fails while the Go
 and TypeScript sides name different versions, and `make deps-check` fails
-while go-sdk resolves to anything but v1.5.2.
+while go-sdk resolves to anything but v1.7.1.
