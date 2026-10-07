@@ -147,7 +147,7 @@ func TestAFeeWaitsForATreeMintedAheadNoLongerThanTheProofWait(t *testing.T) {
 	if d := time.Since(began); d > 5*time.Second {
 		t.Fatalf("the sweep's fee waited %s", d)
 	}
-	if err == nil || !strings.Contains(err.Error(), "1 funding tree(s) signed for a coin of this home are not settled") || strings.Contains(err.Error(), "(run `blogs fund`)") {
+	if err == nil || !strings.Contains(err.Error(), "1 funding tree(s) signed for a coin of this home are not settled") || strings.Contains(err.Error(), "(run `blogs fund`:") {
 		t.Fatalf("a fee whose coin is in an unmined tree: %v\n%s", err, r.notes)
 	}
 	for _, has := range []string{"1 funding tree(s) minted ahead hold one: waiting for the change", "the next funding tree was not minted ahead"} {

@@ -9,7 +9,9 @@
 // way a node would (inputs exist and are unspent, coinbase is mature,
 // scripts verify, nothing non-final is mined) but it has no proof of work
 // and no peers: its proofs mean nothing outside it, and nothing it mines is
-// money. It is for a laptop, never for a network.
+// money. It is for a laptop, never for a network. Its generatetoaddress is
+// the coinbase path of blogs fund (coinbase: only on a regtest chain you
+// run, for development and tests).
 //
 // With -journal FILE every accepted RPC call is appended to FILE and
 // replayed at the next start, so the chain survives a restart with the same
@@ -49,8 +51,9 @@ func main() {
 
 A local stand-in chain for trying blogs: a node's RPC at /rpc, its asset
 API under /api/v1/, and a header source at /v1/root/<height> and /v1/tip.
-Every transaction is mined at once. No proof of work, no peers: for a
-laptop, never for a network.
+Every transaction is mined at once, and generatetoaddress mines coinbase
+(coinbase: only on a regtest chain you run, for development and tests).
+No proof of work, no peers: for a laptop, never for a network.
 
 `)
 		flag.PrintDefaults()

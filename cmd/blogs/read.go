@@ -133,7 +133,7 @@ func cmdRead(ctx context.Context, g *global, args []string) error {
 	to := fs.Uint64("to", 0, "last seq (0: until no host holds the next)")
 	meta := fs.Bool("meta", false, "print a line about each batch before its lines")
 	jsonOut := fs.Bool("json", false, "one JSON object per batch, lines filtered as for a terminal")
-	ansi := fs.Bool("ansi", false, "let colour (SGR) through to the terminal")
+	ansi := fs.Bool("ansi", false, "let color (SGR) through to the terminal")
 	ascii := fs.Bool("ascii", false, "print non-ASCII as ? (default when the locale is not UTF-8)")
 	var dirs, allow repeated
 	fs.Var(&dirs, "content-dir", "a directory of digest-only content named by SHA-256 hex (repeatable)")

@@ -43,8 +43,10 @@ const usageText = `usage: blogs [global flags] <command> [flags] [arguments]
 
 producer commands (a producer home):
   init                         create the home: identity key and coin pool
-  fund -txid TXID              import a mined payment to the fund address
-  fund [-blocks N]             mine coinbase to the fund address (a chain you run)
+  fund -txid TXID              import a mined payment to the fund address: how
+                               a producer on mainnet or testnet is funded
+  fund [-blocks N] [-rescan]   coinbase: only on a regtest chain you run
+                               (development and tests)
   stream new <name>            create a stream: <name>_<random suffix>, and its topic
   stream list                  the streams this home produces
   produce <stream>             read lines from stdin or -file, publish batches, anchor intervals

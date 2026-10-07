@@ -278,7 +278,7 @@ func FeeError(err error) error {
 		case nc.Minting > 0:
 			return fmt.Errorf("fee input: %w: %d funding tree(s) minted ahead hold a coin and have not settled; the change returns once one does, so run the command again", nc.Err, nc.Minting)
 		}
-		return fmt.Errorf("fee input: %w (run `blogs fund`)", nc.Err)
+		return fmt.Errorf("fee input: %w (run `blogs fund`: pay the fund address from your own wallet, then `blogs fund -txid TXID`)", nc.Err)
 	case errors.As(err, &nk):
 		return fmt.Errorf("wallet output %s is locked to a key this home does not hold", nk.Outpoint)
 	}
@@ -295,7 +295,7 @@ func (e *Engine) feeError(err error) error {
 	var nc *producer.NoCoinError
 	if errors.As(err, &nc) && nc.Held == 0 && nc.Minting == 0 {
 		if n := e.unsettled(); n > 0 {
-			return fmt.Errorf("fee input: %w: %d funding tree(s) signed for a coin of this home are not settled, and the change of one on its way to a block returns once it mines; run the command again, which asks the node about them first, or run `blogs fund`", nc.Err, n)
+			return fmt.Errorf("fee input: %w: %d funding tree(s) signed for a coin of this home are not settled, and the change of one on its way to a block returns once it mines; run the command again, which asks the node about them first, or run `blogs fund -txid TXID` so the pool holds a second coin", nc.Err, n)
 		}
 	}
 	return FeeError(err)

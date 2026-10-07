@@ -157,18 +157,21 @@ func cmdInit(_ context.Context, g *global, args []string) error {
 	return nil
 }
 
-const fundHelp = `usage: blogs fund [-blocks N] [-batch N] [-rescan]
-       blogs fund -txid TXID
+const fundHelp = `usage: blogs fund -txid TXID
+       blogs fund [-blocks N] [-batch N] [-rescan]   (coinbase: only on a regtest chain you run)
 
 With -txid, import a payment: read the mined transaction TXID with its
 proof from the node (asset) or, with no node, from tx_source; check the
 proof against the header source; and add every output it pays to the
-home's fund address to the pool. This is how a producer on a real network
-is funded: send BSV to the fund address that init printed, wait for one
-confirmation, and import it.
+home's fund address to the pool. This is how a producer on mainnet or
+testnet is funded: send BSV from your own wallet to the fund address that
+init printed, wait for one confirmation, and import it:
 
-Without -txid, mine coinbase to the fund address through the node's
-generatetoaddress, which only a chain you run answers, and add the outputs
+  blogs -header-url woc:main -tx-source woc:main fund -txid TXID
+
+Without -txid (coinbase: only on a regtest chain you run, for development
+and tests), mine coinbase to the fund address through the node's
+generatetoaddress, which no public network answers, and add the outputs
 to the pool. Coinbase can be spent 100 blocks after it is mined, so the
 first fund mines 101 or more. -rescan re-reads recent blocks for coinbase
 the pool lacks.
@@ -209,10 +212,10 @@ func checkFundAddress(addr, network string) error {
 
 func cmdFund(ctx context.Context, g *global, args []string) error {
 	fs := g.flagSet("fund", fundHelp)
-	blocks := fs.Int("blocks", 101, "blocks to mine to the fund address")
-	batch := fs.Int("batch", bwallet.DefaultFundBatch, "blocks per generatetoaddress call")
-	rescan := fs.Bool("rescan", false, "re-read the last -blocks blocks for coinbase the pool lacks instead of mining")
-	txid := fs.String("txid", "", "import this mined payment to the fund address instead of mining")
+	blocks := fs.Int("blocks", 101, "coinbase: only on a regtest chain you run (development and tests): blocks to mine to the fund address")
+	batch := fs.Int("batch", bwallet.DefaultFundBatch, "coinbase: only on a regtest chain you run (development and tests): blocks per generatetoaddress call")
+	rescan := fs.Bool("rescan", false, "coinbase: only on a regtest chain you run (development and tests): re-read the last -blocks blocks for coinbase the pool lacks instead of mining")
+	txid := fs.String("txid", "", "import this mined payment to the fund address (mainnet or testnet: pay the fund address from your own wallet first)")
 	if pos, err := parse(fs, args); err != nil {
 		return err
 	} else if len(pos) > 0 {
