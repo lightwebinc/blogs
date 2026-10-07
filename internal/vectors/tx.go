@@ -192,7 +192,7 @@ func (e *txEnv) build() error {
 	if !bytes.Equal(*flock, logrec.FundingScript(mustKey(logrec.BatchDerivation, e.producer))) {
 		return fmt.Errorf("bcommon's funding lock is not the funding script")
 	}
-	if e.tree, err = mint.FundingTree(flock, 5, 1000, e.fee(0), e.feeLock, mint.DefaultFees); err != nil {
+	if e.tree, err = mint.FundingTree(flock, 5, 1000, e.fee(0), e.feeLock, mint.LegacyFees); err != nil {
 		return err
 	}
 	e.c.mine(e.tree)
@@ -302,7 +302,7 @@ func (e *txEnv) token(a *logrec.Anchor, prev *mint.Input, fundVout uint32) (*tra
 		return nil, err
 	}
 	fund := mint.Input{Tx: e.tree, Vout: fundVout, Unlocker: e.batchUnlocker()}
-	return mint.Transition(e.lock(logrec.AnchorDerivation, logrec.TagAnchor, rec), 1, prev, fund, e.feeLock, mint.DefaultFees)
+	return mint.Transition(e.lock(logrec.AnchorDerivation, logrec.TagAnchor, rec), 1, prev, fund, e.feeLock, mint.LegacyFees)
 }
 
 // flagUnlocker signs a lock-before PushDrop or pay-to-public-key input with
