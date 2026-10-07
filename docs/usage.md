@@ -40,8 +40,8 @@ variables.
 | Command | Needs a home | Needs | What it does |
 | --- | --- | --- | --- |
 | `init` | creates it | nothing | identity key and empty coin pool; prints the identity and fund address |
-| `fund -txid TXID` | yes | `asset` or `tx_source`, `header_url` | imports a mined payment to the fund address, once its proof checks |
-| `fund [-blocks N]` | yes | `rpc`, `asset` | mines coinbase to the fund address through `generatetoaddress` (a chain you run) |
+| `fund -txid TXID` | yes | `asset` or `tx_source`, `header_url` | imports a mined payment to the fund address, once its proof checks: how a producer on mainnet or testnet is funded |
+| `fund [-blocks N] [-rescan]` | yes | `rpc`, `asset` | coinbase: only on a regtest chain you run (development and tests). Mines coinbase to the fund address through `generatetoaddress` |
 | `stream new <name>` | yes | nothing | draws the random suffix; prints the stream, its topic, and the host's `BLOGS_STREAMS` entry |
 | `stream list` | yes | nothing | the home's streams and how far each is anchored |
 | `produce <stream>` | yes | `settle`, `asset`; `facade` (plane) or `hosts` (unicast) | stdin or a file to batches, published and anchored |
@@ -61,74 +61,12 @@ lowercase hex characters. `blogs <command> -h` prints a command's flags.
 ## Configuration
 
 Settings come from, highest first: the global flags, `BLOGS_<KEY>` in the
-environment (the key in upper case), the config file, and the defaults. The
-config file is `-config PATH`, else `$BLOGS_HOME/config`, else
-`$XDG_CONFIG_HOME/blogs/config`, else `~/.blogs/config`. Its grammar is one
-`key = value` per line, `#` comments, blank lines ignored; a key it does not
-define, a key given twice, or a line without `=` is an error, never ignored.
-
-| Key | Default | Meaning |
-| --- | --- | --- |
-| `arcade_key` | none | bearer token for an arcade installation named in `settle` |
-| `asset` | none | the node's asset API base URL: proofs, the chain tip, blocks, raw transactions |
-| `facade` | none | mode `plane`: the overlay host or bridge a producer publishes to (its `/submit` route), from which the plane delivers to every subscribed host. Refused in mode `unicast` |
-| `header_url` | none | the header source every proof is checked against: an overlay bridge's base URL (native `/v1/root/<height>` and `/v1/tip`), `woc:main`, `woc:test` or `chaintracks:URL` |
-| `home` | `~/.blogs` | the producer home |
-| `hosts` | none | the overlay hosts, comma separated, at most 16: the hosts a reader asks, in order; in mode `unicast` every host a producer submits to; in mode `plane` the hosts other than `facade` every sweep is also sent to directly |
-| `mode` | `plane` | `plane` or `unicast`: how a producer's objects reach the hosts ([unicast.md](unicast.md)) |
-| `network` | `main` | `main`, `test` or `regtest`: the fund address prefix and the header source's proof-of-work floor |
-| `object_bound` | `1048576` | the plane's object bound in bytes, at most 8388608; a carrier whose BEEF is larger is not published |
-| `originator` | `blogs` | the BRC-100 originator presented to the wallet |
-| `quorum` | `all` | mode `unicast`: how many hosts must take an object for it to count as published: `all`, `majority`, `one`, or a number up to the host count. A sweep always needs every host |
-| `rpc` | none | the node's JSON-RPC URL (`fund`) |
-| `rpc_pass`, `rpc_user` | `bitcoin` | the node's basic auth, also for `settle = rpc:` |
-| `settle` | none | the settlement leg: `tcp:<host:port>` (bare EF to an ingress), `rpc:<url>` (a node's `sendrawtransaction`) or `arcade:<url>` |
-| `timeout` | `15s` | bounds each request; `1s` to `5m` |
-| `tx_source` | none | `woc:main` or `woc:test`: where a reader with no node (`asset` unset) reads a funding tree no host serves and the spender of a funding output, and `fund -txid` reads a payment. Its answers are held to the txid and, with a proof, to the header source |
-
-Every limit on these settings and on the flags below, with its reason, is in
-[limits.md](limits.md). A hard cap is refused with exit 2 and a message
-naming the limit; a recommendation passed prints `warning: ...` and goes on.
-
-The addresses have no default on purpose: a default would send a producer's
-objects, or a reader's questions, to a server nobody configured. A command
-that needs one and finds none exits 2 naming the key.
-
-Global flags, before the command: `-config PATH`, `-home DIR`,
-`-hosts URLS`, `-header-url SOURCE`, `-mode MODE`, `-network NET`,
-`-quorum Q`, `-timeout DUR`, `-tx-source SOURCE`, `-v` (also accepted
-after the command), `-version`.
-
-A producer's config file, with documentation addresses:
-
-```text
-# ~/.blogs/config
-network    = test
-asset      = http://192.0.2.10:8090
-rpc        = http://192.0.2.10:9292
-settle     = rpc:http://192.0.2.10:9292
-facade     = https://archive-a.example.com
-hosts      = https://archive-a.example.com,https://archive-b.example.com
-header_url = https://headers.example.com
-```
-
-The same producer without the plane, submitting to both hosts itself
-([unicast.md](unicast.md)):
-
-```text
-mode       = unicast
-hosts      = https://archive-a.example.com,https://archive-b.example.com
-quorum     = all
-```
-
-A reader or auditor with no node of its own:
-
-```text
-network    = main
-hosts      = https://archive-a.example.com,https://archive-b.example.com
-header_url = woc:main
-tx_source  = woc:main
-```
+environment, the config file (`~/.blogs/config` by default), and the
+defaults. Every key, variable and flag, with examples for mainnet, testnet,
+the plane and a reader, is in [configuration.md](configuration.md). Every
+limit on them, with its reason, is in [limits.md](limits.md): a hard cap is
+refused with exit 2 and a message naming the limit; a recommendation passed
+prints `warning: ...` and goes on.
 
 ## The producer home
 
@@ -160,9 +98,9 @@ derive it.
 ## Producing
 
 ```bash
-blogs init
-blogs fund -blocks 101                 # a chain you run
-blogs fund -txid 1111...1111           # or: pay the fund address, then import the payment
+blogs init                             # prints the fund address
+blogs fund -txid 6f1e...a9c2           # after paying the fund address from your own wallet
+blogs fund -blocks 101                 # coinbase: only on a regtest chain you run (development and tests)
 blogs stream new app                   # prints app_<suffix> and tm_log_app_<suffix>
 tail -F /var/log/app.log | blogs produce app_qzxkvbmwtr
 blogs produce app_qzxkvbmwtr -file /var/log/app.log -follow
@@ -191,7 +129,7 @@ as several lines, and a last line without an LF gets one.
 | `-max-lines N` | 10000 | lines per batch, at most 65536 |
 | `-max-wait DUR` | `1s` | the latency floor: a batch is published at most this long after its first line; `10ms` to `1h` |
 | `-max-rate R` | 2 | batches a second, at most 50; a batch cut sooner waits, and the input waits with it |
-| `-unsafe` | `warn` | lines holding control characters, escape sequences other than colour, or zero-width and bidirectional characters (`termsafe.Validate`): `warn` publishes them and counts them at exit, `drop` does not publish them |
+| `-unsafe` | `warn` | lines holding control characters, escape sequences other than color, or zero-width and bidirectional characters (`termsafe.Validate`): `warn` publishes them and counts them at exit, `drop` does not publish them |
 
 A batch whose encoding is over the record's bound (256 KiB carried, 16 MiB
 located) is split at a line boundary into several batches. A carrier whose
@@ -234,16 +172,17 @@ tree running out does not stop the stream for a block.
 | `-anchor-ahead` | 2 | mint the next anchor fee tree at this many outputs left |
 | `-poll` | `5s` | how often proofs are asked for |
 
-The pool is filled by `fund`. On a chain you run, `fund` mines coinbase to
-the fund address (usable 100 blocks later; `-blocks N` blocks, `-batch N`
-per `generatetoaddress` call, and `-rescan` re-reads the last `-blocks`
-blocks for coinbase the pool lacks instead of mining). Anywhere else, pay the fund
-address `init` printed from any wallet and, once the payment has a block,
+The pool is filled by `fund`. On mainnet or testnet, pay the fund address
+`init` printed from your own wallet and, once the payment has a block,
 `fund -txid TXID` reads it (from `asset`, or from `tx_source`), checks its
 proof against `header_url`, and adds every output paying the fund address
-to the pool. Each batch costs about 50 satoshis at 1 satoshi per byte (its
-share of its tree's fee, and the satoshi it carries) and each anchor about
-600.
+to the pool. Without `-txid`, `fund` mines coinbase to the fund address
+(coinbase: only on a regtest chain you run, for development and tests;
+usable 100 blocks later; `-blocks N` blocks, `-batch N` per
+`generatetoaddress` call, and `-rescan` re-reads the last `-blocks` blocks
+for coinbase the pool lacks instead of mining). Each batch costs about 50
+satoshis at the fixed 1 satoshi per byte blogs pays (its share of its
+tree's fee, and the satoshi it carries) and each anchor about 600.
 
 A tree minted ahead that a run ends without using is recorded in the state,
 and its change is back in the pool. The next `produce`, `anchor` or `sweep`
@@ -389,7 +328,7 @@ there and names the `-from` to continue with.
 | `-from N`, `-to N` | the range; without `-to`, until no host holds the next `seq` |
 | `-meta` | a line before each batch: `# seq N  timestamp MS  C line(s)  carrier TXID  VERIFIED  linked  content ok` |
 | `-json` | one JSON object per batch: `seq`, `carrier`, `timestamp`, `count`, `profile`, `encoding`, `verdict`, `link`, `content`, `lines` (filtered as for a terminal) |
-| `-ansi` | let colour through; `-ascii` prints non-ASCII as `?` (the default when the locale is not UTF-8) |
+| `-ansi` | let color through; `-ascii` prints non-ASCII as `?` (the default when the locale is not UTF-8) |
 | `-content-dir DIR` | repeatable: digest-only content named by SHA-256 hex |
 | `-allow-host HOST` | repeatable: a host whose locator hints may be fetched |
 
@@ -743,7 +682,7 @@ Results go to stdout; progress and errors to stderr, errors as one line
 | `blogs: <key> must be configured (config key <key>)`, `blogs: no header source: set header_url ...`, `blogs: no overlay host configured ...` | a missing setting, exit 2 |
 | `blogs: this home holds no stream S (create one with ...)` | `produce` or `anchor` on a stream without state, exit 2 |
 | `blogs: another blogs command is using the home H ...` | the home is locked, exit 2 |
-| `blogs: batch funding tree: fee input: ... (run `blogs fund`)` | the pool has no spendable coin, exit 2 |
+| ``blogs: batch funding tree: fee input: ... (run `blogs fund`: ...)`` | the pool has no spendable coin, exit 2; pay the fund address and run `blogs fund -txid TXID` |
 | `no coin is spendable and N funding tree(s) minted ahead hold one: waiting for the change` | a fee is asked for while a tree minted ahead holds the pool's last coin: the command waits for that tree to mine, no longer than the wait for one proof, and goes on |
 | `blogs: fee input: ...: N funding tree(s) signed for a coin of this home are not settled ...` | the tree did not mine in time, exit 2; its record is kept and the next `produce`, `anchor` or `sweep` recovers it |
 | `blogs: fee input: ...: N funding tree(s) minted ahead hold a coin and have not settled ...` | the wait for a tree minted ahead was interrupted, exit 2; the next command recovers the tree |

@@ -264,7 +264,7 @@ and the batches: the anchor is the state, and it is small.
 
 ## 6. Carriers, funding trees and derivations
 
-Everything here is bcommon's, parameterised by the values in section 6.1.
+Everything here is bcommon's, parameterized by the values in section 6.1.
 
 ### 6.1 Derivations and tags
 
@@ -855,7 +855,7 @@ below.
   proves nothing); it creates a new stream, with a new random suffix and so
   a new topic.
 - **Archive.** Lateness is never a refusal for a batch. A batch is admitted
-  whenever it arrives, before or after its neighbours, before or after the
+  whenever it arrives, before or after its neighbors, before or after the
   interval's anchor, and the interval's status is recomputed. An anchor is
   admitted whenever it arrives after the outputs it spends; one that arrives
   before its predecessor or its funding tree is refused (section 8.1 rule 7)
@@ -958,7 +958,7 @@ so a verifier walking the anchors sees every `seq` of the stream covered once.
 | Interval root: RFC 6962 over 32-byte commitments | RFC 6962; BRC-220 batch mode (a leaf over a 32-byte hash datum, split at the largest power of two, no duplication, the datum stated); BRC-122 ARIA (an epoch's root over its records ordered by `sequence`, committed on chain) | bcommon `commit`, the one routine every anchor in the application family uses; ARIA links an epoch's close to its own open, where anchors here link to the previous interval |
 | Per-interval completeness by comparing roots | BRC-136 BASM (per-block completeness of a topic by root) | per producer interval rather than per block, and RFC 6962 rather than Bitcoin's duplicating SHA-256d tree, so no duplicate-leaf ambiguity (CVE-2012-2459) arises |
 | Digest-only locator | BRC-26 UHRP (content named by its SHA-256) | the digest is UHRP's hash, so a UHRP resolver can serve it; URLs are hints, never instructions |
-| Unknown record keys preserved and ignored | BRC-174 section 3.2 (ignore fields not recognised; preserve them when reconstructing) | the same rule for CBOR keys; an unknown locator member makes the locator unsupported rather than being ignored, because it may change how the content is found |
+| Unknown record keys preserved and ignored | BRC-174 section 3.2 (ignore fields not recognized; preserve them when reconstructing) | the same rule for CBOR keys; an unknown locator member makes the locator unsupported rather than being ignored, because it may change how the content is found |
 | Carrier ancestry and proofs | BRC-62 and BRC-95/96 BEEF; BRC-74 BUMP, guarded by bcommon `guard` | none |
 | Sibling backfill by lookup | BRC-24 | BRC-76 GASP remains available between hosts; the batch class is the targeted form |
 | Priced questions | BRC-105 | the seam is left open: the three classes here are free, and a priced class must be a different question |

@@ -29,11 +29,17 @@ at the default fee (section 11).
 
 - **Container image**: `ghcr.io/lightwebinc/blogs` (the command),
   `ghcr.io/lightwebinc/blogs-host` (a host), and
-  `ghcr.io/lightwebinc/blogs-devchain` (a local chain for trying things).
+  `ghcr.io/lightwebinc/blogs-devchain` (a private regtest chain for the
+  local development sandbox).
   Mount a named volume at `/home/nonroot/.blogs` and pass settings as
   `BLOGS_<KEY>` variables.
-- **From source**: `make blogs` builds `bin/blogs` (Go 1.27.1 or later).
-  The only direct dependencies are go-sdk and bcommon, both pinned.
+- **Go**: `go install github.com/lightwebinc/blogs/cmd/blogs@latest`
+  (Go 1.27.1 or later).
+- **Release binaries**: static `blogs` for Linux and macOS (amd64, arm64)
+  on the [releases page](https://github.com/lightwebinc/blogs/releases),
+  with `SHA256SUMS`.
+- **From source**: `make blogs` builds `bin/blogs`. The only direct
+  dependencies are go-sdk and bcommon, both pinned.
 
 `blogs -version` prints the version. `blogs doctor` reads your settings and
 home and asks every configured endpoint whether it answers; it changes
@@ -58,18 +64,33 @@ Settings come from global flags, then `BLOGS_<KEY>` variables, then the
 config file (`$BLOGS_HOME/config`, else `~/.blogs/config`), then defaults.
 The file is one `key = value` per line; an unknown key is an error, never
 ignored. The addresses have no default: a default would send your batches,
-or your questions, to a server nobody chose.
+or your questions, to a server nobody chose. Every key, variable and flag is
+in [configuration.md](configuration.md).
 
-A producer on the plane:
+`network` is `main` (the default) or `test`; `regtest` is for a chain you
+run yourself. A producer on mainnet, submitting to its hosts itself
+(section 10):
 
 ```text
 network    = main
-asset      = http://192.0.2.10:8090
-settle     = arcade:https://arc.example.com/v1
-facade     = https://logs-a.example.com
-hosts      = https://logs-a.example.com,https://logs-b.example.com
 header_url = woc:main
+tx_source  = woc:main
+settle     = arcade:https://arc.gorillapool.io/v1
+asset      = http://node.example.com:8090
+mode       = unicast
+hosts      = https://logs-a.example.com,https://logs-b.example.com
 ```
+
+The same producer on testnet changes four lines: `network = test`,
+`header_url = woc:test`, `tx_source = woc:test`, and a testnet broadcaster
+such as `settle = arcade:https://testnet.arc.gorillapool.io/v1`, with
+`asset` naming a testnet node. On the multicast plane, `mode = plane` (the
+default) and `facade = https://logs-a.example.com` replace `mode =
+unicast`.
+
+`asset` is a node's asset API: the producer asks it whether its funding
+trees and anchors have mined. No public service offers one, so a producer
+needs access to a node on its network. Readers and auditors do not.
 
 A reader or auditor needs no node, no coin and no home:
 
@@ -93,7 +114,17 @@ $ blogs init
 created /home/me/.blogs
 identity     02c0ffee...
 fund address 1BLogs... (main)
-$ blogs fund -txid 1111...1111        # after paying the fund address from any wallet
+```
+
+Pay the fund address from your own wallet (about 50,000 satoshis starts a
+stream; section 11), wait for one confirmation, and import the payment by
+its txid. blogs reads it with its proof from `asset` or `tx_source`, checks
+the proof against `header_url`, and adds every output paying the fund
+address to the coin pool:
+
+```console
+$ blogs fund -txid 6f1e...a9c2
+imported 1 of 1 output(s) paying 1BLogs..., 50000 sat, mined at height 970061; pool 1 output(s), 50000 sat
 $ blogs stream new app
 stream   app_qzxkvbmwtr
 topic    tm_log_app_qzxkvbmwtr
@@ -101,6 +132,11 @@ producer 02c0ffee...
 host     BLOGS_STREAMS=app_qzxkvbmwtr=02c0ffee...
 $ tail -F /var/log/app.log | blogs produce app_qzxkvbmwtr
 ```
+
+`blogs fund` with no `-txid` (and its `-blocks`, `-batch` and `-rescan`
+flags) mines coinbase instead. That is coinbase: only on a regtest chain you
+run (development and tests), such as the local development sandbox in
+[QUICKSTART.md](../QUICKSTART.md); no public network answers it.
 
 Give the `host` line to whoever runs your hosts: it admits only your key on
 the stream. Then feed lines on stdin, or name a file with
@@ -311,8 +347,10 @@ most likely to meet:
 A setting past a cap exits 2 with a message naming the limit; one past a
 recommendation prints `warning: ...` and goes on.
 
-**Cost.** At 1 satoshi per byte a batch costs about 50 satoshis and an
-anchor about 600. A stream anchored every ten minutes around the clock
+**Cost.** blogs pays a fixed 1 satoshi per byte, ten times the 100
+satoshis per 1000 bytes most mainnet broadcasters ask, so these are what it
+spends, not a minimum. A batch costs about 50 satoshis and an anchor about
+600. A stream anchored every ten minutes around the clock
 spends under 100,000 satoshis a day on anchors; batches follow how much
 you log. `blogs doctor` shows the pool; `blogs sweep -retire` returns unused
 funding outputs to it.
@@ -338,8 +376,8 @@ Common messages:
 | `facade must be configured ...` | 2 | Set `facade`, or `mode = unicast` with `hosts` |
 | `this home holds no stream S ...` | 2 | The stream's state is not in this home. Use the home that created it, or a new stream |
 | `another blogs command is using the home ...` | 2 | One producer per home at a time; wait, or give the other stream its own home |
-| `batch funding tree: fee input: ... (run blogs fund)` | 2 | The coin pool is empty: `blogs fund` |
-| `fee input: ...: N funding tree(s) signed for a coin of this home are not settled ...` | 2 | The pool's last coin is in a funding tree that has not mined yet. Run the command again once a block has passed, or `blogs fund` so the pool holds a second coin |
+| ``batch funding tree: fee input: ... (run `blogs fund`: ...)`` | 2 | The coin pool is empty: pay the fund address and `blogs fund -txid TXID` |
+| `fee input: ...: N funding tree(s) signed for a coin of this home are not settled ...` | 2 | The pool's last coin is in a funding tree that has not mined yet. Run the command again once a block has passed, or `blogs fund -txid TXID` so the pool holds a second coin |
 | `seq N: publish: ...; the carrier is persisted and a later run publishes it` | 2 | The facade, or too few hosts, did not take it. Fix the endpoint and run `produce` or `anchor` again |
 | `funding tree TXID: ...; the tree is adopted and recorded as not published, and the next produce, anchor or sweep publishes it` | 2 | The facade, or too few hosts, did not take a new funding tree. Fix the endpoint and run `produce` or `anchor` again; no second tree is minted |
 | `... funding tree TXID was signed by a run that stopped before it adopted the tree: asking the node what became of it ...` | 0 | An earlier run stopped while minting a tree. The lines after it say what was found; nothing to do |

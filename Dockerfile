@@ -6,14 +6,14 @@
 #   docker build -t ghcr.io/lightwebinc/blogs .                             # the command (default)
 #   docker build --target devchain -t ghcr.io/lightwebinc/blogs-devchain .  # the local chain
 #
-# The builder is pinned by digest and is a later toolchain than go.mod's
-# floor, so scanning sees the standard library that ships.
+# The builder is pinned by digest and is the Go release go.mod names
+# (1.27.1), so scanning sees the standard library that ships.
 #
 # No ENV defaults are baked in. The hosts, the header source, the node and
 # the settlement leg are addresses of somebody's deployment and have no
 # default anywhere: a default would send a producer's objects, or a
 # reader's questions, to a server nobody configured. Pass them as
-# BLOGS_<KEY> variables or in a config file (docs/usage.md).
+# BLOGS_<KEY> variables or in a config file (docs/configuration.md).
 #
 # The command keeps a producer's state (identity, coin pool, streams) under
 # $BLOGS_HOME, ~/.blogs by default, which is /home/nonroot/.blogs here. The

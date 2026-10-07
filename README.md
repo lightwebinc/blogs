@@ -1,7 +1,15 @@
 # blogs
 
 [![CI](https://github.com/lightwebinc/blogs/actions/workflows/ci.yml/badge.svg)](https://github.com/lightwebinc/blogs/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/lightwebinc/blogs)](https://github.com/lightwebinc/blogs/releases)
+[![Go version](https://img.shields.io/github/go-mod/go-version/lightwebinc/blogs)](go.mod)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+
+> [!WARNING]
+> **Experimental software.** blogs is part of [bstack](https://github.com/lightwebinc/bstack),
+> the applications and patterns built on [BSV Layered Multicast](https://github.com/lightwebinc/bsv-multicast).
+> It is published to be built on and improved. Interfaces, formats and behavior may change
+> rapidly between releases; pin an exact version.
 
 Distributed logging on Bitcoin. A producer appends signed, numbered
 batches of log lines to a stream; overlay hosts keep them; and one small
@@ -11,13 +19,21 @@ committed, against block headers it checks itself.
 
 ```console
 $ tail -F /var/log/app.log | blogs produce app_qzxkvbmwtr
-$ blogs read app_qzxkvbmwtr 02c0ffee…
-$ blogs verify-interval app_qzxkvbmwtr 02c0ffee… 1
+$ blogs -header-url woc:main -tx-source woc:main -hosts https://logs.example.com \
+    verify-interval app_qzxkvbmwtr 02c0ffee… 1
 VERIFIED interval 1 of app_qzxkvbmwtr by 02c0ffee…: seqs 1 to 4, root 5d7f…3999, committed no later than block 912430
 ```
 
-**New here? Start with [QUICKSTART.md](QUICKSTART.md):** two local hosts, a
-stream, and a verified interval in about five minutes, with no coin.
+blogs runs on BSV mainnet (`-network main`, the default) and testnet
+(`-network test`). Readers and auditors need only a header source such as
+`woc:main` and the hosts that keep a stream: no node, no coin, no home. A
+producer pays for its own anchors and batches from coin it already owns
+(about 600 satoshis an anchor and 50 a batch) and needs a node's asset API
+and a broadcaster ([QUICKSTART.md](QUICKSTART.md#on-mainnet-or-testnet)).
+
+**New here?** [QUICKSTART.md](QUICKSTART.md) starts on the real network,
+then gives a local development sandbox (a private regtest chain, no coin
+needed) with two hosts and a verified interval in about five minutes.
 
 ## How it works
 
@@ -40,9 +56,11 @@ stream, and a verified interval in about five minutes, with no coin.
 
 | If you want to | Read |
 | --- | --- |
-| Try it in five minutes | [QUICKSTART.md](QUICKSTART.md) |
-| Learn what it is for and how to use it, end to end | [docs/user-guide.md](docs/user-guide.md) |
-| Look up a command, flag, setting, exit code or message | [docs/usage.md](docs/usage.md) |
+| Get started on mainnet or testnet, or try it locally with no coin | [QUICKSTART.md](QUICKSTART.md) |
+| Learn what it is for and how to use it, end to end, with examples | [docs/user-guide.md](docs/user-guide.md) |
+| See how the pieces fit: command, hosts, chain, code layout | [docs/architecture.md](docs/architecture.md) |
+| Set a key, an environment variable or a flag | [docs/configuration.md](docs/configuration.md) |
+| Look up a command, its flags, an exit code or a message | [docs/usage.md](docs/usage.md) |
 | Run without the multicast plane, and repair a host | [docs/unicast.md](docs/unicast.md) |
 | Know the defaults and caps, and why each is set where it is | [docs/limits.md](docs/limits.md) |
 | Run a host other people reach | [docs/self-host.md](docs/self-host.md) |
@@ -51,17 +69,22 @@ stream, and a verified interval in about five minutes, with no coin.
 
 ## Install
 
+```bash
+go install github.com/lightwebinc/blogs/cmd/blogs@latest      # Go 1.27.1 or later
+```
+
 | | |
 | --- | --- |
-| Container | `docker run --rm -v blogs-home:/home/nonroot/.blogs ghcr.io/lightwebinc/blogs doctor` (the command), `ghcr.io/lightwebinc/blogs-host` (a host), `ghcr.io/lightwebinc/blogs-devchain` (the local chain) |
-| Source | `make blogs` into `bin/blogs` (Go 1.27.1 or later) |
+| Release binaries | static `blogs` for Linux and macOS (amd64, arm64) on the [releases page](https://github.com/lightwebinc/blogs/releases), each tarball with its licenses, plus `SHA256SUMS` |
+| Container | `docker run --rm -v blogs-home:/home/nonroot/.blogs ghcr.io/lightwebinc/blogs -header-url woc:main doctor` (the command), `ghcr.io/lightwebinc/blogs-host` (a host), `ghcr.io/lightwebinc/blogs-devchain` (the local development chain) |
+| Source | `make blogs` into `bin/blogs` |
 | A host of your own | `deploy/compose.yaml` ([docs/self-host.md](docs/self-host.md)) |
 
 ## Build and test
 
 ```bash
 (cd host && npm ci)    # once: the host module's toolchain (Node 24)
-make verify            # what CI runs: format, vet, dependency set, licences, typecheck, vectors, tests under -race
+make verify            # what CI runs: format, vet, dependency set, licenses, typecheck, vectors, tests under -race
 make lint              # golangci-lint
 make docker-build      # the command's and the local chain's images
 make docker-smoke      # both images, offline and together
@@ -82,9 +105,9 @@ vectors and the end-to-end targets are described in
 
 Report a vulnerability privately: [SECURITY.md](SECURITY.md).
 
-## Licence
+## License
 
 Apache-2.0 ([LICENSE](LICENSE)). One dependency is under the Open BSV
 License Version 5, whose grant is revocable and which limits use to the BSV
 blockchains; [NOTICE](NOTICE) explains, and
-[LICENSE-THIRD-PARTY](LICENSE-THIRD-PARTY) carries every licence text.
+[LICENSE-THIRD-PARTY](LICENSE-THIRD-PARTY) carries every license text.
