@@ -12,7 +12,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/lightwebinc/bcommon/mint"
 	"github.com/lightwebinc/bcommon/termsafe"
 
 	"github.com/lightwebinc/blogs/internal/config"
@@ -36,13 +35,15 @@ collected by the next produce or anchor.
 A run persists each carrier before publishing it and republishes a carrier
 it finds persisted, so a restart continues the stream at the next seq and
 never builds two carriers for one. A funding tree an earlier run signed and
-did not adopt is settled first: the node is asked what became of it, and a
+did not adopt is settled first: the chain view is asked what became of it, and a
 tree on the chain and not yet mined is waited for, 10 minutes at most.
 
-Needs settle and asset, and where objects go: facade in mode plane, or
-hosts in mode unicast, where each host is sent every object, retried on
-its own, and the run ends with what each host took and missed and the
-backfill that repairs a host that missed something.`
+Needs where objects go: facade in mode plane, or hosts in mode unicast,
+where each host is sent every object, retried on its own, and the run ends
+with what each host took and missed and the backfill that repairs a host
+that missed something. The broadcaster (settle), chain view (chain) and
+header source (header_url) default to public services on mainnet and
+testnet, so no node is needed.`
 
 // repeated is a flag given several times.
 type repeated []string
@@ -143,7 +144,15 @@ func (g *global) engine(ctx context.Context, stream string, f *produceFlags, o p
 		}
 		return nil, nil, err
 	}
-	o.Poll, o.ObjectBound, o.Fees = f.poll, g.cfg.ObjectBound, mint.DefaultFees
+	fees, from, err := g.fees(ctx, legs.Arcade)
+	if err != nil {
+		unlock()
+		return nil, nil, err
+	}
+	if from != "" {
+		g.say("fee rate %s sat/bytes from %s", fees.Rate, from)
+	}
+	o.Poll, o.ObjectBound, o.Fees = f.poll, g.cfg.ObjectBound, fees
 	if o.Wait == 0 {
 		o.Wait = 10 * time.Minute
 	}

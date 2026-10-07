@@ -242,7 +242,7 @@ func TestFundImportsAPayment(t *testing.T) {
 	}
 	for _, id := range h.chain.Txids() {
 		if !before[id] && id != paid {
-			h.want(h.run("", "fund", "-txid", id), exitUsage, "pays nothing to the fund address")
+			h.want(h.run("", "fund", "-txid", id), exitRefused, "pays nothing to this wallet's fund address")
 		}
 	}
 }

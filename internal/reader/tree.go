@@ -137,7 +137,7 @@ func (c *Client) FundingTree(ctx context.Context, stream, txid string) (tx *tran
 			return t, c.Txs.Name(), "", refused, nil
 		}
 	} else {
-		tried = append(tried, "no copy of the chain is configured (asset, or tx_source woc:main or woc:test)")
+		tried = append(tried, "no chain view is configured (chain)")
 	}
 	return nil, "", strings.Join(tried, "; "), refused, nil
 }

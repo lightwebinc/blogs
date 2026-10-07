@@ -114,8 +114,15 @@ type Options struct {
 // directly: no lookup class names the sweep of a batch, so a host off the plane
 // receives one only this way.
 type Legs struct {
-	Settler    publish.Settler
-	Asset      *nodeapi.Asset
+	Settler publish.Settler
+	// Chain is the chain view proofs, parents and spends are read from: a
+	// node, WhatsOnChain, or both (nodeapi.ParseChain).
+	Chain nodeapi.Chain
+	// Tip answers the chain's height, for coinbase maturity: the header
+	// source.
+	Tip interface {
+		CurrentHeight(ctx context.Context) (uint32, error)
+	}
 	Arcade     *publish.Arcade
 	Facade     *publish.Facade
 	Hosts      *unicast.Set
@@ -166,8 +173,8 @@ func New(st *state.Stream, signer *bwallet.Signer, pool *bwallet.Pool, legs Legs
 	if st.Identity != signer.IdentityHex() {
 		return nil, fmt.Errorf("stream %s belongs to identity %s, not this home's %s", st.Stream, st.Identity, signer.IdentityHex())
 	}
-	if legs.Settler == nil || (legs.Facade == nil) == (legs.Hosts == nil) || legs.Asset == nil {
-		return nil, errors.New("a producer needs a settlement leg, a node, and either a facade or hosts")
+	if legs.Settler == nil || (legs.Facade == nil) == (legs.Hosts == nil) || legs.Chain == nil || legs.Tip == nil {
+		return nil, errors.New("a producer needs a settlement leg, a chain view, a header source, and either a facade or hosts")
 	}
 	e := &Engine{St: st, Signer: signer, Pool: pool, Legs: legs, Opts: o, Now: time.Now, topic: topic}
 	e.kept = &producer.Kept{Load: e.load}
@@ -181,7 +188,7 @@ func New(st *state.Stream, signer *bwallet.Signer, pool *bwallet.Pool, legs Legs
 	e.anchorTrees = &producer.Trees{Payer: e.payer, State: treeState{e, true}, Identity: signer.IdentityHex(),
 		Count: o.AnchorTreeCount, Sats: o.AnchorTreeSats, Funder: "pool", Lock: lock, Change: signer.FundScript,
 		Facade: legs.treeFacade("anchor fee tree"), Topic: topic, Ahead: o.AnchorAhead, Prepare: e.prepareTree(AnchorTree)}
-	e.collector = &producer.Collector{Proofs: producer.Proofs{Arcade: legs.Arcade, Asset: legs.Asset},
+	e.collector = &producer.Collector{Proofs: producer.Proofs{Arcade: legs.Arcade, Source: legs.Chain, Spends: legs.Chain},
 		Kept: e.kept, Pool: pool, Save: st.Save, Note: e.note}
 	return e, nil
 }
@@ -192,7 +199,7 @@ func New(st *state.Stream, signer *bwallet.Signer, pool *bwallet.Pool, legs Legs
 func (e *Engine) newPayer() *producer.Payer {
 	p := &producer.Payer{
 		Pool: e.Pool, Keys: map[string]*bwallet.Signer{e.Signer.IdentityHex(): e.Signer},
-		Kept: e.kept, Settler: e.Legs.Settler, Asset: e.Legs.Asset, Fees: e.Opts.Fees,
+		Kept: e.kept, Settler: e.Legs.Settler, Chain: e.Legs.Chain, Fees: e.Opts.Fees,
 		Timeout: e.Opts.Wait, Poll: e.Opts.Poll, Note: e.note,
 	}
 	if e.payer != nil {
@@ -278,7 +285,7 @@ func FeeError(err error) error {
 		case nc.Minting > 0:
 			return fmt.Errorf("fee input: %w: %d funding tree(s) minted ahead hold a coin and have not settled; the change returns once one does, so run the command again", nc.Err, nc.Minting)
 		}
-		return fmt.Errorf("fee input: %w (run `blogs fund`: pay the fund address from your own wallet, then `blogs fund -txid TXID`)", nc.Err)
+		return fmt.Errorf("fee input: %w (run `blogs fund`: pay the fund address from your own wallet, then `blogs fund -beef FILE` or `blogs fund -txid TXID`)", nc.Err)
 	case errors.As(err, &nk):
 		return fmt.Errorf("wallet output %s is locked to a key this home does not hold", nk.Outpoint)
 	}
@@ -295,7 +302,7 @@ func (e *Engine) feeError(err error) error {
 	var nc *producer.NoCoinError
 	if errors.As(err, &nc) && nc.Held == 0 && nc.Minting == 0 {
 		if n := e.unsettled(); n > 0 {
-			return fmt.Errorf("fee input: %w: %d funding tree(s) signed for a coin of this home are not settled, and the change of one on its way to a block returns once it mines; run the command again, which asks the node about them first, or run `blogs fund -txid TXID` so the pool holds a second coin", nc.Err, n)
+			return fmt.Errorf("fee input: %w: %d funding tree(s) signed for a coin of this home are not settled, and the change of one on its way to a block returns once it mines; run the command again, which asks the chain view about them first, or run `blogs fund -txid TXID` so the pool holds a second coin", nc.Err, n)
 		}
 	}
 	return FeeError(err)
@@ -318,7 +325,8 @@ func (e *Engine) unsettled() int {
 	return n
 }
 
-// Start reads the chain tip for coinbase maturity, settles the funding
+// Start reads the chain tip for coinbase maturity, collects the proofs of
+// what the pool holds back until mined, settles the funding
 // trees an earlier run signed and did not adopt, publishes the trees an
 // earlier run adopted and could not publish, and publishes the carrier a
 // previous run persisted and may not have published. Nothing is spent
@@ -326,6 +334,11 @@ func (e *Engine) unsettled() int {
 func (e *Engine) Start(ctx context.Context) error {
 	if err := e.tip(ctx); err != nil {
 		return err
+	}
+	// Change and imported payments the pool holds back until mined are
+	// released once the chain view has their proofs.
+	if len(e.Pool.UnprovenTxids()) > 0 {
+		e.collector.Collect(ctx, nil)
 	}
 	if err := e.RecoverTrees(ctx); err != nil {
 		return err
@@ -337,11 +350,11 @@ func (e *Engine) Start(ctx context.Context) error {
 }
 
 func (e *Engine) tip(ctx context.Context) error {
-	h, err := e.Legs.Asset.BestHeader(ctx)
+	h, err := e.Legs.Tip.CurrentHeight(ctx)
 	if err != nil {
-		return fmt.Errorf("node tip: %w", err)
+		return fmt.Errorf("chain tip: %w", err)
 	}
-	e.payer.Tip = h.Height
+	e.payer.Tip = h
 	return nil
 }
 
@@ -683,7 +696,7 @@ func (e *Engine) submit(ctx context.Context, tok *transaction.Transaction) error
 	inf := e.St.Inflight
 	if err := e.Legs.Settler.Submit(ctx, tok); err != nil {
 		var se *nodeapi.SpentError
-		if _, _, perr := e.Legs.Asset.Proof(ctx, inf.Txid); perr != nil && errors.As(e.Legs.Asset.SpentElsewhere(ctx, tok), &se) {
+		if _, _, perr := e.Legs.Chain.Proof(ctx, inf.Txid); perr != nil && errors.As(nodeapi.SpentElsewhereIn(ctx, e.Legs.Chain, tok), &se) {
 			if a := e.St.Anchor; a == nil || se.Outpoint != fmt.Sprintf("%s.%d", a.Txid, a.Vout) {
 				return e.giveUpAnchor(fmt.Errorf("%w: %w (%w)", producer.ErrRefused, se, err))
 			}

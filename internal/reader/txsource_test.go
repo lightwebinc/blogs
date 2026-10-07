@@ -59,6 +59,17 @@ func woc(t *testing.T, chain *testchain.Chain, swap *transaction.Transaction) *h
 	return srv
 }
 
+// wocAt is WhatsOnChain (nodeapi.WoC) at a test server, unthrottled.
+func wocAt(t *testing.T, base string) ChainSource {
+	t.Helper()
+	w, err := nodeapi.NewWoC("main", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Base, w.Rate = strings.TrimRight(base, "/")+"/main", 1000
+	return ChainSource{Chain: w, Label: "WhatsOnChain (main)"}
+}
+
 func TestWhatsOnChainIsHeldToTheTxid(t *testing.T) {
 	chain := testchain.New(700)
 	key, _ := ec.PrivateKeyFromBytes([]byte(strings.Repeat("\x42", 32)))
@@ -72,7 +83,7 @@ func TestWhatsOnChainIsHeldToTheTxid(t *testing.T) {
 		txids = append(txids, chainCoinbase(t, chain, h)...)
 	}
 	ctx := context.Background()
-	c := &Client{Txs: WhatsOnChain{Network: "main", Base: woc(t, chain, nil).URL}}
+	c := &Client{Txs: wocAt(t, woc(t, chain, nil).URL)}
 	tx, err := c.Fetch(ctx, txids[0], false)
 	if err != nil || tx.TxID().String() != txids[0] {
 		t.Fatalf("hex: %v", err)
@@ -84,13 +95,14 @@ func TestWhatsOnChainIsHeldToTheTxid(t *testing.T) {
 	if _, err := c.Fetch(ctx, strings.Repeat("ab", 32), false); err == nil || errors.Is(err, ErrOtherBytes) {
 		t.Fatalf("an unknown txid: %v", err)
 	}
-	// A source that answers with another transaction is caught.
-	c.Txs = WhatsOnChain{Network: "main", Base: woc(t, chain, chain.Tx(txids[1])).URL}
-	if _, err := c.Fetch(ctx, txids[0], false); !errors.Is(err, ErrOtherBytes) {
-		t.Fatalf("other bytes: %v", err)
+	// A source that answers with another transaction is caught: by the
+	// chain view, before Fetch holds the bytes to the txid itself.
+	c.Txs = wocAt(t, woc(t, chain, chain.Tx(txids[1])).URL)
+	if tx, err := c.Fetch(ctx, txids[0], false); err == nil || !strings.Contains(err.Error(), "answered") {
+		t.Fatalf("other bytes: %v %v", tx, err)
 	}
 	var none Client
-	if _, err := none.Fetch(ctx, txids[0], false); err == nil || !strings.Contains(err.Error(), "tx_source") {
+	if _, err := none.Fetch(ctx, txids[0], false); err == nil || !strings.Contains(err.Error(), "configure chain") {
 		t.Fatalf("no source: %v", err)
 	}
 }
@@ -129,7 +141,7 @@ func TestSpenderFromTheNodeAndWhatsOnChain(t *testing.T) {
 	defer api.Close()
 	ctx := context.Background()
 	id := strings.Repeat("1", 64)
-	for _, src := range []SpendSource{AssetSource{Asset: &nodeapi.Asset{Base: node.URL}}, WhatsOnChain{Network: "main", Base: api.URL + "/"}} {
+	for _, src := range []SpendSource{ChainSource{Chain: &nodeapi.Asset{Base: node.URL}}, wocAt(t, api.URL)} {
 		if got, err := src.Spender(ctx, id, 1); err != nil || got != spent {
 			t.Fatalf("%T spent: %q %v", src, got, err)
 		}
@@ -137,7 +149,7 @@ func TestSpenderFromTheNodeAndWhatsOnChain(t *testing.T) {
 			t.Fatalf("%T unspent: %q %v", src, got, err)
 		}
 	}
-	if _, err := (AssetSource{Asset: &nodeapi.Asset{Base: node.URL}}).Spender(ctx, strings.Repeat("2", 64), 0); err == nil {
+	if _, err := (ChainSource{Chain: &nodeapi.Asset{Base: node.URL}}).Spender(ctx, strings.Repeat("2", 64), 0); err == nil {
 		t.Fatal("an unknown transaction answered")
 	}
 }
@@ -171,7 +183,7 @@ func TestRetractionNotesUnspentOnlyOnTheNodesWord(t *testing.T) {
 		_, _ = w.Write([]byte(body + "]"))
 	}))
 	defer node.Close()
-	src := AssetSource{Asset: &nodeapi.Asset{Base: node.URL}}
+	src := ChainSource{Chain: &nodeapi.Asset{Base: node.URL}}
 	c := &Client{Headers: testchain.New(100), Txs: src}
 	ctx := context.Background()
 	retraction := func(txid string, vout uint32) string {

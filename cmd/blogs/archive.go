@@ -30,7 +30,7 @@ Each pass first asks the host again about the seqs it has stored, up to
 about longest ago come first (-recheck-all asks about every one). A stored
 carrier the host no longer serves is checked for a retraction: a mined
 transaction other than the carrier that spends its funding output (the
-node, or tx_source, names it; the archive checks it against header_url).
+chain view names it; the archive checks it against header_url).
 When one is found the archive keeps a receipt (the seq, the commitment,
 its prev, and the sweep with its proof, under retracted/) and drops the
 batch's bytes; the receipt still completes the interval's root. A carrier
@@ -38,15 +38,15 @@ the host stops serving with no such spend is kept.
 
 Each anchor's fee tree is kept too, with its proof, under trees/, when the
 anchor is first proven: the host answers it by txid (the tree class), and
-the node (asset) or tx_source is asked only when the host does not. An
+the chain view (chain) is asked only when the host does not. An
 archive begun before trees were kept catches up on its next pass. With its
 trees an archive directory is a complete source for an audit:
 blogs verify-interval -archive DIR.
 
 The layout under DIR/<stream>/<producer> is in docs/usage.md. -host
-defaults to the first configured host. Needs header_url; asset (or
-tx_source) is needed to find the spend that retracts a batch, and for a
-funding tree the host does not serve.
+defaults to the first configured host. Needs header_url, and the chain
+view (chain) to find the spend that retracts a batch and a funding tree the
+host does not serve; both default to WhatsOnChain on mainnet and testnet.
 
 Prints what it stored and proved, then one line
 "latest interval K root R token T" naming the last interval proven.

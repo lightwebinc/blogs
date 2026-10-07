@@ -55,7 +55,7 @@ func TestHostsServeTheFeeTreesAPrunedNodeNoLongerHas(t *testing.T) {
 	}
 	// With no copy of the chain configured the reason says so.
 	h.env["BLOGS_ASSET"] = ""
-	h.want(h.run("", "verify-interval", stream, producer, "2"), exitIncomplete, "no copy of the chain is configured")
+	h.want(h.run("", "verify-interval", stream, producer, "2"), exitIncomplete, "no chain view is configured")
 	// Such a host and a node that still has the tree: the node answers.
 	h.env["BLOGS_ASSET"] = node
 	r = h.must("", "verify-interval", stream, producer, "2", "-v")

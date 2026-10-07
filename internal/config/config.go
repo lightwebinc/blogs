@@ -1,11 +1,15 @@
 // Package config resolves the blogs command's settings: flags, then BLOGS_*
 // in the environment, then the config file, then the built-in default.
 //
-// The deployment addresses have no default: the overlay hosts, the facade,
-// the header source, the settlement leg and the node. A default there would
+// The overlay hosts and the facade have no default: a default there would
 // quietly send a producer's objects or a reader's questions to somebody
 // else's server, so a command that needs one and finds none is a usage
-// error.
+// error. The chain services do, on mainnet and testnet, so that a producer
+// needs no infrastructure of its own (WithDefaults): WhatsOnChain for
+// headers and the chain view, GorillaPool's public arcade to broadcast.
+// Every one of them is a setting, and a node of one's own is the better
+// choice where there is one. A regtest chain has no public services and
+// so no defaults.
 package config
 
 import (
@@ -19,21 +23,38 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lightwebinc/bcommon/feepolicy"
+	"github.com/lightwebinc/bcommon/mint"
+	"github.com/lightwebinc/bcommon/publish"
+
 	"github.com/lightwebinc/blogs/internal/limits"
 )
 
 // Config is the resolved settings.
 type Config struct {
-	// ArcadeKey is the bearer token for an arcade installation in Settle.
+	// ArcadeKey is the bearer token for the arcade or ARC installation in
+	// Settle.
 	ArcadeKey string
-	// Asset is the node's asset API base URL: proofs, the chain tip, blocks
-	// and raw transactions.
+	// Asset is a node's asset API base URL. It is the chain view when Chain
+	// is not set (asset:<Asset>), and the node coinbase is read from on a
+	// regtest chain.
 	Asset string
+	// Chain is the chain view (nodeapi.ParseChain): where transactions,
+	// proofs and spends are read. woc:main or woc:test (WhatsOnChain, no
+	// node), asset:URL (a node), or a comma-separated combination.
+	Chain string
 	// Facade is the overlay host a producer publishes to.
 	Facade string
-	// HeaderURL is the header source every proof a reader checks is checked
-	// against: a bridge's /v1 base URL, woc:main, woc:test or
-	// chaintracks:URL. No default, ever.
+	// The fee settings (feepolicy.Config), as written: fee_rate,
+	// fee_min_rate and fee_max_rate are sats/bytes, the others whole
+	// numbers, a source name or a URL list. Empty is the default.
+	FeeDust, FeeFloor, FeeMaxRate, FeeMaxTx, FeeMinRate, FeePolicyURLs, FeeRate, FeeSource string
+	// FundMinedOnly refuses a funding payment (fund -beef) that has not
+	// mined yet.
+	FundMinedOnly bool
+	// HeaderURL is the header source every proof is checked against:
+	// woc:main, woc:test, bhs:URL, arcade:URL, chaintracks:URL or a
+	// bridge's /v1 base URL.
 	HeaderURL string
 	// Home is the producer's directory: identity, coin pool and streams.
 	Home string
@@ -59,16 +80,101 @@ type Config struct {
 	RPC     string
 	RPCPass string
 	RPCUser string
-	// Settle is the settlement leg: tcp:<host:port>, rpc:<url> or
-	// arcade:<url>.
+	// Settle is the settlement leg (publish.ParseSettler): arcade:main,
+	// arcade:test, arcade:<url>, arc:<url>, rpc:<url> or tcp:<host:port>.
 	Settle string
 	// Timeout bounds each request to a host, node or header source.
 	Timeout time.Duration
-	// TxSource is where a reader with no node (no Asset) reads the funding
-	// trees an anchor spends: "woc:main" or "woc:test", the public
-	// WhatsOnChain API. Its answers are held to the txid, and a proof to
-	// the header source, so it is trusted with nothing.
+	// TxSource is the older name of a WhatsOnChain chain view, woc:main or
+	// woc:test: the chain view when neither Chain nor Asset is set.
 	TxSource string
+	// WoCKey is a WhatsOnChain API key, and WoCRate the requests a second
+	// its plan allows; zero is the free tier's 3.
+	WoCKey  string
+	WoCRate float64
+}
+
+// WithDefaults fills in the chain services a network has defaults for:
+// the chain view (asset:<Asset> when a node is configured, else tx_source,
+// else woc:<network>), the header source (woc:<network>) and the
+// settlement leg (publish.DefaultSettle: GorillaPool's public arcade). A
+// regtest chain gets only the node as its chain view.
+func (c Config) WithDefaults() Config {
+	if c.Chain == "" {
+		switch {
+		case c.Asset != "":
+			c.Chain = "asset:" + c.Asset
+		case c.TxSource != "":
+			c.Chain = c.TxSource
+		case c.Network != "regtest":
+			c.Chain = "woc:" + c.Network
+		}
+	}
+	if c.Network == "regtest" {
+		return c
+	}
+	if c.HeaderURL == "" {
+		c.HeaderURL = "woc:" + c.Network
+	}
+	if c.Settle == "" {
+		c.Settle, _ = publish.DefaultSettle(c.Network)
+	}
+	return c
+}
+
+// FeeConfig is the fee settings as a feepolicy.Config; Apply has checked
+// each of them.
+func (c Config) FeeConfig() (*feepolicy.Config, error) {
+	fc := &feepolicy.Config{Source: c.FeeSource}
+	rate := func(s string) (*mint.Rate, error) {
+		if s == "" {
+			return nil, nil
+		}
+		r, err := mint.ParseRate(s)
+		return &r, err
+	}
+	num := func(s string) (*uint64, error) {
+		if s == "" {
+			return nil, nil
+		}
+		n, err := strconv.ParseUint(s, 10, 64)
+		return &n, err
+	}
+	var err error
+	if fc.Rate, err = rate(c.FeeRate); err != nil {
+		return nil, fmt.Errorf("config: fee_rate: %w", err)
+	}
+	if fc.MinRate, err = rate(c.FeeMinRate); err != nil {
+		return nil, fmt.Errorf("config: fee_min_rate: %w", err)
+	}
+	if fc.MaxRate, err = rate(c.FeeMaxRate); err != nil {
+		return nil, fmt.Errorf("config: fee_max_rate: %w", err)
+	}
+	if fc.Floor, err = num(c.FeeFloor); err != nil {
+		return nil, fmt.Errorf("config: fee_floor %q is not a whole number of satoshis", c.FeeFloor)
+	}
+	if fc.Dust, err = num(c.FeeDust); err != nil {
+		return nil, fmt.Errorf("config: fee_dust %q is not a whole number of satoshis", c.FeeDust)
+	}
+	if m, err := num(c.FeeMaxTx); err != nil {
+		return nil, fmt.Errorf("config: fee_max_tx %q is not a whole number of satoshis", c.FeeMaxTx)
+	} else if m != nil {
+		fc.MaxTx = *m
+	}
+	for _, u := range strings.Split(c.FeePolicyURLs, ",") {
+		if u = strings.TrimSpace(u); u != "" {
+			fc.PolicyURLs = append(fc.PolicyURLs, u)
+		}
+	}
+	if _, err := fc.Fees(mint.DefaultFees); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	switch fc.Source {
+	case "", feepolicy.SourceStatic, feepolicy.SourceARC, "arcade":
+	default:
+		return nil, fmt.Errorf("config: fee_source must be static or arc, got %q", fc.Source)
+	}
+	return fc, nil
 }
 
 // DefaultObjectBound is the object bound assumed when none is configured.
@@ -134,7 +240,9 @@ func Defaults() Config {
 // Keys is the file grammar's key list, in lexicographic order. A key not in
 // it is an error: a misspelt key that was silently ignored would leave a
 // setting at its default with no sign that the file was ever read.
-var Keys = []string{"arcade_key", "asset", "facade", "header_url", "home", "hosts", "mode", "network", "object_bound", "originator", "quorum", "rpc", "rpc_pass", "rpc_user", "settle", "timeout", "tx_source"}
+var Keys = []string{"arcade_key", "asset", "chain", "facade", "fee_dust", "fee_floor", "fee_max_rate", "fee_max_tx",
+	"fee_min_rate", "fee_policy_urls", "fee_rate", "fee_source", "fund_mined_only", "header_url", "home", "hosts", "mode",
+	"network", "object_bound", "originator", "quorum", "rpc", "rpc_pass", "rpc_user", "settle", "timeout", "tx_source", "woc_key", "woc_rate"}
 
 // ErrUnknownKey reports a key the grammar does not define.
 var ErrUnknownKey = errors.New("config: unknown key")
@@ -228,8 +336,32 @@ func (c Config) Apply(vals map[string]string) (Config, error) {
 			c.ArcadeKey = v
 		case "asset":
 			c.Asset = v
+		case "chain":
+			c.Chain = v
 		case "facade":
 			c.Facade = v
+		case "fee_dust":
+			c.FeeDust = v
+		case "fee_floor":
+			c.FeeFloor = v
+		case "fee_max_rate":
+			c.FeeMaxRate = v
+		case "fee_max_tx":
+			c.FeeMaxTx = v
+		case "fee_min_rate":
+			c.FeeMinRate = v
+		case "fee_policy_urls":
+			c.FeePolicyURLs = v
+		case "fee_rate":
+			c.FeeRate = v
+		case "fee_source":
+			c.FeeSource = v
+		case "fund_mined_only":
+			b, err := strconv.ParseBool(v)
+			if err != nil {
+				return c, fmt.Errorf("config: fund_mined_only must be true or false, got %q", v)
+			}
+			c.FundMinedOnly = b
 		case "header_url":
 			c.HeaderURL = v
 		case "home":
@@ -292,7 +424,18 @@ func (c Config) Apply(vals map[string]string) (Config, error) {
 				return c, fmt.Errorf("config: timeout %s is outside the limits of %s to %s: every request is bounded by it, and a publish tries each host four times (docs/limits.md)", d, limits.MinTimeout, limits.MaxTimeout)
 			}
 			c.Timeout = d
+		case "woc_key":
+			c.WoCKey = v
+		case "woc_rate":
+			r, err := strconv.ParseFloat(v, 64)
+			if err != nil || r <= 0 || r > 1000 {
+				return c, fmt.Errorf("config: woc_rate %q is not a number of requests a second, above 0 and at most 1000", v)
+			}
+			c.WoCRate = r
 		}
+	}
+	if _, err := c.FeeConfig(); err != nil {
+		return c, err
 	}
 	for k := range vals {
 		if !known(k) {

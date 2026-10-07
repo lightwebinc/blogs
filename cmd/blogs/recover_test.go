@@ -200,7 +200,7 @@ func TestATreeThatNeverReachedTheChainGivesItsCoinBack(t *testing.T) {
 	}
 	// The second: the record is dropped, the coin stays.
 	r = h.must("", append([]string{"anchor", stream}, fast...)...)
-	if !strings.Contains(r.stderr, "the node still does not know it, so its record is dropped") {
+	if !strings.Contains(r.stderr, "the chain view still does not know it, so its record is dropped") {
 		t.Fatalf("the second answer:\n%s", r.stderr)
 	}
 	if st := h.state(stream); len(st.PendingTrees) != 0 || !h.poolCoins()[coin] {

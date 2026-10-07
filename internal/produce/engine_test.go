@@ -82,7 +82,7 @@ func (r *rig) engine(o produce.Options) *produce.Engine {
 	}
 	legs := produce.Legs{
 		Settler: &publish.RPCSettler{RPC: &nodeapi.RPC{URL: r.chainS.URL + "/rpc", ID: "blogs"}},
-		Asset:   r.asset(), Facade: &publish.Facade{Base: r.hostS.URL},
+		Chain:   r.asset(), Tip: r.chain, Facade: &publish.Facade{Base: r.hostS.URL},
 	}
 	e, err := produce.New(st, r.wallet.Signer(), r.wallet.Pool, legs, o)
 	if err != nil {
@@ -94,7 +94,7 @@ func (r *rig) engine(o produce.Options) *produce.Engine {
 }
 
 func (r *rig) reader() *reader.Client {
-	return &reader.Client{Hosts: []string{r.hostS.URL}, Headers: r.chain, Txs: reader.AssetSource{Asset: r.asset()}, Timeout: 5 * time.Second}
+	return &reader.Client{Hosts: []string{r.hostS.URL}, Headers: r.chain, Txs: reader.ChainSource{Chain: r.asset(), Label: "the node"}, Timeout: 5 * time.Second}
 }
 
 func lines(n, from int) produce.Batch {

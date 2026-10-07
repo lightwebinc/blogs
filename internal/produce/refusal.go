@@ -54,10 +54,10 @@ func (e *SweepRefusedError) Error() string {
 // stream believes it did not.
 func (e *Engine) refusal(ctx context.Context, tx *transaction.Transaction, err error) string {
 	txid := tx.TxID().String()
-	if _, _, perr := e.Legs.Asset.Proof(ctx, txid); perr == nil {
+	if _, _, perr := e.Legs.Chain.Proof(ctx, txid); perr == nil {
 		return ""
 	}
-	spent := chainview.SpentElsewhere(ctx, e.Legs.Asset, tx)
+	spent := chainview.SpentElsewhereIn(ctx, e.Legs.Chain, tx)
 	if spent == "" {
 		return ""
 	}
@@ -79,10 +79,10 @@ func (e *Engine) failSweep(ctx context.Context, sw *state.Sweep, why string) err
 	coin := "it spent no pool coin"
 	switch f := sw.Fee; {
 	case f != nil:
-		by, err := e.Legs.Asset.Spender(ctx, f.TxID, f.Vout)
+		by, err := e.Legs.Chain.Spender(ctx, f.TxID, f.Vout)
 		switch {
 		case err != nil:
-			coin = fmt.Sprintf("its fee coin %s was not given back: the node could not say whether it is spent (%v)", f.Outpoint(), err)
+			coin = fmt.Sprintf("its fee coin %s was not given back: the chain view could not say whether it is spent (%v)", f.Outpoint(), err)
 		case by != "":
 			coin = fmt.Sprintf("its fee coin %s is spent by %s and was not given back", f.Outpoint(), by)
 		default:

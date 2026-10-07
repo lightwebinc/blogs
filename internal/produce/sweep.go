@@ -125,8 +125,9 @@ func (e *Engine) Retract(ctx context.Context, txid string, vouts []uint32, seqs 
 		payer.GiveBack()
 		return nil, err
 	}
-	tx, err := carrier.Sweep(ctx, e.Signer, e.Signer.Originator, Params, tree, vouts, fee.Tx, fee.Vout, fee.Unlocker, change,
-		e.Opts.Fees.SatPerByte, e.Opts.Fees.Floor)
+	tx, err := sweepAt(e.Opts.Fees, func(floor uint64) (*transaction.Transaction, error) {
+		return carrier.Sweep(ctx, e.Signer, e.Signer.Originator, Params, tree, vouts, fee.Tx, fee.Vout, fee.Unlocker, change, 0, floor)
+	})
 	if err != nil {
 		payer.GiveBack()
 		return nil, err
@@ -214,8 +215,37 @@ func (e *Engine) sweepFee(ctx context.Context, payer *producer.Payer) (mint.Inpu
 	}
 }
 
+// sweepAt builds a sweep at the fee policy fees. carrier.Sweep takes a
+// whole number of satoshis a byte, so it is given none and a floor of the
+// fee wanted, which it pays exactly; the fee is raised to what fees asks
+// for the signed size until it covers it, by mint's rule (a retarget adds
+// two bytes an input), so a rate below a satoshi a byte is paid as it is.
+func sweepAt(fees mint.Fees, build func(fee uint64) (*transaction.Transaction, error)) (*transaction.Transaction, error) {
+	fee, err := fees.For(0)
+	if err != nil {
+		return nil, err
+	}
+	for pass := 0; pass < 6; pass++ {
+		tx, err := build(fee)
+		if err != nil {
+			return nil, err
+		}
+		need, err := fees.For(tx.Size())
+		if err != nil {
+			return nil, err
+		}
+		if need <= fee {
+			return tx, nil
+		}
+		if fee, err = fees.For(tx.Size() + 2*len(tx.Inputs)); err != nil {
+			return nil, err
+		}
+	}
+	return nil, errors.New("sweep fee did not converge")
+}
+
 // retireTx spends vouts of tree to pay, the fee coming out of their value,
-// by the same fee rule as carrier.Sweep.
+// by the same fee rule as a sweep.
 func retireTx(tree *transaction.Transaction, vouts []uint32, unlocker transaction.UnlockingScriptTemplate, pay *script.Script, fees mint.Fees) (*transaction.Transaction, error) {
 	var in uint64
 	for _, v := range vouts {
@@ -224,8 +254,7 @@ func retireTx(tree *transaction.Transaction, vouts []uint32, unlocker transactio
 		}
 		in += tree.Outputs[v].Satoshis
 	}
-	fee := fees.Floor
-	for pass := 0; pass < 6; pass++ {
+	return sweepAt(fees, func(fee uint64) (*transaction.Transaction, error) {
 		if in <= fee {
 			return nil, fmt.Errorf("%w: %d sat in %d output(s), fee %d", ErrNotWorthIt, in, len(vouts), fee)
 		}
@@ -234,16 +263,8 @@ func retireTx(tree *transaction.Transaction, vouts []uint32, unlocker transactio
 			tx.AddInputFromTx(tree, v, unlocker)
 		}
 		tx.AddOutput(&transaction.TransactionOutput{Satoshis: in - fee, LockingScript: pay})
-		if err := tx.Sign(); err != nil {
-			return nil, err
-		}
-		need := max(uint64(tx.Size())*fees.SatPerByte, fees.Floor) //nolint:gosec // a serialised length
-		if need <= fee {
-			return tx, nil
-		}
-		fee = max((uint64(tx.Size())+2*uint64(len(tx.Inputs)))*fees.SatPerByte, fees.Floor) //nolint:gosec // a serialised length
-	}
-	return nil, errors.New("retirement fee did not converge")
+		return tx, tx.Sign()
+	})
 }
 
 // outputs checks vouts against the tree, sorted and without repeats; none
@@ -345,7 +366,7 @@ func (e *Engine) FinishSweeps(ctx context.Context) error {
 		}
 		what := "sweep (" + sw.Kind + ")"
 		if sw.BumpHex == "" {
-			mp, height, perr := e.Legs.Asset.Proof(ctx, sw.Txid)
+			mp, height, perr := e.Legs.Chain.Proof(ctx, sw.Txid)
 			if perr != nil {
 				if !sw.Submitted {
 					if err := e.Legs.Settler.Submit(ctx, tx); err != nil {

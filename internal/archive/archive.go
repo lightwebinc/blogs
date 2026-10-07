@@ -173,7 +173,7 @@ type Archive struct {
 	Host     string
 	Stream   string
 	Producer []byte
-	// Client asks Host and checks answers against its Headers; its Asset
+	// Client asks Host and checks answers against its Headers; its Txs
 	// answers the funding trees an anchor's fee inputs spend.
 	Client *reader.Client
 	// Fetch finds a digest-only batch's content.

@@ -16,7 +16,6 @@ import (
 	"github.com/bsv-blockchain/go-sdk/chainhash"
 	"github.com/bsv-blockchain/go-sdk/transaction"
 
-	"github.com/lightwebinc/bcommon/nodeapi"
 	"github.com/lightwebinc/bcommon/termsafe"
 
 	"github.com/lightwebinc/blogs/internal/archive"
@@ -41,14 +40,23 @@ func readerFor(g *global, hosts []string, timeout time.Duration) *reader.Client 
 	if g != nil {
 		c.HeaderSource = g.cfg.HeaderURL
 	}
-	switch {
-	case g == nil:
-	case g.cfg.Asset != "":
-		c.Txs = reader.AssetSource{Asset: &nodeapi.Asset{Base: g.cfg.Asset, Client: httpClient}}
-	case g.cfg.TxSource != "":
-		c.Txs = reader.WhatsOnChain{Network: strings.TrimPrefix(g.cfg.TxSource, "woc:"), Base: wocBase, Timeout: timeout, HTTP: httpClient}
+	// The chain view, when one is configured and its header source parses;
+	// a command that needs the headers says so itself.
+	if g != nil && g.cfg.Chain != "" && g.cfg.HeaderURL != "" {
+		if chain, _, err := g.chain(); err == nil {
+			c.Txs = reader.ChainSource{Chain: chain, Label: chainLabel(g.cfg.Chain)}
+		}
 	}
 	return c
+}
+
+// chainLabel names a chain view in messages: "the node <URL>" for a node
+// alone, as the asset key named it, else the specification.
+func chainLabel(spec string) string {
+	if kind, rest, _ := strings.Cut(spec, ":"); kind == "asset" && !strings.Contains(rest, ",") {
+		return "the node " + rest
+	}
+	return "the chain view " + spec
 }
 
 // streamAndProducer checks the two positionals every reader command takes.
@@ -326,7 +334,7 @@ predecessor token, from the funding trees the interval's carriers carry, or
 from the funding tree itself: an anchor's fee tree is asked of the hosts by
 its txid (the tree class), which answer it with its proof however long ago
 its outputs were spent, and only when no host serves it of a copy of the
-chain (asset or tx_source), which may have pruned it. Every tree is held to
+chain (chain), which may have pruned it. Every tree is held to
 the txid the anchor's input names, and a host's to its proof against the
 header source. -v names what answered each tree.
 
@@ -477,8 +485,8 @@ producer are repaired after one missed submissions.
 -seqs and -anchors combine. A host admits an anchor only once it holds the
 fee tree the anchor spends, so when a host does not admit a token backfill
 carries the tree first: it asks the siblings for it by txid (the tree
-class), reads it from the node (asset) or tx_source only when no sibling
-serves it, and submits it with its proof. Needs no producer home.
+class), reads it from the chain view (chain) only when no sibling serves
+it, and submits it with its proof. Needs no producer home.
 
 A seq that neither the host nor any sibling serves is missing, unless the
 seq after it is held or filled: its prev then names the seq's commitment,
@@ -489,7 +497,7 @@ an interval across it).
 No lookup class names the sweep of a batch, so a host that missed one still
 serves the batches it retracted. -sweeps carries them: every carrier the host holds
 at the seqs filled is checked for a mined spend of its funding output by
-another transaction (asset or tx_source names it; it is checked against
+another transaction (the chain view names it; it is checked against
 header_url), and a sweep found is submitted to the host. It costs one
 spend read per held carrier. Without -sweeps, backfill says it carried
 none.
@@ -505,7 +513,7 @@ func cmdBackfill(ctx context.Context, g *global, args []string) error {
 	seqs := fs.String("seqs", "", "a seq range A-B, or one seq")
 	interval := fs.Uint64("interval", 0, "fill the anchor chain to interval K and the seqs it covers")
 	anchors := fs.Uint64("anchors", 0, "fill the anchor chain 1 to K")
-	sweeps := fs.Bool("sweeps", false, "carry sweeps: check every held carrier for a mined spend of its funding output, and submit the sweep found (needs asset or tx_source, and header_url)")
+	sweeps := fs.Bool("sweeps", false, "carry sweeps: check every held carrier for a mined spend of its funding output, and submit the sweep found (needs chain and header_url)")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -536,7 +544,7 @@ func cmdBackfill(ctx context.Context, g *global, args []string) error {
 	}
 	if *sweeps {
 		if _, ok := c.Txs.(reader.SpendSource); !ok || c.Headers == nil {
-			return usage("-sweeps needs asset or tx_source, to name the transaction that spent a batch's funding output, and header_url, to check it is mined")
+			return usage("-sweeps needs chain, to name the transaction that spent a batch's funding output, and header_url, to check it is mined")
 		}
 	}
 	var seqList []uint64

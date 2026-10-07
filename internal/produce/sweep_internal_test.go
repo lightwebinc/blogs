@@ -11,6 +11,7 @@ import (
 
 	"github.com/lightwebinc/bcommon/funding"
 	"github.com/lightwebinc/bcommon/guard"
+	"github.com/lightwebinc/bcommon/mint"
 
 	"github.com/lightwebinc/blogs/internal/state"
 )
@@ -119,5 +120,58 @@ func TestRebuildSweepLegacyPlaceholder(t *testing.T) {
 	sw.Submitted, sw.RawHex = true, spender(realParent()).Hex()
 	if _, err := rebuildSweep(sw); err == nil {
 		t.Fatal("raw bytes of another transaction were accepted")
+	}
+}
+
+// fixedUnlock signs with a fixed 107-byte script, the size of a P2PKH
+// signature and key.
+type fixedUnlock struct{}
+
+func (fixedUnlock) Sign(*transaction.Transaction, uint32) (*script.Script, error) {
+	s := script.Script(make([]byte, 107))
+	return &s, nil
+}
+
+func (fixedUnlock) EstimateLength(*transaction.Transaction, uint32) uint32 { return 107 }
+
+// A retirement pays what the fee policy asks for its signed size, at a
+// rate below a satoshi a byte as at a whole one, and at least the floor;
+// a fee over the policy's maximum is refused.
+func TestRetirementFeeFollowsThePolicy(t *testing.T) {
+	tree := transaction.NewTransaction()
+	nowhere := fill(0x52)
+	tree.AddInput(&transaction.TransactionInput{SourceTXID: &nowhere, UnlockingScript: &script.Script{}, SequenceNumber: transaction.MaxTxInSequenceNum})
+	var vouts []uint32
+	for i := range 600 {
+		tree.AddOutput(&transaction.TransactionOutput{Satoshis: 1000, LockingScript: &script.Script{script.OpTRUE}})
+		vouts = append(vouts, uint32(i))
+	}
+	pay := &script.Script{script.OpTRUE}
+	for _, tc := range []struct {
+		name  string
+		fees  mint.Fees
+		vouts []uint32
+	}{
+		{"legacy, small", mint.LegacyFees, vouts[:2]},
+		{"legacy, large", mint.LegacyFees, vouts},
+		{"default, small", mint.DefaultFees, vouts[:2]},
+		{"default, large", mint.DefaultFees, vouts},
+		{"network, large", mint.NetworkFees, vouts},
+	} {
+		tx, err := retireTx(tree, tc.vouts, fixedUnlock{}, pay, tc.fees)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		fee := uint64(len(tc.vouts))*1000 - tx.Outputs[0].Satoshis
+		lo, _ := tc.fees.For(tx.Size())
+		hi, _ := tc.fees.For(tx.Size() + 2*len(tx.Inputs))
+		if fee < lo || fee > hi {
+			t.Errorf("%s: fee %d for %d bytes, want %d to %d", tc.name, fee, tx.Size(), lo, hi)
+		}
+	}
+	capped := mint.NetworkFees
+	capped.Max = 100
+	if _, err := retireTx(tree, vouts, fixedUnlock{}, pay, capped); !errors.Is(err, mint.ErrFeeTooHigh) {
+		t.Fatalf("over the maximum: %v", err)
 	}
 }

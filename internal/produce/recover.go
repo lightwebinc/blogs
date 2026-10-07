@@ -144,7 +144,7 @@ func (e *Engine) RecoverTrees(ctx context.Context) error {
 		if ahead {
 			e.payer.Note = func(format string, args ...any) { held = append(held, fmt.Sprintf(format, args...)) }
 		} else {
-			e.note("%s funding tree %s was signed by a run that stopped before it adopted the tree: asking the node what became of it (a tree on the chain and not yet mined is waited for, %s at most)", p.Kind, id, wait)
+			e.note("%s funding tree %s was signed by a run that stopped before it adopted the tree: asking the chain view what became of it (a tree on the chain and not yet mined is waited for, %s at most)", p.Kind, id, wait)
 		}
 		r, err := lib.Recover(rctx, p.Tree, p.Coin)
 		e.payer.Note = note
@@ -182,10 +182,10 @@ func (e *Engine) RecoverTrees(ctx context.Context) error {
 		case producer.CoinReturned:
 			if p.ReturnedOnce {
 				e.St.DropPendingTree(id)
-				e.note("funding tree %s: the node still does not know it, so its record is dropped", id)
+				e.note("funding tree %s: the chain view still does not know it, so its record is dropped", id)
 			} else if rec := e.St.PendingTree(id); rec != nil {
 				rec.ReturnedOnce = true
-				e.note("funding tree %s: its record is kept for one more command, in case it reaches the node after all", id)
+				e.note("funding tree %s: its record is kept for one more command, in case it reaches the chain after all", id)
 			}
 		}
 		if err := e.St.Save(); err != nil {

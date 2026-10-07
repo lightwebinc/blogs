@@ -479,13 +479,13 @@ func (c *Client) Retraction(ctx context.Context, cand *Candidate) (sweep *transa
 	}
 	ss, ok := c.Txs.(SpendSource)
 	if !ok {
-		return nil, "no transaction source that answers spends is configured (asset or tx_source)", nil
+		return nil, "no chain view that answers spends is configured (chain)", nil
 	}
 	fund := cand.Carrier.Funding
 	id, err := ss.Spender(ctx, fund.Txid.String(), fund.Index)
 	switch {
 	case errors.Is(err, nodeapi.ErrSpendUnknown):
-		return nil, fmt.Sprintf("the node does not say whether its funding output %s is spent, so it is asked again on a later pass: %v", fund.String(), err), nil
+		return nil, fmt.Sprintf("the chain view does not say whether its funding output %s is spent, so it is asked again on a later pass: %v", fund.String(), err), nil
 	case err != nil:
 		return nil, fmt.Sprintf("the spend of %s could not be read: %v", fund.String(), err), nil
 	case id == "":

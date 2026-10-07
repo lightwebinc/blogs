@@ -119,3 +119,67 @@ func TestLimits(t *testing.T) {
 		}
 	}
 }
+
+func TestChainServicesDefaultByNetwork(t *testing.T) {
+	for _, tc := range []struct {
+		network, asset, txSource string
+		chain, headers, settle   string
+	}{
+		{"main", "", "", "woc:main", "woc:main", "arcade:main"},
+		{"test", "", "", "woc:test", "woc:test", "arcade:test"},
+		{"test", "http://192.0.2.1:8090", "", "asset:http://192.0.2.1:8090", "woc:test", "arcade:test"},
+		{"main", "", "woc:main", "woc:main", "woc:main", "arcade:main"},
+		{"regtest", "", "", "", "", ""},
+		{"regtest", "http://192.0.2.1:8090", "", "asset:http://192.0.2.1:8090", "", ""},
+	} {
+		vals := map[string]string{"network": tc.network, "asset": tc.asset}
+		if tc.txSource != "" {
+			vals["tx_source"] = tc.txSource
+		}
+		c, err := Defaults().Apply(vals)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c = c.WithDefaults()
+		if c.Chain != tc.chain || c.HeaderURL != tc.headers || c.Settle != tc.settle {
+			t.Errorf("%+v: chain %q headers %q settle %q", tc, c.Chain, c.HeaderURL, c.Settle)
+		}
+	}
+	// What is configured is kept.
+	c, err := Defaults().Apply(map[string]string{"chain": "woc:main,spend=asset:http://192.0.2.1:8090", "asset": "http://192.0.2.2:8090",
+		"header_url": "bhs:https://headers.example.com", "settle": "arc:https://arc.example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c = c.WithDefaults(); c.Chain != "woc:main,spend=asset:http://192.0.2.1:8090" || c.HeaderURL != "bhs:https://headers.example.com" || c.Settle != "arc:https://arc.example.com" {
+		t.Errorf("%+v", c)
+	}
+}
+
+func TestFeeSettings(t *testing.T) {
+	c, err := Defaults().Apply(map[string]string{"fee_rate": "50/1000", "fee_floor": "1", "fee_dust": "1", "fee_max_rate": "1/1",
+		"fee_max_tx": "100000", "fee_source": "arc", "fee_policy_urls": "https://arcade.example.com, https://arc.example.com/v1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fc, err := c.FeeConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fc.Rate.String() != "50/1000" || *fc.Floor != 1 || *fc.Dust != 1 || fc.MaxRate.String() != "1/1" || fc.MaxTx != 100000 ||
+		fc.Source != "arc" || len(fc.PolicyURLs) != 2 {
+		t.Fatalf("%+v", fc)
+	}
+	if fc, err = Defaults().FeeConfig(); err != nil || fc.Rate != nil || fc.Source != "" {
+		t.Fatalf("no fee settings: %+v %v", fc, err)
+	}
+	for k, v := range map[string]string{"fee_rate": "fast", "fee_max_rate": "1/0", "fee_floor": "-1", "fee_max_tx": "x", "fee_source": "oracle",
+		"fund_mined_only": "maybe", "woc_rate": "0"} {
+		if _, err := Defaults().Apply(map[string]string{k: v}); err == nil {
+			t.Errorf("%s = %s applied", k, v)
+		}
+	}
+	if c, err := Defaults().Apply(map[string]string{"fund_mined_only": "true"}); err != nil || !c.FundMinedOnly {
+		t.Errorf("fund_mined_only: %v %v", c.FundMinedOnly, err)
+	}
+}

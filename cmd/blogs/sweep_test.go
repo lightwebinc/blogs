@@ -170,7 +170,7 @@ func TestPlaneSweepReachesHostsOffThePlane(t *testing.T) {
 	h.want(h.run("", "read", stream, producer, "-from", "3", "-to", "3"), exitIncomplete, "seq 3: MISSING")
 	// -sweeps needs a source that names a spend.
 	delete(h.env, "BLOGS_ASSET")
-	h.want(h.run("", "backfill", stream, producer, "-from", h.hostS.URL, "-to", offS.URL, "-seqs", "1-4", "-sweeps"), exitUsage, "-sweeps needs asset or tx_source")
+	h.want(h.run("", "backfill", stream, producer, "-from", h.hostS.URL, "-to", offS.URL, "-seqs", "1-4", "-sweeps"), exitUsage, "-sweeps needs chain")
 	h.env["BLOGS_ASSET"] = h.chainS.URL
 
 	// A host named but down: the sweep is mined and published to the

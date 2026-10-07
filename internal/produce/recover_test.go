@@ -124,7 +124,7 @@ func TestANodeThatCannotAnswerKeepsTheRecord(t *testing.T) {
 	}))
 	t.Cleanup(broken.Close)
 	e := r.engine(r.options())
-	e.Legs.Asset.Base = broken.URL
+	e.Legs.Chain.(*nodeapi.Asset).Base = broken.URL
 	r.notes.Reset()
 	if err := e.RecoverTrees(ctx); err != nil {
 		t.Fatalf("recovery against a node that cannot answer: %v", err)
@@ -165,7 +165,7 @@ func TestARecordOfAnAdoptedTreeIsDroppedUnasked(t *testing.T) {
 		t.Fatal(err)
 	}
 	e = r.engine(r.options())
-	e.Legs.Asset = &nodeapi.Asset{Base: "http://127.0.0.1:1"}
+	e.Legs.Chain = &nodeapi.Asset{Base: "http://127.0.0.1:1"}
 	if err := e.RecoverTrees(ctx); err != nil {
 		t.Fatal(err)
 	}

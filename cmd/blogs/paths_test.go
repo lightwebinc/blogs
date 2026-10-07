@@ -362,6 +362,7 @@ func TestUsageErrorsAndRefusals(t *testing.T) {
 	// Missing configuration names the key.
 	delete(h.env, "BLOGS_HEADER_URL")
 	h.want(h.run("", "read", stream, producer), exitUsage, "no header source")
+	h.env["BLOGS_HEADER_URL"] = h.chainS.URL
 	delete(h.env, "BLOGS_FACADE")
 	h.want(h.run("a\n", "produce", stream), exitUsage, "facade must be configured")
 	h.env["BLOGS_FACADE"], h.env["BLOGS_SETTLE"] = h.hostS.URL, "udp:x"

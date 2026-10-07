@@ -24,6 +24,7 @@ import (
 	"syscall"
 
 	"github.com/lightwebinc/bcommon/headers"
+	"github.com/lightwebinc/bcommon/nodeapi"
 
 	"github.com/lightwebinc/blogs/internal/config"
 )
@@ -43,8 +44,10 @@ const usageText = `usage: blogs [global flags] <command> [flags] [arguments]
 
 producer commands (a producer home):
   init                         create the home: identity key and coin pool
-  fund -txid TXID              import a mined payment to the fund address: how
-                               a producer on mainnet or testnet is funded
+  fund -beef FILE|-            import a payment to the fund address as BEEF, as
+                               your wallet hands it over: how a producer on
+                               mainnet or testnet is funded, with no node
+  fund -txid TXID              the same for a mined payment, by its txid
   fund [-blocks N] [-rescan]   coinbase: only on a regtest chain you run
                                (development and tests)
   stream new <name>            create a stream: <name>_<random suffix>, and its topic
@@ -75,16 +78,25 @@ global flags:
   -home DIR           producer home (default ~/.blogs)
   -hosts URLS         overlay hosts, comma separated: the hosts a reader
                       asks, and in mode unicast every host a producer submits to
-  -header-url SOURCE  header source: a bridge URL, woc:main, woc:test or
-                      chaintracks:URL; required to verify, no default
+  -chain SPEC         chain view: woc:main or woc:test (WhatsOnChain, the
+                      default on mainnet and testnet), asset:URL (a node),
+                      or both, comma separated
+  -header-url SOURCE  header source: woc:main or woc:test (the default on
+                      mainnet and testnet), bhs:URL, arcade:URL,
+                      chaintracks:URL or a bridge URL
+  -settle SPEC        broadcaster: arcade:main or arcade:test (the default
+                      on mainnet and testnet), arcade:URL, arc:URL,
+                      rpc:URL or tcp:host:port
+  -fee-rate SATS/BYTES  miner fee rate (default 100/1000)
+  -fee-source SRC     static (default) or arc: the broadcaster's published rate
+  -fee-floor SATS     least fee a transaction pays (default 250)
+  -fee-max-rate SATS/BYTES  most a rate may be (default none; 1/1 for arc)
   -mode MODE          plane (submit once to facade; the default) or unicast
                       (submit to each of hosts)
   -network NET        main, test or regtest (default main)
   -quorum Q           mode unicast: hosts that must take an object for it to
                       count as published: all (default), majority, one or N
   -timeout DUR        per request (default 15s)
-  -tx-source SOURCE   woc:main or woc:test: where a reader with no node reads
-                      the funding trees an anchor spends (default: asset)
   -v                  verbose
   -version            print the version and exit
 
@@ -171,17 +183,23 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprint(stderr, usageText) }
 	var (
-		cfgPath   = fs.String("config", "", "")
-		home      = fs.String("home", "", "")
-		hosts     = fs.String("hosts", "", "")
-		headerURL = fs.String("header-url", "", "")
-		mode      = fs.String("mode", "", "")
-		network   = fs.String("network", "", "")
-		quorum    = fs.String("quorum", "", "")
-		timeout   = fs.String("timeout", "", "")
-		txSource  = fs.String("tx-source", "", "")
-		verbose   = fs.Bool("v", false, "")
-		showVer   = fs.Bool("version", false, "")
+		cfgPath    = fs.String("config", "", "")
+		home       = fs.String("home", "", "")
+		hosts      = fs.String("hosts", "", "")
+		chain      = fs.String("chain", "", "")
+		feeFloor   = fs.String("fee-floor", "", "")
+		feeMaxRate = fs.String("fee-max-rate", "", "")
+		feeRate    = fs.String("fee-rate", "", "")
+		feeSource  = fs.String("fee-source", "", "")
+		headerURL  = fs.String("header-url", "", "")
+		settle     = fs.String("settle", "", "")
+		mode       = fs.String("mode", "", "")
+		network    = fs.String("network", "", "")
+		quorum     = fs.String("quorum", "", "")
+		timeout    = fs.String("timeout", "", "")
+		txSource   = fs.String("tx-source", "", "")
+		verbose    = fs.Bool("v", false, "")
+		showVer    = fs.Bool("version", false, "")
 	)
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -218,7 +236,9 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return exitUsage
 	}
 	over := map[string]string{}
-	for k, v := range map[string]string{"home": *home, "hosts": *hosts, "header_url": *headerURL, "mode": *mode, "network": *network, "quorum": *quorum, "timeout": *timeout, "tx_source": *txSource} {
+	for k, v := range map[string]string{"chain": *chain, "fee_floor": *feeFloor, "fee_max_rate": *feeMaxRate, "fee_rate": *feeRate,
+		"fee_source": *feeSource, "home": *home, "hosts": *hosts, "header_url": *headerURL, "mode": *mode, "network": *network,
+		"quorum": *quorum, "settle": *settle, "timeout": *timeout, "tx_source": *txSource} {
 		if v != "" {
 			over[k] = v
 		}
@@ -227,12 +247,17 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		fmt.Fprintln(stderr, "blogs:", err)
 		return exitUsage
 	}
+	if n := strings.TrimPrefix(cfg.TxSource, "woc:"); cfg.TxSource != "" && n != cfg.Network {
+		fmt.Fprintf(stderr, "blogs: tx_source %s is the %s network but network is %s\n", cfg.TxSource, n, cfg.Network)
+		return exitUsage
+	}
+	cfg = cfg.WithDefaults()
 	if err := checkHeaderSource(cfg.HeaderURL, cfg.Network); err != nil {
 		fmt.Fprintln(stderr, "blogs:", err)
 		return exitUsage
 	}
-	if n := strings.TrimPrefix(cfg.TxSource, "woc:"); cfg.TxSource != "" && n != cfg.Network {
-		fmt.Fprintf(stderr, "blogs: tx_source %s is the %s network but network is %s\n", cfg.TxSource, n, cfg.Network)
+	if err := checkChain(cfg.Chain, cfg.Network); err != nil {
+		fmt.Fprintln(stderr, "blogs:", err)
 		return exitUsage
 	}
 	g := &global{cfg: cfg, verbose: *verbose, stdin: stdin, stdout: stdout, stderr: stderr, getenv: getenv}
@@ -268,11 +293,32 @@ func checkHeaderSource(spec, network string) error {
 	return nil
 }
 
+// checkChain refuses a chain view that does not parse, or a WhatsOnChain
+// backend for another network than the configured one.
+func checkChain(spec, network string) error {
+	if spec == "" {
+		return nil
+	}
+	if _, err := nodeapi.ParseChain(spec, nodeapi.ChainOptions{Headers: headers.New("woc:main")}); err != nil {
+		return fmt.Errorf("chain %s: %w", spec, err)
+	}
+	for _, item := range strings.Split(spec, ",") {
+		item = strings.TrimSpace(item)
+		if m, rest, ok := strings.Cut(item, "="); ok && !strings.Contains(m, ":") {
+			item = rest
+		}
+		if n, ok := strings.CutPrefix(item, "woc:"); ok && n != network {
+			return fmt.Errorf("chain %s names WhatsOnChain's %s network but network is %s", spec, n, network)
+		}
+	}
+	return nil
+}
+
 // headerClient is the configured header source, held to the network's
 // proof-of-work floor when it serves header fields.
 func (g *global) headerClient() (*headers.Client, error) {
 	if g.cfg.HeaderURL == "" {
-		return nil, usage("no header source: set header_url (or -header-url); a proof is only as good as the headers it is checked against")
+		return nil, usage("no header source: set header_url (or -header-url; a regtest chain has no default); a proof is only as good as the headers it is checked against")
 	}
 	c := headers.New(g.cfg.HeaderURL)
 	if c.Kind != headers.Native {
