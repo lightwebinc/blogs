@@ -80,7 +80,7 @@ it as well.
 From anywhere with the `blogs` command and a header source:
 
 ```console
-$ blogs -hosts https://logs.example.com -header-url woc:main doctor
+$ blogs -hosts https://logs.example.com doctor
 ...
 host        https://logs.example.com answering
 ```
@@ -88,8 +88,7 @@ host        https://logs.example.com answering
 Once the producer has published, any reader verifies what the host serves:
 
 ```console
-$ blogs -hosts https://logs.example.com -header-url woc:main -tx-source woc:main \
-    verify-interval app_qzxkvbmwtr 02c0ffee... 1
+$ blogs -hosts https://logs.example.com verify-interval app_qzxkvbmwtr 02c0ffee... 1
 ```
 
 ## 4. Getting the stream's objects
@@ -116,7 +115,7 @@ project) also catches a host up, but it carries unspent outputs only, so an
 anchor reaches a host that way only once the host holds what the anchor
 spends; `backfill` is the complete path ([host.md](host.md#limits)). A
 host that was down when the producer swept batches still serves them: add
-`-sweeps` (with `asset` or `tx_source`), which finds each held batch's
+`-sweeps`, which finds each held batch's
 sweep on chain and submits it. A producer on the plane that lists your
 host in its `hosts` also sends you every sweep directly.
 

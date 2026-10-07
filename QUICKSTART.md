@@ -2,9 +2,9 @@
 
 Two ways in:
 
-- **[On mainnet or testnet](#on-mainnet-or-testnet)**: read and audit a
-  stream with nothing but a header source, then produce your own, paid
-  from coin you already own.
+- **[On mainnet or testnet](#on-mainnet-or-testnet)**: no node and no
+  infrastructure of your own. Read and audit a stream with nothing but the
+  command, then produce your own, paid from coin you already own.
 - **[Local development sandbox](#local-development-sandbox-no-coin-needed-a-private-regtest-chain)**:
   no coin needed, a private regtest chain. Two hosts, a stream, and a
   verified interval in about five minutes, on one machine.
@@ -16,29 +16,39 @@ a [release binary](https://github.com/lightwebinc/blogs/releases), or the
 `ghcr.io/lightwebinc/blogs` image). Every key, txid, stream and hostname
 below is illustrative.
 
+No node is needed. On mainnet and testnet the command uses public services
+by default, and checks what they answer:
+
+| Role | Default | What is checked |
+| --- | --- | --- |
+| Header source (`header_url`) | `woc:main` or `woc:test`, the public WhatsOnChain API | every header is hashed and must carry the proof of work it claims, so a lie costs a mined block |
+| Chain view (`chain`) | `woc:main` or `woc:test` | a transaction must hash to its txid; a proof must verify against the headers. "Unspent" and "not mined" are WhatsOnChain's word |
+| Broadcaster (`settle`) | `arcade:main` or `arcade:test`, GorillaPool's public arcade | its verdict is held to the chain view's spends |
+| Fee rate (`fee_rate`) | 100 satoshis per 1000 bytes, the network's rate, with a 250 satoshi floor per transaction | |
+
+A node of your own (`chain = asset:URL`), a header service you run
+(`header_url = bhs:URL` or `arcade:URL`), or another broadcaster
+(`settle = arc:URL`, `arcade:URL`, `rpc:URL`) replaces any of them, and is
+the stronger choice where you have one ([docs/configuration.md](docs/configuration.md)).
+
 ### Read and audit: no node, no coin, no home
 
-A reader names the hosts that keep a stream and a header source to check
-every proof against. `woc:main` is the public WhatsOnChain API; every
-header it serves is checked for proof of work, so it cannot lie without
-mining a block.
+A reader names the hosts that keep a stream. Every proof is checked against
+the header source.
 
 ```console
-$ blogs -header-url woc:main doctor
+$ blogs doctor
 ...
-headers     woc:main tip 970054
-$ blogs -header-url woc:main -tx-source woc:main -hosts https://logs.example.com \
-    read app_qzxkvbmwtr 02c0ffee…
-$ blogs -header-url woc:main -tx-source woc:main -hosts https://logs.example.com \
-    verify-interval app_qzxkvbmwtr 02c0ffee… 1
+headers     woc:main tip 970082
+$ blogs -hosts https://logs.example.com read app_qzxkvbmwtr 02c0ffee…
+$ blogs -hosts https://logs.example.com verify-interval app_qzxkvbmwtr 02c0ffee… 1
 VERIFIED interval 1 of app_qzxkvbmwtr by 02c0ffee…: seqs 1 to 4, root 5d7f…3999, committed no later than block 912430
 ```
 
-On testnet the same commands take `-network test -header-url woc:test
--tx-source woc:test`. Put the settings in `~/.blogs/config` to stop
-repeating them ([docs/configuration.md](docs/configuration.md)).
+On testnet the same commands take `-network test`. Put the settings in
+`~/.blogs/config` to stop repeating them ([docs/configuration.md](docs/configuration.md)).
 
-### Produce: init, pay, import, stream, produce
+### Produce: install, init, pay, fund, produce
 
 1. **Create the home.** It holds the identity key that is the producer, and
    prints the fund address for the network:
@@ -52,15 +62,30 @@ repeating them ([docs/configuration.md](docs/configuration.md)).
 
 2. **Pay the fund address from your own wallet.** About 50,000 satoshis
    (0.0005 BSV) starts a stream (section [What it costs](#what-it-costs)).
-   Wait for one confirmation.
 
-3. **Import the payment** by its txid. blogs reads the transaction and its
-   proof, checks the proof against the header source, and adds every output
-   paying the fund address to the coin pool:
+3. **Import the payment.** Hand over the payment as BEEF, the form a
+   BRC-100 wallet hands a payment over in (a file, or `-` for standard
+   input): blogs checks it against
+   the header source with no lookup at all, and need not wait for a block.
+   Or wait for one confirmation and import it by its txid, which reads the
+   transaction and its proof from the chain view. Either way every output
+   paying the fund address goes into the coin pool:
 
    ```console
-   $ blogs -header-url woc:main -tx-source woc:main fund -txid 6f1e…a9c2
+   $ blogs fund -beef payment.beef
+   imported 1 of 1 output(s) paying 1BLogs…, 50000 sat, not mined yet: held until its proof arrives, which the next produce, anchor or sweep collects; pool 1 output(s), 50000 sat
+   $ blogs fund -txid 6f1e…a9c2
    imported 1 of 1 output(s) paying 1BLogs…, 50000 sat, mined at height 970061; pool 1 output(s), 50000 sat
+   ```
+
+   A payment that is not mined yet is accepted when every transaction it
+   spends is proven; its coin is spent once it mines. `fund_mined_only =
+   true` (or `-mined-only`) takes mined payments only. A transaction that
+   pays someone else is refused:
+
+   ```console
+   $ blogs fund -txid 5285…5be6
+   blogs: bwallet: the payment pays nothing to this wallet's fund address: 5285…5be6 (the fund address is 1BLogs…)
    ```
 
 4. **Create a stream**, and give its `host` line to whoever runs your
@@ -74,15 +99,10 @@ repeating them ([docs/configuration.md](docs/configuration.md)).
    host     BLOGS_STREAMS=app_qzxkvbmwtr=02c0ffee…
    ```
 
-5. **Configure the producer's endpoints** in `~/.blogs/config`, then
-   produce:
+5. **Name the hosts** in `~/.blogs/config`, then produce:
 
    ```text
    network    = main
-   header_url = woc:main
-   tx_source  = woc:main
-   settle     = arcade:https://arc.gorillapool.io/v1
-   asset      = http://node.example.com:8090
    mode       = unicast
    hosts      = https://logs-a.example.com,https://logs-b.example.com
    ```
@@ -94,30 +114,30 @@ repeating them ([docs/configuration.md](docs/configuration.md)).
 
 | Setting | What it is on the real network |
 | --- | --- |
-| Header source (`header_url`) | `woc:main` or `woc:test` (public WhatsOnChain), or `chaintracks:URL` for a header service you run |
-| Hosts (`hosts`) | your own ([docs/self-host.md](docs/self-host.md)), or anyone's that keeps your stream. In `mode = unicast` the producer submits to each; on the multicast plane (`mode = plane`, with `facade`) it submits once |
-| Broadcaster (`settle`) | an ARC service, for example `arcade:https://arc.gorillapool.io/v1` on mainnet or `arcade:https://testnet.arc.gorillapool.io/v1` on testnet. `arcade_key` carries a bearer token where the service wants one |
-| Node (`asset`) | a node's asset API. The producer asks it whether its funding trees and anchors have mined, and no public service offers it, so **a producer needs access to a node** on its network; readers and auditors do not |
-| Coin | real BSV you own: pay the fund address, then `blogs fund -txid <txid>` |
+| Hosts (`hosts`) | your own ([docs/self-host.md](docs/self-host.md)), or anyone's that keeps your stream. In `mode = unicast` the producer submits to each; on the multicast plane (`mode = plane`, with `facade`) it submits once. The only setting with no default |
+| Header source (`header_url`) | `woc:main` by default; `bhs:URL` for a block-headers-service you run, `arcade:URL` for an arcade's header server, `chaintracks:URL` |
+| Chain view (`chain`) | `woc:main` by default; `asset:URL` for a node's asset API, or both (`asset:URL,woc:main`). `woc_key` and `woc_rate` carry a WhatsOnChain API key and its plan's rate, above the free 3 requests a second |
+| Broadcaster (`settle`) | `arcade:main` by default; `arcade:URL` for an arcade you run, `arc:URL` for an ARC service (`arcade_key` carries a bearer token where it wants one), `rpc:URL` for a node |
+| Fees (`fee_rate`, `fee_source`) | 100/1000 by default; `fee_source = arc` follows the broadcaster's published rate, bounded by `fee_min_rate` and `fee_max_rate` |
+| Coin | real BSV you own: pay the fund address, then `blogs fund -beef FILE` or `blogs fund -txid TXID` |
 
-**Testnet.** Everything above works on testnet with `network = test`,
-`header_url = woc:test`, `tx_source = woc:test`, a testnet broadcaster
-and a testnet node. `init` then prints a testnet address (`m…` or `n…`);
-pay it from a testnet wallet or faucet.
+**Testnet.** Everything above works on testnet with `network = test`: the
+defaults become `woc:test` and `arcade:test`. `init` then prints a testnet
+address (`m…` or `n…`); pay it from a testnet wallet or faucet.
 
 ### What it costs
 
-blogs pays a fixed 1 satoshi per byte, ten times the 100 satoshis per
-1000 bytes most mainnet broadcasters ask today, so these figures are what
-it spends, not a minimum. Each batch costs about 50 satoshis (its share of
-the funding tree it spends, and the 1 satoshi it carries) and each anchor
-about 600. A stream anchored every ten minutes around the clock spends
-under 100,000 satoshis (0.001 BSV) a day on anchors; the batch cost follows
-how much you log. About 50,000 satoshis starts a stream: the first funding
-trees, and a reserve so the next tree is minted before the current one
-runs out. `blogs doctor` shows the pool, and `blogs sweep -retire` returns
-unused funding outputs to it. Measured sizes are in
-[docs/limits.md](docs/limits.md).
+blogs pays the network's rate, 100 satoshis per 1000 bytes, with a floor
+of 250 satoshis per transaction. Each batch costs about 6 satoshis (its
+share of the funding tree it spends, and the 1 satoshi it carries); a
+carrier is never mined and pays no fee of its own. Each anchor costs about
+280: the floor, and its share of the anchor fee tree. A stream anchored
+every ten minutes around the clock spends about 40,000 satoshis
+(0.0004 BSV) a day on anchors; the batch cost follows how much you log.
+About 50,000 satoshis starts a stream: the first funding trees, and a
+reserve so the next tree is minted before the current one runs out.
+`blogs doctor` shows the pool, and `blogs sweep -retire` returns unused
+funding outputs to it. Measured sizes are in [docs/limits.md](docs/limits.md).
 
 ## Local development sandbox (no coin needed, a private regtest chain)
 
@@ -181,7 +201,7 @@ $ STREAM=$(sed -n 's/^stream *//p' stream.txt) PRODUCER=$(sed -n 's/^producer */
 `fund` with no `-txid` mined 101 blocks of coinbase to the fund address, so one
 block's coin is mature. That path is coinbase: only on a regtest chain you run
 (development and tests); on mainnet and testnet you pay the fund address and
-import the payment with `fund -txid`.
+import the payment with `fund -beef` or `fund -txid`.
 The stream's name gets a random suffix, so nobody else's stream shares its
 topic, and the `host` line is what a host needs to keep it: `.env` hands it
 to both.

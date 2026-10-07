@@ -40,18 +40,19 @@ variables.
 | Command | Needs a home | Needs | What it does |
 | --- | --- | --- | --- |
 | `init` | creates it | nothing | identity key and empty coin pool; prints the identity and fund address |
-| `fund -txid TXID` | yes | `asset` or `tx_source`, `header_url` | imports a mined payment to the fund address, once its proof checks: how a producer on mainnet or testnet is funded |
+| `fund -beef FILE` | yes | `header_url` | imports a payment to the fund address from its BEEF, as the wallet hands it over, with no lookup: how a producer on mainnet or testnet is funded |
+| `fund -txid TXID` | yes | `chain`, `header_url` | imports a mined payment to the fund address, read from the chain view once its proof checks |
 | `fund [-blocks N] [-rescan]` | yes | `rpc`, `asset` | coinbase: only on a regtest chain you run (development and tests). Mines coinbase to the fund address through `generatetoaddress` |
 | `stream new <name>` | yes | nothing | draws the random suffix; prints the stream, its topic, and the host's `BLOGS_STREAMS` entry |
 | `stream list` | yes | nothing | the home's streams and how far each is anchored |
-| `produce <stream>` | yes | `settle`, `asset`; `facade` (plane) or `hosts` (unicast) | stdin or a file to batches, published and anchored |
+| `produce <stream>` | yes | `facade` (plane) or `hosts` (unicast); `settle`, `chain` and `header_url`, which default on mainnet and testnet | stdin or a file to batches, published and anchored |
 | `anchor <stream>` | yes | as `produce` | publishes a persisted carrier, anchors every published batch, waits |
-| `doctor` | optional | nothing | the home's state and whether the node, headers, facade and hosts answer; reads only |
+| `doctor` | optional | nothing | the home's state, the chain view and the fee policy, and whether the node, headers, broadcaster and hosts answer; reads only |
 | `read <stream> <producer>` | no | `hosts`, `header_url` | verifies and prints a stream's batches |
-| `verify-interval <stream> <producer> <n>` | no | `header_url`, and `hosts` or `-archive DIR`; `asset` or `tx_source` only for a fee tree no host serves | the auditor's check of interval n |
+| `verify-interval <stream> <producer> <n>` | no | `header_url`, and `hosts` or `-archive DIR`; `chain` only for a fee tree no host serves | the auditor's check of interval n |
 | `sweep <stream>` | yes | as `produce`; `hosts` for `-retract-seqs`, and to reach hosts off the plane | retracts batches by sweeping their funding outputs, or retires unused funding outputs to the pool |
-| `backfill <stream> <producer>` | no | `-from` and `-to`, or two or more `hosts`; `asset` or `tx_source` for `-sweeps`, and for a fee tree no sibling serves | fills a host's holes from its siblings, or brings every configured host into step; `-sweeps` also carries sweeps |
-| `archive <stream> <producer>` | no | `-dir`, a host, `header_url`; `asset` or `tx_source` to find retractions, and for a fee tree the host does not serve | keeps one host's copy of a stream, with each interval's proof and each anchor's fee tree, in local files |
+| `backfill <stream> <producer>` | no | `-from` and `-to`, or two or more `hosts`; `chain` for `-sweeps`, and for a fee tree no sibling serves | fills a host's holes from its siblings, or brings every configured host into step; `-sweeps` also carries sweeps |
+| `archive <stream> <producer>` | no | `-dir`, a host, `header_url`; `chain` to find retractions, and for a fee tree the host does not serve | keeps one host's copy of a stream, with each interval's proof and each anchor's fee tree, in local files |
 | `version` | no | nothing | prints the version |
 
 `<stream>` is always the full identifier `<name>_<suffix>`; the readable
@@ -99,7 +100,8 @@ derive it.
 
 ```bash
 blogs init                             # prints the fund address
-blogs fund -txid 6f1e...a9c2           # after paying the fund address from your own wallet
+blogs fund -beef payment.beef          # after paying the fund address from your own wallet
+blogs fund -txid 6f1e...a9c2           # or, once the payment has a block, by its txid
 blogs fund -blocks 101                 # coinbase: only on a regtest chain you run (development and tests)
 blogs stream new app                   # prints app_<suffix> and tm_log_app_<suffix>
 tail -F /var/log/app.log | blogs produce app_qzxkvbmwtr
@@ -168,21 +170,41 @@ tree running out does not stop the stream for a block.
 | `-tree-sats` | 1 | satoshis per batch output. A carrier carries its output's whole value and is never mined, so this value stays with the batch until a sweep |
 | `-ahead` | 25 | mint the next batch tree at this many outputs left |
 | `-anchor-tree-count` | 8 | outputs per anchor fee tree, at most 1000 |
-| `-anchor-tree-sats` | 1000 | satoshis per anchor fee output; one pays an anchor's fee (at 1 sat/byte, about 450 to 550) |
+| `-anchor-tree-sats` | 1000 | satoshis per anchor fee output; one pays an anchor's fee (at the default 100 satoshis per 1000 bytes, the 250 satoshi floor), and the rest returns to the pool as change |
 | `-anchor-ahead` | 2 | mint the next anchor fee tree at this many outputs left |
 | `-poll` | `5s` | how often proofs are asked for |
 
 The pool is filled by `fund`. On mainnet or testnet, pay the fund address
-`init` printed from your own wallet and, once the payment has a block,
-`fund -txid TXID` reads it (from `asset`, or from `tx_source`), checks its
-proof against `header_url`, and adds every output paying the fund address
-to the pool. Without `-txid`, `fund` mines coinbase to the fund address
-(coinbase: only on a regtest chain you run, for development and tests;
-usable 100 blocks later; `-blocks N` blocks, `-batch N` per
+`init` printed from your own wallet, then import the payment one of two
+ways; neither needs a node:
+
+- `fund -beef FILE` (`-` reads standard input) takes the payment as BEEF,
+  binary or hex, as the wallet hands it over, and looks nothing up. A mined
+  payment's proof must verify against `header_url`. A payment not mined yet
+  is accepted when it is final and every transaction it spends carries a
+  proof the headers hold, and its scripts verify against them; its outputs
+  are held back (`doctor` counts them as held until mined) until a later
+  `produce`, `anchor` or `sweep` collects its proof from the chain view, or
+  until `fund -beef` is given the same payment mined. `fund_mined_only =
+  true` or `-mined-only` refuses it instead (exit 1).
+- `fund -txid TXID`, once the payment has a block, reads it and its proof
+  from the chain view (`chain`), checks the proof against `header_url`.
+
+Either adds every output paying the fund address to the pool. A payment
+that pays nothing to the fund address, one not mined where only a mined one
+is taken, and one whose proof does not hold are refused (exit 1). Without
+`-txid` or `-beef`, `fund` mines coinbase to the fund address (coinbase:
+only on a regtest chain you run, for development and tests; it needs `rpc`
+and `asset`; usable 100 blocks later; `-blocks N` blocks, `-batch N` per
 `generatetoaddress` call, and `-rescan` re-reads the last `-blocks` blocks
-for coinbase the pool lacks instead of mining). Each batch costs about 50
-satoshis at the fixed 1 satoshi per byte blogs pays (its share of its
-tree's fee, and the satoshi it carries) and each anchor about 600.
+for coinbase the pool lacks instead of mining).
+
+Fees follow `fee_rate`, by default the network's 100 satoshis per 1000
+bytes with a floor of 250 satoshis per transaction (`fee_floor`), or with
+`fee_source = arc` the rate the broadcaster publishes, read once a run and
+held to `fee_min_rate` and `fee_max_rate` ([configuration.md](configuration.md#keys)).
+At the defaults each batch costs about 6 satoshis (its share of its tree's
+fee, and the satoshi it carries) and each anchor about 280.
 
 A tree minted ahead that a run ends without using is recorded in the state,
 and its change is back in the pool. The next `produce`, `anchor` or `sweep`
@@ -201,7 +223,7 @@ it answers as a duplicate. So a restart continues at the next `seq`, and no
 two carriers are ever built for one. An anchor built and not yet published
 is collected by the next run, and an anchor the network refused is built
 again over the same batches from the next anchor fee output. Refused means
-the node names another transaction as the spender of one of its inputs,
+the chain view names another transaction as the spender of one of its inputs,
 whether the settlement leg refused the anchor or accepted it first; any
 other failure to settle is tried again on the next tick. When the input
 spent elsewhere is the previous anchor token, no anchor can follow it: the
@@ -225,25 +247,25 @@ the pool.
 A run that stopped in between (a crash, a kill, a machine switched off)
 leaves the record, and `doctor` names it: `batch tree ... signed for coin
 ... and not adopted`. The next `produce`, `anchor` or `sweep` of that
-stream asks the node what became of the tree before it spends anything,
-and says what it found on stderr, after the line `... funding tree TXID was
-signed by a run that stopped before it adopted the tree: asking the node
-what became of it ...`:
+stream asks the chain view what became of the tree before it spends
+anything, and says what it found on stderr, after the line `... funding
+tree TXID was signed by a run that stopped before it adopted the tree:
+asking the chain view what became of it ...`:
 
-| The node shows | The command does | It says |
+| The chain view shows | The command does | It says |
 | --- | --- | --- |
 | the tree, its coin not spent by another transaction, and the current tree of its kind is used up or there is none | adopts the tree, takes its unspent change into the pool and publishes it | `funding tree ... is recovered`, `funding tree published: ...` |
 | the tree, its coin not spent by another transaction, and the current tree of its kind still has outputs | takes its change, holds the tree and switches to it when the current tree runs out; the record stays until then | `funding tree ... is recovered and waits for the switch` |
-| no such tree, and the coin unspent | puts the coin back in the pool and keeps the record for one more command; the second such answer drops it | `... never reached the chain: its fee coin ... is unspent and back in the pool`, then `its record is kept for one more command`; the second time `the node still does not know it, so its record is dropped` |
+| no such tree, and the coin unspent | puts the coin back in the pool and keeps the record for one more command; the second such answer drops it | `... never reached the chain: its fee coin ... is unspent and back in the pool`, then `its record is kept for one more command`; the second time `the chain view still does not know it, so its record is dropped` |
 | no such tree, and the coin spent by another transaction | drops the record | `... never reached the chain: its fee coin ... is spent by ...` |
-| the tree, with no proof, and the coin spent by another transaction | drops the record and adopts nothing: the tree lost a double spend and never mines, though the node still serves it | `... lost a double spend: the node still serves it, without a proof, and its fee coin ... is spent by ...` |
+| the tree, with no proof, and the coin spent by another transaction | drops the record and adopts nothing: the tree lost a double spend and never mines, though the chain view still serves it | `... lost a double spend: the node still serves it, without a proof, and its fee coin ... is spent by ...` |
 | nothing: it cannot answer, or the tree has not mined in time | keeps the record and goes on without the tree; the next command asks again | `... what became of it could not be settled now (...): its record is kept ...` |
 
 Several trees can be held at once. They are used in the order they were
 signed, each adopted at its own switch, and no tree is minted ahead while
 one is held.
 
-A tree that reaches the node after its coin went back is found by the next
+A tree that reaches the chain after its coin went back is found by the next
 command, which adopts it and takes the coin, now spent, out of the pool
 (`its fee coin ... is spent and is taken out of the pool`). Nothing is lost
 unless the tree lands after two commands found nothing: then its outputs
@@ -254,7 +276,7 @@ and is not returned`). The command after that drops the refused
 transaction's record.
 
 **The wait at the start.** A tree is used only once it has mined, so a
-tree the node knows and has not mined yet is waited for, as a new tree is.
+tree the chain view knows and has not mined yet is waited for, as a new tree is.
 The wait for all such trees together is at most the wait for one proof: 10
 minutes for `produce` and `anchor`, `-wait` for `sweep`. The line above
 says so before the wait begins. When it runs out the record is kept, the
@@ -368,8 +390,8 @@ The auditor's check of specification section 13, needing no producer home:
    prunes spent transactions. The tree must hash to the txid the anchor's
    input names, and its proof must hold against `header_url`; an answer
    that fails either is refused and named, and every host is asked. Only when no
-   host serves the tree is `asset` (a node's asset API) or `tx_source` (a
-   public service) asked, its answer held to the txid. `-v` prints
+   host serves the tree is the chain view (`chain`: WhatsOnChain by default,
+   or a node) asked, its answer held to the txid. `-v` prints
    `interval K: funding tree T from <source>` for each tree fetched;
 4. require the RFC 6962 root over the batches' commitments, choosing among
    fork candidates by `prev` and trying each at the last `seq`, to equal the
@@ -423,7 +445,7 @@ last `seq`, or the first of two in a row), or an input's funding tree was
 served by nothing asked, or nothing answered for an interval verifies. The
 reason then names the tree and what each source did, for example
 `interval 1: input 0 spends T:0, a funding tree nothing asked serves: URL
-holds no such tree; the node URL did not answer (...)`: a host that
+holds no such tree; the chain view woc:main did not answer (...)`: a host that
 predates the tree class `did not answer the tree class`, one that never
 received the tree `holds no such tree`, and one whose answer failed a check
 `answered something refused`. Every answer refused along the way is
@@ -467,8 +489,8 @@ interval K covers; `-seqs A-B` a range of seqs (at most 65536); `-anchors
 K` the anchor chain alone; `-seqs` and `-anchors` combine. A host admits an
 anchor only once it holds the fee outputs the anchor spends, so when a host
 does not admit a token, `backfill` asks the siblings for the funding trees
-its inputs spend by txid (the tree class), reads one from `asset` (or
-`tx_source`) only when no sibling serves it, submits each with its proof
+its inputs spend by txid (the tree class), reads one from the chain view
+(`chain`) only when no sibling serves it, submits each with its proof
 (`interval K: funding tree T submitted from <source>`), and offers the
 token again.
 One line per position (`held`, `filled from the sibling URL`, `MISSING`,
@@ -486,8 +508,8 @@ No lookup class names the sweep of a batch, so a host that missed one keeps
 serving the batches it retracted, and a backfill of batches cannot tell. `-sweeps`
 carries them: for every `seq` the host holds, each carrier it serves is
 checked for a mined spend of its funding output by another transaction
-(named by `asset` or `tx_source` and checked against `header_url`, as an
-archive checks), and a sweep found is submitted to the host, which then
+(named by the chain view and checked against `header_url`, as an archive
+checks), and a sweep found is submitted to the host, which then
 stops serving the batch. It costs one spend read per held carrier, so it is
 asked for, not done by default; a backfill without it ends with
 `note: backfill carried batches, anchors and their fee trees, not sweeps: ...`.
@@ -554,17 +576,17 @@ when a run stops is finished by the next `sweep` run, with or without
 flags, before anything new is built. `sweep` holds the home's lock, like
 `produce`.
 
-A refused sweep. A sweep is given up only when the node names another
+A refused sweep. A sweep is given up only when the chain view names another
 transaction as the spender of one of its inputs: then its bytes can never
 mine. The run prints `sweep T refused by the network: input N (OUTPOINT)
 is spent by OTHER ...; it is marked failed and retracts nothing; ...` and
 exits 1. The state records the sweep as failed with that reason, so it is
 no longer in flight and the next `sweep` goes on. A retraction's fee coin
-goes back to the pool when the node shows it unspent (`its fee coin ... is
-back in the pool`); a coin the node shows spent, or cannot answer for, is
+goes back to the pool when the chain view shows it unspent (`its fee coin
+... is back in the pool`); a coin it shows spent, or cannot answer for, is
 not given back, and the message says which. A retirement pays its fee from
 the outputs it spends, so it has no coin to give back. A sweep whose inputs
-the node shows unspent, or spent by the sweep itself, stays in flight
+the chain view shows unspent, or spent by the sweep itself, stays in flight
 whatever a settlement leg said, since a leg answers a second submission of
 a transaction it already holds the same way: a timeout, a busy leg or a
 leg's refusal exits 2 and the next `sweep` sends it again. `doctor` lists a
@@ -587,8 +609,8 @@ checks each carrier as `read` does (the carrier rules, this producer, the
 `seq`, SPV through its funding parent against `header_url`) and stores it;
 then it walks the interval class from the last interval proven, keeps each
 canonical anchor token (held to the anchor rules, its fee tree asked of the
-host by txid and read from `asset` or `tx_source` only when the host does
-not serve it), fetches any `seq` the interval covers that is not yet stored,
+host by txid and read from the chain view only when the host does not
+serve it), fetches any `seq` the interval covers that is not yet stored,
 writes the interval's proof, and keeps the fee tree with its proof under
 `trees/` (`kept N funding tree(s) with their proofs in trees/`). A node
 that prunes spent transactions stops serving a fee tree once its last
@@ -605,8 +627,8 @@ stored seqs is covered every S / `-recheck` passes; `-recheck-all` asks
 about every one in this pass. The archive prints `rechecked N of M stored
 seq(s)`. A stored carrier the host no longer serves is checked for a
 retraction: a mined transaction other than the carrier that spends the
-carrier's funding output. The spender is named by `asset` (the node's UTXO view) or
-`tx_source` (WhatsOnChain), fetched with its proof, and checked against
+carrier's funding output. The spender is named by the chain view (WhatsOnChain's spends, or a
+node's UTXO view), fetched with its proof, and checked against
 `header_url`: that it spends the output and is mined. When it holds, the
 archive writes a receipt and the sweep under `retracted/` and then drops
 the batch's bytes (its BEEF, its record file and its content), and prints
@@ -616,10 +638,11 @@ The receipt keeps the position: it completes the interval's root, and its
 an interval's last `seq` still proves that interval. A carrier the host
 stops serving with no such spend is kept and noted: an empty answer proves
 nothing. The note says `its funding output ... is unspent` only when the
-source shows it unspent (the node's status `OK`); a node that does not say
-(another status, a spent output naming no spender, a transaction it does
-not serve) is noted `the node does not say whether its funding output ...
-is spent`, and the next pass that asks about that seq asks again.
+chain view shows it unspent (WhatsOnChain's "known, not spent", a node's
+status `OK`); one that does not say (an output it does not know, another
+status, a spent output naming no spender, a transaction it does not serve)
+is noted `the chain view does not say whether its funding output ... is
+spent`, and the next pass that asks about that seq asks again.
 
 The layout, under `DIR/<stream>/<producer>/`:
 
@@ -679,10 +702,11 @@ Results go to stdout; progress and errors to stderr, errors as one line
 | Text | When |
 | --- | --- |
 | `blogs: unknown command "X"` | exit 2 |
-| `blogs: <key> must be configured (config key <key>)`, `blogs: no header source: set header_url ...`, `blogs: no overlay host configured ...` | a missing setting, exit 2 |
+| `blogs: <key> must be configured (config key <key>)`, `blogs: no header source: set header_url ...`, `blogs: no chain view: set chain ...`, `blogs: no overlay host configured ...` | a missing setting, exit 2 (a regtest chain has no default header source, chain view or broadcaster) |
+| `blogs: chain SPEC names WhatsOnChain's NET network but network is NET` | a chain view for another network, exit 2 |
 | `blogs: this home holds no stream S (create one with ...)` | `produce` or `anchor` on a stream without state, exit 2 |
 | `blogs: another blogs command is using the home H ...` | the home is locked, exit 2 |
-| ``blogs: batch funding tree: fee input: ... (run `blogs fund`: ...)`` | the pool has no spendable coin, exit 2; pay the fund address and run `blogs fund -txid TXID` |
+| ``blogs: batch funding tree: fee input: ... (run `blogs fund`: ...)`` | the pool has no spendable coin, exit 2; pay the fund address and run `blogs fund -beef FILE` or `blogs fund -txid TXID` |
 | `no coin is spendable and N funding tree(s) minted ahead hold one: waiting for the change` | a fee is asked for while a tree minted ahead holds the pool's last coin: the command waits for that tree to mine, no longer than the wait for one proof, and goes on |
 | `blogs: fee input: ...: N funding tree(s) signed for a coin of this home are not settled ...` | the tree did not mine in time, exit 2; its record is kept and the next `produce`, `anchor` or `sweep` recovers it |
 | `blogs: fee input: ...: N funding tree(s) minted ahead hold a coin and have not settled ...` | the wait for a tree minted ahead was interrupted, exit 2; the next command recovers the tree |
@@ -691,8 +715,8 @@ Results go to stdout; progress and errors to stderr, errors as one line
 | `host URL: took N object(s), missed M[: ...]` | mode unicast, at the end of `produce` and `anchor`, on stdout |
 | `a host missed objects; once it is back, copy them from the others: blogs backfill ...` | mode unicast, on stdout, after the lines above |
 | `seq N: publishing the carrier a previous run persisted` | a run resuming |
-| `<kind> funding tree TXID was signed by a run that stopped before it adopted the tree: asking the node what became of it ...` | a run settling a tree an earlier run left; the lines after it say what the node showed (An interrupted funding tree) |
-| `funding tree TXID: what became of it could not be settled now (...): its record is kept, ...` | the node could not answer, or the tree did not mine within the wait; the command goes on |
+| `<kind> funding tree TXID was signed by a run that stopped before it adopted the tree: asking the chain view what became of it ...` | a run settling a tree an earlier run left; the lines after it say what the node showed (An interrupted funding tree) |
+| `funding tree TXID: what became of it could not be settled now (...): its record is kept, ...` | the chain view could not answer, or the tree did not mine within the wait; the command goes on |
 | `blogs: funding tree TXID: interrupted while asking what became of it ...` | an interrupt during the wait at the start, exit 2 |
 | `funding tree TXID is adopted and not yet published: publishing it` | a run publishing a tree whose publish failed before |
 | `blogs: ... funding tree TXID: ...; the tree is adopted and recorded as not published, and the next produce, anchor or sweep publishes it` | the facade did not take a new funding tree, or in mode unicast fewer hosts than the quorum did, exit 2 |
@@ -721,7 +745,11 @@ Results go to stdout; progress and errors to stderr, errors as one line
 | `sweep TXID: published to the facade, but not to every host directly: ...` | mode plane, a host in `hosts` did not take a sweep, exit 2 |
 | `warning: ...` | a setting past a recommended limit ([limits.md](limits.md)); the run goes on |
 | `blogs: <setting> V is over (or under) the limit of L: <why> (docs/limits.md)` | a setting past a hard cap, exit 2 |
-| `imported N of M output(s) paying ADDR, S sat, mined at height H; pool ...` | `fund -txid` |
+| `imported N of M output(s) paying ADDR, S sat, mined at height H; pool ...` | `fund -txid`, or `fund -beef` of a mined payment |
+| `imported N of M output(s) paying ADDR, S sat, not mined yet: held until its proof arrives, ...` | `fund -beef` of a payment not mined yet; its outputs are spent once it mines |
+| `blogs: bwallet: the payment pays nothing to this wallet's fund address: TXID (the fund address is ADDR)` | `fund` of a payment to someone else, exit 1 |
+| `blogs: bwallet: the payment has not mined yet: TXID; ...` | `fund -txid` before the payment's block, or `fund -beef -mined-only` of an unmined payment, exit 1 |
+| `blogs: coinbase needs a node: ...` | `fund` without `-txid` or `-beef` and no `rpc` and `asset`, exit 2 |
 
 ## Testing
 
@@ -742,7 +770,9 @@ hostile answers, terminal filtering, forks and equivocation, backfill and
 the audit's refusals, retraction and retirement, archives with and without
 holes, an archive's receipts of retracted batches (including an interval's
 last) and its recheck budget, the audit across an unserved seq, a payment
-imported by `fund -txid`, mode unicast with a host down under each quorum,
+imported by `fund -txid` and by `fund -beef` (mined, and not mined yet and
+released later), a producer with no node (WhatsOnChain's shape for the
+chain view, arcade to broadcast), mode unicast with a host down under each quorum,
 its repair, and a retraction that waits for every host, a sweep on the
 plane reaching a host off it directly and by `backfill -sweeps`, and every
 hard cap and warning of [limits.md](limits.md).

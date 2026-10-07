@@ -19,17 +19,21 @@ committed, against block headers it checks itself.
 
 ```console
 $ tail -F /var/log/app.log | blogs produce app_qzxkvbmwtr
-$ blogs -header-url woc:main -tx-source woc:main -hosts https://logs.example.com \
-    verify-interval app_qzxkvbmwtr 02c0ffee… 1
+$ blogs -hosts https://logs.example.com verify-interval app_qzxkvbmwtr 02c0ffee… 1
 VERIFIED interval 1 of app_qzxkvbmwtr by 02c0ffee…: seqs 1 to 4, root 5d7f…3999, committed no later than block 912430
 ```
 
 blogs runs on BSV mainnet (`-network main`, the default) and testnet
-(`-network test`). Readers and auditors need only a header source such as
-`woc:main` and the hosts that keep a stream: no node, no coin, no home. A
-producer pays for its own anchors and batches from coin it already owns
-(about 600 satoshis an anchor and 50 a batch) and needs a node's asset API
-and a broadcaster ([QUICKSTART.md](QUICKSTART.md#on-mainnet-or-testnet)).
+(`-network test`), and needs no node and no infrastructure of its own:
+headers and chain lookups come from the public WhatsOnChain API, checked
+against proof of work, and transactions are broadcast through GorillaPool's
+public arcade. Readers and auditors need only the hosts that keep a
+stream: no coin, no home. A producer pays for its own anchors and batches
+from coin it already owns (about 280 satoshis an anchor and 6 a batch):
+install, `init`, pay the fund address from your wallet, `fund`, produce
+([QUICKSTART.md](QUICKSTART.md#on-mainnet-or-testnet)). A node of your own,
+or a header service you run, can replace any public service
+([docs/configuration.md](docs/configuration.md)).
 
 **New here?** [QUICKSTART.md](QUICKSTART.md) starts on the real network,
 then gives a local development sandbox (a private regtest chain, no coin
@@ -76,7 +80,7 @@ go install github.com/lightwebinc/blogs/cmd/blogs@latest      # Go 1.27.1 or lat
 | | |
 | --- | --- |
 | Release binaries | static `blogs` for Linux and macOS (amd64, arm64) on the [releases page](https://github.com/lightwebinc/blogs/releases), each tarball with its licenses, plus `SHA256SUMS` |
-| Container | `docker run --rm -v blogs-home:/home/nonroot/.blogs ghcr.io/lightwebinc/blogs -header-url woc:main doctor` (the command), `ghcr.io/lightwebinc/blogs-host` (a host), `ghcr.io/lightwebinc/blogs-devchain` (the local development chain) |
+| Container | `docker run --rm -v blogs-home:/home/nonroot/.blogs ghcr.io/lightwebinc/blogs doctor` (the command), `ghcr.io/lightwebinc/blogs-host` (a host), `ghcr.io/lightwebinc/blogs-devchain` (the local development chain) |
 | Source | `make blogs` into `bin/blogs` |
 | A host of your own | `deploy/compose.yaml` ([docs/self-host.md](docs/self-host.md)) |
 

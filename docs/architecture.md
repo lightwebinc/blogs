@@ -12,12 +12,12 @@ flowchart LR
   P["producer<br/>blogs produce"] -->|"carriers, trees, anchors<br/>/submit"| F["facade (plane)<br/>or each host (unicast)"]
   F --> H1["overlay host<br/>tm_log, ls_log"]
   F --> H2["overlay host"]
-  P -->|"funding trees, anchors, sweeps"| B["broadcaster<br/>settle: ARC, node RPC, ingress"]
+  P -->|"funding trees, anchors, sweeps"| B["broadcaster<br/>settle: arcade (default), ARC, node RPC, ingress"]
   B --> C[("BSV chain")]
-  P -->|"has it mined? proofs"| N["node asset API<br/>asset"]
+  P -->|"has it mined? proofs, spends"| N["chain view<br/>chain: WhatsOnChain (default) or a node"]
   R["reader, auditor, archive<br/>blogs read, verify-interval, archive"] -->|"ls_log lookups"| H1
   R -->|"ls_log lookups"| H2
-  R -->|"headers, proof of work checked"| S["header source<br/>woc:main, woc:test, chaintracks"]
+  R -->|"headers, proof of work checked"| S["header source<br/>WhatsOnChain (default), bhs, arcade, chaintracks"]
   H1 -->|headers| S
 ```
 
@@ -25,9 +25,9 @@ flowchart LR
 | --- | --- | --- |
 | **Producer** | the identity key (the producer *is* this key), a coin pool, and each stream's state in a producer home | nothing a reader cannot check: every batch is signed and every interval is anchored on chain |
 | **Overlay host** | the stream's batches, anchors and funding trees, admitted by the blogs module's topic manager | availability only. A host can withhold; it cannot forge, because every answer is verified by whoever asked |
-| **Broadcaster** (`settle`) | nothing | getting funding trees, anchors and sweeps to miners |
-| **Node** (`asset`) | the chain | telling a producer whether its trees and anchors have mined, and their proofs. A producer needs one; a reader does not |
-| **Header source** (`header_url`) | block headers | nothing: every header is checked for proof of work, so it cannot lie without mining a block |
+| **Broadcaster** (`settle`; GorillaPool's public arcade by default) | nothing | getting funding trees, anchors and sweeps to miners. Its verdict is held to the chain view's spends |
+| **Chain view** (`chain`; WhatsOnChain by default, or a node's asset API) | the chain | transactions and proofs, which are checked (a transaction against its txid, a proof against the header source), and "unspent" and "not mined", which are its word alone. No node is needed; a node of your own removes that last trust |
+| **Header source** (`header_url`; WhatsOnChain by default) | block headers | nothing: every header is checked for proof of work, so it cannot lie without mining a block |
 | **Reader, auditor, archive** | optionally, an archive directory | nothing; it is the party that checks |
 
 ## The objects
@@ -49,9 +49,10 @@ order and in time once its interval's anchor is mined.
 
 1. **Fund.** `init` creates the home and prints a fund address. On mainnet
    or testnet the producer pays it from its own wallet and imports the
-   payment with `fund -txid`, which checks the payment's proof against the
-   header source. (`fund` without `-txid` mines coinbase: only on a
-   regtest chain you run, for development and tests.)
+   payment: `fund -beef` takes the payment as BEEF and checks it against the
+   header source with no lookup, and `fund -txid` reads a mined payment from
+   the chain view and checks its proof. (`fund` without either mines
+   coinbase: only on a regtest chain you run, for development and tests.)
 2. **Stream.** `stream new` draws a random suffix so nobody else's stream
    shares its topic `tm_log_<name>_<suffix>`, and prints the
    `BLOGS_STREAMS` line a host needs to admit only this producer.

@@ -43,10 +43,10 @@ cost.
 mode       = unicast
 hosts      = https://logs-a.example.com,https://logs-b.example.com
 quorum     = all
-header_url = woc:main
-settle     = arcade:https://arc.example.com/v1
-asset      = http://192.0.2.10:8090
 ```
+
+The header source, chain view and broadcaster take their defaults
+([configuration.md](configuration.md)): no node is needed.
 
 | Key | Flag | Default | Meaning |
 | --- | --- | --- | --- |
@@ -81,7 +81,7 @@ The object is **published** once at least `quorum` hosts took it. Then:
   stops. A host that misses a batch tree needs nothing: each carrier's BEEF
   carries the tree it spends. A host that misses an anchor fee tree is
   given it by `backfill` (from a sibling, by the tree class, or failing
-  that from `asset` or `tx_source`) before the anchor.
+  that from the chain view) before the anchor.
 - **A sweep** (a retraction or a retirement) needs every host, whatever the
   quorum, because no lookup class names the sweep of a batch: a backfill of batches
   cannot carry one, and only `backfill -sweeps`, which finds the mined spend

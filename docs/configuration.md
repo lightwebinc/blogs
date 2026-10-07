@@ -22,43 +22,88 @@ define, a key given twice, or a line without `=` is an error, never ignored:
 a misspelled key that was silently skipped would leave a setting at its
 default with no sign the file was read.
 
-The addresses (hosts, facade, header source, broadcaster, node) have no
-default on purpose: a default would send a producer's objects, or a reader's
-questions, to a server nobody configured. A command that needs one and finds
-none exits 2 naming the key.
+The overlay hosts and the facade have no default on purpose: a default would
+send a producer's objects, or a reader's questions, to a server nobody
+configured. A command that needs one and finds none exits 2 naming the key.
+
+The chain services do have defaults on mainnet and testnet, so that neither
+a producer nor a reader needs a node or any infrastructure of its own: the
+header source and the chain view are the public WhatsOnChain API, and the
+broadcaster is GorillaPool's public arcade. Every one of them is a setting,
+and a service you run is the stronger choice where you have one. A regtest
+chain has no public services and so no defaults.
+
+| Role | Key | mainnet | testnet | regtest |
+| --- | --- | --- | --- | --- |
+| Header source | `header_url` | `woc:main` | `woc:test` | none |
+| Chain view | `chain` | `woc:main` (`asset:<asset>` when `asset` is set) | `woc:test` (likewise) | `asset:<asset>` |
+| Broadcaster | `settle` | `arcade:main` | `arcade:test` | none |
+| Fee rate | `fee_rate` | `100/1000` | `100/1000` | `100/1000` |
+
+What is trusted, and what is checked:
+
+- **Headers** come from a third party unless you run the source, but every
+  header is hashed and must carry the proof of work its bits claim (on
+  mainnet at least the network's floor), so a lie costs a mined block. A
+  block-headers-service (`bhs:URL`) or an arcade's header server
+  (`arcade:URL`) of your own removes the third party.
+- **Transactions and proofs** from the chain view are checked: a
+  transaction must hash to its txid, and every proof must verify against
+  the header source.
+- **"Unspent", "not known" and "not mined"** cannot be checked and are the
+  chain view's word. WhatsOnChain tells an unknown output from an unspent
+  one, and only its "unspent" answer is read as unspent. A node of your own
+  (`chain = asset:URL`, or `spend=asset:URL` for its spend view alone)
+  removes that trust.
+- **Broadcast** is the broadcaster's policy and verdict. Arcade can answer
+  "accepted" for a transaction whose input was already spent and mined, so
+  its verdict is held to the chain view's spends.
+
+WhatsOnChain's free tier allows 3 requests a second, and the chain view
+paces itself to that. A busy archive or backfill may want an API key
+(`woc_key`, with `woc_rate` set to its plan's rate) or a node.
 
 ## Keys
 
 | Key | Variable | Default | Meaning |
 | --- | --- | --- | --- |
-| `arcade_key` | `BLOGS_ARCADE_KEY` | none | bearer token for the ARC service named in `settle = arcade:...` |
-| `asset` | `BLOGS_ASSET` | none | a node's asset API base URL: proofs, the chain tip, blocks, raw transactions. A producer needs one; a reader uses it only for a funding tree no host serves |
+| `arcade_key` | `BLOGS_ARCADE_KEY` | none | bearer token for the arcade or ARC installation `settle` names |
+| `asset` | `BLOGS_ASSET` | none | a node's asset API base URL. With `chain` unset it is the chain view (`asset:<asset>`); on a regtest chain it is also where `fund` reads coinbase |
+| `chain` | `BLOGS_CHAIN` | `woc:main`, `woc:test` by network (above) | the chain view: where transactions, proofs and spends are read. `woc:main`, `woc:test` (WhatsOnChain), `asset:URL` (a node), or several comma separated: `asset:URL,woc:main` asks the node first and WhatsOnChain for what it lacks; `woc:test,spend=asset:URL` takes spends from the node alone (a backend qualified by `tx=`, `proof=`, `spend=` or `known=` serves that one question). A `woc:` backend must name the configured network |
 | `facade` | `BLOGS_FACADE` | none | mode `plane`: the overlay host or bridge a producer publishes to (its `/submit` route), from which the plane delivers to every subscribed host. Refused in mode `unicast` |
-| `header_url` | `BLOGS_HEADER_URL` | none | the header source every proof is checked against: `woc:main`, `woc:test` (public WhatsOnChain, proof of work checked), `chaintracks:URL`, or an overlay bridge's base URL (native `/v1/root/<height>` and `/v1/tip`) |
+| `fee_dust` | `BLOGS_FEE_DUST` | `250` | the least change kept as an output, in satoshis; change below it goes to the fee |
+| `fee_floor` | `BLOGS_FEE_FLOOR` | `250` | the least fee a transaction pays, in satoshis |
+| `fee_max_rate` | `BLOGS_FEE_MAX_RATE` | none; `1/1` with `fee_source = arc` | the highest rate paid, `SATS/BYTES`: a rate above it is lowered to it |
+| `fee_max_tx` | `BLOGS_FEE_MAX_TX` | none | the most one transaction may pay in fee, in satoshis; a fee above it is refused, not paid |
+| `fee_min_rate` | `BLOGS_FEE_MIN_RATE` | `100/1000` | with `fee_source = arc`: the lowest rate a published policy may set |
+| `fee_policy_urls` | `BLOGS_FEE_POLICY_URLS` | the `settle` installation | with `fee_source = arc`: broadcasters whose published policy (`/v1/policy`, or `<path>/policy`) is read, comma separated; the highest rate among them is used |
+| `fee_rate` | `BLOGS_FEE_RATE` | `100/1000` | the miner fee rate, `SATS/BYTES` as miners publish it (`1` alone is one satoshi a byte) |
+| `fee_source` | `BLOGS_FEE_SOURCE` | `static` | `static` (`fee_rate`) or `arc`: the broadcaster's published rate, read once a run, held to `fee_min_rate` and `fee_max_rate`, falling back to its last good answer and then to `fee_rate` |
+| `fund_mined_only` | `BLOGS_FUND_MINED_ONLY` | `false` | `true` refuses a payment `fund -beef` hands over that has not mined yet |
+| `header_url` | `BLOGS_HEADER_URL` | `woc:main`, `woc:test` by network (above) | the header source every proof is checked against: `woc:main`, `woc:test` (public WhatsOnChain), `bhs:URL` (a block-headers-service), `arcade:URL` (an arcade's header server), `chaintracks:URL`, or an overlay bridge's base URL (native `/v1/root/<height>` and `/v1/tip`) |
 | `home` | `BLOGS_HOME` | `~/.blogs` | the producer home. `BLOGS_HOME` also moves the config file to `$BLOGS_HOME/config` |
 | `hosts` | `BLOGS_HOSTS` | none | the overlay hosts, comma separated, at most 16: the hosts a reader asks, in order; in mode `unicast` every host a producer submits to; in mode `plane` the hosts other than `facade` every sweep is also sent to directly |
 | `mode` | `BLOGS_MODE` | `plane` | `plane` or `unicast`: how a producer's objects reach the hosts ([unicast.md](unicast.md)) |
-| `network` | `BLOGS_NETWORK` | `main` | `main`, `test` or `regtest`: the fund address prefix and the header source's proof-of-work floor. A `woc:` header source or `tx_source` must name the same network |
+| `network` | `BLOGS_NETWORK` | `main` | `main`, `test` or `regtest`: the fund address prefix, the header source's proof-of-work floor, and the defaults above. A `woc:` header source or chain view must name the same network |
 | `object_bound` | `BLOGS_OBJECT_BOUND` | `1048576` | the plane's object bound in bytes, at most 8388608; a carrier whose BEEF is larger is not published |
 | `originator` | `BLOGS_ORIGINATOR` | `blogs` | the BRC-100 originator presented to the embedded wallet |
 | `quorum` | `BLOGS_QUORUM` | `all` | mode `unicast`: how many hosts must take an object for it to count as published: `all`, `majority`, `one`, or a number up to the host count. A sweep always needs every host |
-| `rpc` | `BLOGS_RPC` | none | a node's JSON-RPC URL, used only by `fund` without `-txid` (coinbase: only on a regtest chain you run, for development and tests) |
+| `rpc` | `BLOGS_RPC` | none | a node's JSON-RPC URL, used only by `fund` without `-txid` or `-beef` (coinbase: only on a regtest chain you run, for development and tests) |
 | `rpc_pass`, `rpc_user` | `BLOGS_RPC_PASS`, `BLOGS_RPC_USER` | `bitcoin` | the node's basic auth, for `rpc` and for `settle = rpc:` |
-| `settle` | `BLOGS_SETTLE` | none | the broadcaster that settles funding trees, anchors and sweeps: `arcade:<url>` (an ARC-compatible service), `rpc:<url>` (a node's `sendrawtransaction`) or `tcp:<host:port>` (bare EF to an ingress) |
+| `settle` | `BLOGS_SETTLE` | `arcade:main`, `arcade:test` by network (above) | the broadcaster that settles funding trees, anchors and sweeps: `arcade:main` or `arcade:test` (GorillaPool's public arcade), `arcade:URL` (an arcade installation, your own included), `arc:URL` (an ARC service; `/v1` is added to a URL with no path), `rpc:URL` (a node's `sendrawtransaction`) or `tcp:host:port` (bare EF to an ingress) |
 | `timeout` | `BLOGS_TIMEOUT` | `15s` | bounds each request to a host, node or header source; `1s` to `5m` |
-| `tx_source` | `BLOGS_TX_SOURCE` | none | `woc:main` or `woc:test`: where a reader with no node reads a funding tree no host serves and the spender of a funding output, and where `fund -txid` reads a payment. Its answers are held to the txid and, with a proof, to the header source |
+| `tx_source` | `BLOGS_TX_SOURCE` | none | the older name of a WhatsOnChain chain view, `woc:main` or `woc:test`: the chain view when neither `chain` nor `asset` is set |
+| `woc_key` | `BLOGS_WOC_KEY` | none | a WhatsOnChain API key, sent with every WhatsOnChain request |
+| `woc_rate` | `BLOGS_WOC_RATE` | `3` | WhatsOnChain requests a second, shared by every request of a run: its free tier's rate, or the rate of the plan `woc_key` belongs to |
 
 ## Examples
 
-A producer on mainnet, submitting to two hosts itself:
+A producer on mainnet with no node, submitting to two hosts itself. The
+chain services are the defaults:
 
 ```text
 # ~/.blogs/config
 network    = main
-header_url = woc:main
-tx_source  = woc:main
-settle     = arcade:https://arc.gorillapool.io/v1
-asset      = http://node.example.com:8090
 mode       = unicast
 hosts      = https://logs-a.example.com,https://logs-b.example.com
 quorum     = all
@@ -68,10 +113,6 @@ The same producer on testnet:
 
 ```text
 network    = test
-header_url = woc:test
-tx_source  = woc:test
-settle     = arcade:https://testnet.arc.gorillapool.io/v1
-asset      = http://testnet-node.example.com:8090
 mode       = unicast
 hosts      = https://logs-a.example.com,https://logs-b.example.com
 ```
@@ -80,27 +121,36 @@ On the multicast plane, submitting once to a facade the plane delivers from:
 
 ```text
 network    = main
-header_url = woc:main
-settle     = arcade:https://arc.gorillapool.io/v1
-asset      = http://node.example.com:8090
 facade     = https://logs-a.example.com
 hosts      = https://logs-a.example.com,https://logs-b.example.com
 ```
 
-A reader or auditor, with no node and no home:
+A producer with services of its own: a node for the chain view (WhatsOnChain
+for what the node lacks), a block-headers-service for headers, its own
+arcade to broadcast, and the fee rate that arcade publishes:
+
+```text
+network         = main
+chain           = asset:http://node.example.com:8090,woc:main
+header_url      = bhs:https://headers.example.com
+settle          = arcade:https://arcade.example.com
+fee_source      = arc
+mode            = unicast
+hosts           = https://logs-a.example.com,https://logs-b.example.com
+```
+
+A reader or auditor needs no node and no home; the hosts are the only
+setting:
 
 ```text
 network    = main
 hosts      = https://logs-a.example.com,https://logs-b.example.com
-header_url = woc:main
-tx_source  = woc:main
 ```
 
 The same reader as one command, with nothing on disk:
 
 ```console
-$ BLOGS_HEADER_URL=woc:main BLOGS_TX_SOURCE=woc:main BLOGS_HOSTS=https://logs-a.example.com \
-    blogs verify-interval app_qzxkvbmwtr 02c0ffee... 1
+$ BLOGS_HOSTS=https://logs-a.example.com blogs verify-interval app_qzxkvbmwtr 02c0ffee... 1
 ```
 
 ## Global flags
@@ -112,12 +162,18 @@ Before the command. Each sets the key of the same name for this run.
 | `-config PATH` | the config file (no key) |
 | `-home DIR` | `home` |
 | `-hosts URLS` | `hosts` |
+| `-chain SPEC` | `chain` |
+| `-fee-floor SATS` | `fee_floor` |
+| `-fee-max-rate SATS/BYTES` | `fee_max_rate` |
+| `-fee-rate SATS/BYTES` | `fee_rate` |
+| `-fee-source SRC` | `fee_source` |
 | `-header-url SOURCE` | `header_url` |
 | `-mode MODE` | `mode` |
 | `-network NET` | `network` |
 | `-quorum Q` | `quorum` |
+| `-settle SPEC` | `settle` |
 | `-timeout DUR` | `timeout` |
-| `-tx-source SOURCE` | `tx_source` |
+| `-tx-source SOURCE` | `tx_source` (the older name) |
 | `-v` | verbose output on stderr (also accepted after the command) |
 | `-version` | print the version and exit |
 
@@ -129,7 +185,9 @@ Flags may follow the positional arguments. `blogs <command> -h` prints them.
 
 | Flag | Default | |
 | --- | --- | --- |
-| `-txid TXID` | none | import this mined payment to the fund address: how a producer on mainnet or testnet is funded |
+| `-beef FILE` | none | import the payment to the fund address from its BEEF, binary or hex, as your wallet hands it over (`-` reads standard input): how a producer on mainnet or testnet is funded, with no lookup |
+| `-mined-only` | `fund_mined_only` | with `-beef`: refuse a payment that has not mined yet |
+| `-txid TXID` | none | import this mined payment to the fund address, read with its proof from the chain view |
 | `-blocks N` | `101` | coinbase: only on a regtest chain you run (development and tests). Blocks to mine to the fund address |
 | `-batch N` | `30` | coinbase: only on a regtest chain you run (development and tests). Blocks per `generatetoaddress` call |
 | `-rescan` | off | coinbase: only on a regtest chain you run (development and tests). Re-read the last `-blocks` blocks for coinbase the pool lacks instead of mining |
@@ -202,7 +260,7 @@ directory (`blogs archive -dir`) asked before the hosts.
 | `-seqs A-B` | none | a seq range, or one seq |
 | `-interval K` | none | fill the anchor chain to interval K and the seqs it covers |
 | `-anchors K` | none | fill the anchor chain 1 to K |
-| `-sweeps` | off | carry sweeps found on chain (needs `asset` or `tx_source`, and `header_url`) |
+| `-sweeps` | off | carry sweeps found on chain (needs `chain` and `header_url`) |
 
 **`archive <stream> <producer>`**
 
@@ -230,16 +288,15 @@ beyond `-v`.
 Each carries `LICENSE`, `NOTICE` and `LICENSE-THIRD-PARTY` under
 `/usr/share/doc/blogs/`.
 
-**The command image.** No setting is baked in. Pass them as `BLOGS_<KEY>`
+**The command image.** No setting is baked in; the chain services take their
+defaults (above). Pass settings as `BLOGS_<KEY>`
 variables, or mount a config file. The producer home is
 `/home/nonroot/.blogs`, which the image carries empty, owned by nonroot and
 mode 0700, so a new named volume mounted there starts with the right owner:
 
 ```console
 $ docker run --rm -v blogs-home:/home/nonroot/.blogs ghcr.io/lightwebinc/blogs init
-$ docker run --rm -v blogs-home:/home/nonroot/.blogs \
-    -e BLOGS_HEADER_URL=woc:main -e BLOGS_TX_SOURCE=woc:main \
-    ghcr.io/lightwebinc/blogs fund -txid 6f1e...a9c2
+$ docker run --rm -v blogs-home:/home/nonroot/.blogs ghcr.io/lightwebinc/blogs fund -txid 6f1e...a9c2
 ```
 
 A bind mount keeps the host directory's owner instead: make it writable by
