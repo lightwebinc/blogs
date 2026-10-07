@@ -1,0 +1,95 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*'
+
+permissions:
+  contents: read
+
+jobs:
+  # blogs is a command somebody installs, so a release that carries no
+  # binary is a release nobody can use. Four platforms, each a static
+  # binary in a tarball beside the licenses.
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # go.mod's Go version and the Dockerfile builder's toolchain.
+          go-version: "1.27.1"
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          set -eux
+          version="${GITHUB_REF_NAME#v}"
+          dir="blogs_${version}_${GOOS}_${GOARCH}"
+          mkdir -p "dist/${dir}"
+          GOWORK=off go build -trimpath -buildvcs=false \
+            -ldflags "-s -w -X main.version=${version}" \
+            -o "dist/${dir}/blogs" ./cmd/blogs
+          # The licences travel INSIDE the tarball. A statically linked
+          # binary contains its dependencies' code, and three of those
+          # licences require their own text to reach whoever receives a
+          # binary rather than only whoever receives source.
+          cp LICENSE NOTICE LICENSE-THIRD-PARTY README.md "dist/${dir}/"
+          tar -C dist -czf "dist/${dir}.tar.gz" "${dir}"
+          ( cd dist && sha256sum "${dir}.tar.gz" > "${dir}.tar.gz.sha256" )
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: blogs_${{ matrix.goos }}_${{ matrix.goarch }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          set -eux
+          cd dist
+          # The host stack ships beside the binaries, pinned to this
+          # release's blogs-host image rather than to latest.
+          sed "s#blogs-host:latest#blogs-host:${GITHUB_REF_NAME#v}#" ../deploy/compose.yaml > compose.yaml
+          grep -q "blogs-host:${GITHUB_REF_NAME#v}" compose.yaml
+          sha256sum compose.yaml > compose.yaml.sha256
+          cat *.sha256 | sort -k2 > SHA256SUMS
+          rm -f *.tar.gz.sha256 compose.yaml.sha256
+          ls -l
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/compose.yaml
+            dist/SHA256SUMS
