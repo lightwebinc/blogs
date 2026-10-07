@@ -19,9 +19,10 @@ import (
 )
 
 // Sweeps (docs/spec.md section 6.4). A retraction sweeps outputs of a batch
-// funding tree with bcommon carrier.Sweep: once it mines and is published,
-// every carrier that spent one of those outputs is a double spend, and hosts
-// stop serving it while keeping its seq as a numbered position. A retirement
+// funding tree with bcommon carrier.SweepAt, at the fee policy: once it mines
+// and is published, every carrier that spent one of those outputs is a double
+// spend, and hosts stop serving it while keeping its seq as a numbered
+// position. A retirement
 // spends only the unused outputs of a tree no longer in use, paying their
 // value back to the coin pool; it retracts nothing. Each sweep is one
 // transaction per tree, persisted in the state before it is settled and
@@ -125,9 +126,7 @@ func (e *Engine) Retract(ctx context.Context, txid string, vouts []uint32, seqs 
 		payer.GiveBack()
 		return nil, err
 	}
-	tx, err := sweepAt(e.Opts.Fees, func(floor uint64) (*transaction.Transaction, error) {
-		return carrier.Sweep(ctx, e.Signer, e.Signer.Originator, Params, tree, vouts, fee.Tx, fee.Vout, fee.Unlocker, change, 0, floor)
-	})
+	tx, err := carrier.SweepAt(ctx, e.Signer, e.Signer.Originator, Params, tree, vouts, fee.Tx, fee.Vout, fee.Unlocker, change, e.Opts.Fees)
 	if err != nil {
 		payer.GiveBack()
 		return nil, err
@@ -215,11 +214,11 @@ func (e *Engine) sweepFee(ctx context.Context, payer *producer.Payer) (mint.Inpu
 	}
 }
 
-// sweepAt builds a sweep at the fee policy fees. carrier.Sweep takes a
-// whole number of satoshis a byte, so it is given none and a floor of the
-// fee wanted, which it pays exactly; the fee is raised to what fees asks
-// for the signed size until it covers it, by mint's rule (a retarget adds
-// two bytes an input), so a rate below a satoshi a byte is paid as it is.
+// sweepAt builds a retirement at the fee policy fees, by the rule
+// carrier.SweepAt settles a retraction by: build pays the fee it is given
+// exactly, and the fee is raised to what fees asks for the signed size until
+// it covers it (a retarget adds two bytes an input), so a rate below a
+// satoshi a byte is paid as it is.
 func sweepAt(fees mint.Fees, build func(fee uint64) (*transaction.Transaction, error)) (*transaction.Transaction, error) {
 	fee, err := fees.For(0)
 	if err != nil {

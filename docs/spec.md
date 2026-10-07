@@ -358,7 +358,8 @@ holds it.
 
 A producer retracts batches by sweeping a funding tree: one mined
 transaction spending the tree's outputs, used and unused (bcommon
-`carrier.Sweep`, whose output 0 is a funding-shaped tombstone). Once it is
+`carrier.SweepAt`, whose output 0 is a funding-shaped tombstone, at the
+producer's fee policy). Once it is
 mined, every carrier that spent one of those outputs is a double spend and
 can never be valid again. A producer that only wants unused value back spends
 only the unused outputs; that retracts nothing.

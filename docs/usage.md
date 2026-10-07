@@ -531,9 +531,10 @@ funding outputs.
 - **Retraction.** `-retract-seqs A-B` asks the hosts for the carriers at
   those seqs (every candidate, a fork included), checks that each is this
   producer's and spends a batch tree the stream recorded, and sweeps
-  exactly the outputs they spent with bcommon `carrier.Sweep`: output 0 is
-  a funding-shaped tombstone carrying the swept value, the fee comes from
-  the coin pool and its change goes back to it. `-retract-tree TXID` sweeps
+  exactly the outputs they spent with bcommon `carrier.SweepAt`: output 0 is
+  a funding-shaped tombstone carrying the swept value, the fee, at the
+  configured fee policy, comes from the coin pool and its change goes back
+  to it. `-retract-tree TXID` sweeps
   every output of one batch tree, used and unused. Once the sweep mines it
   is published, with its proof, to the stream's topic; each carrier that
   spent a swept output is then a double spend, and a host stops serving it

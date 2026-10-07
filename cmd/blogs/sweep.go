@@ -21,7 +21,7 @@ section 6.4).
 
 -retract-seqs A-B retracts those batches: it asks the hosts for their
 carriers and sweeps exactly the funding outputs they spent, with bcommon's
-carrier.Sweep, whose output 0 is a funding-shaped tombstone. -retract-tree
+carrier.SweepAt, whose output 0 is a funding-shaped tombstone. -retract-tree
 sweeps every output of one batch funding tree, used and unused, retracting
 every batch it funded. Once a retraction mines and is published, every
 carrier it names is a double spend: hosts stop serving the batch and keep

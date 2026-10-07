@@ -163,7 +163,7 @@ func (s *Stream) MintedAhead(txid string) bool {
 // The kinds of sweep.
 const (
 	// SweepRetract spends outputs of a batch funding tree, used or not,
-	// with bcommon carrier.Sweep: output 0 is a funding-shaped tombstone,
+	// with bcommon carrier.SweepAt: output 0 is a funding-shaped tombstone,
 	// and every carrier that spent one of the outputs is retracted once it
 	// mines (docs/spec.md section 6.4).
 	SweepRetract = "retract"
