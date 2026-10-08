@@ -53,7 +53,7 @@ variables.
 | `sweep <stream>` | yes | as `produce`; `hosts` for `-retract-seqs`, and to reach hosts off the plane | retracts batches by sweeping their funding outputs, or retires unused funding outputs to the pool |
 | `backfill <stream> <producer>` | no | `-from` and `-to`, or two or more `hosts`; `chain` for `-sweeps`, and for a fee tree no sibling serves | fills a host's holes from its siblings, or brings every configured host into step; `-sweeps` also carries sweeps |
 | `archive <stream> <producer>` | no | `-dir`, a host, `header_url`; `chain` to find retractions, and for a fee tree the host does not serve | keeps one host's copy of a stream, with each interval's proof and each anchor's fee tree, in local files |
-| `ingest -stream S` | yes | as `produce`; `-loki` to forward | the logging sidecar: syslog, OTLP logs and Loki push to batches on one stream, or two with a digest-only confidential one; every published line forwarded to Loki with its placement ([backend.md](backend.md)) |
+| `ingest -stream S` | yes | as `produce`; `-loki` to forward | the logging sidecar: syslog, OTLP logs and Loki push to batches on one stream, or two with a digest-only confidential one; every published line forwarded to Loki with its placement; `-admin` retracts while it runs ([backend.md](backend.md)) |
 | `gateway -archive DIR -loki URL` | no | an archive directory, a Loki | the Loki API in front of Loki, each returned line marked verified or unverified against the archive's roots; coverage and metering ([backend.md](backend.md)) |
 | `version` | no | nothing | prints the version |
 

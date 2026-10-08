@@ -68,14 +68,25 @@ push) once every one of its records is in a batch that is persisted and
 published. A request that cannot be taken now is answered 503 with
 `Retry-After`; shippers retry it. Delivery is at least once: a record whose
 request failed after its batch was persisted may be published twice when
-the sender retries. Syslog has no acknowledgment: its records are queued,
+the sender retries. Both copies are true lines with their own placement,
+and both verify; nothing deduplicates them. Syslog has no acknowledgment: its records are queued,
 and a full queue holds the connection back.
+
+**Starting.** Before it takes a record, the sidecar makes sure each
+stream has a funding tree to spend, minting one and waiting for it to mine
+when it has none. Meanwhile the HTTP doors answer 503 with `Retry-After`
+and `GET /healthz` answers 503; the syslog doors open once it is ready. So
+no sender's request waits for a block.
 
 **Batches.** Lines are cut into batches by `-max-bytes`, `-max-lines` and
 `-max-wait`, at most `-max-rate` batches a second per stream, and each
 interval (`-interval`) is anchored, exactly as `blogs produce` does
 ([limits.md](limits.md)). The fee policy is the home's (default 0.1 sat a
-byte, [configuration.md](configuration.md)).
+byte, [configuration.md](configuration.md)). Every carrier carries its
+funding tree, so `ingest` defaults to trees of 16 outputs (`-tree-count`,
+minted ahead at 8 left), where `produce` uses 100: for a logging stream's
+many small batches this keeps the evidence an archive stores close to the
+size of the lines, at the price of a mined tree every 16 batches.
 
 ## Confidential records
 
@@ -87,6 +98,18 @@ archives without the content hold the digest and can prove the batch's
 place; an archive or gateway given `-content-dir` (or an allowed fetch hint,
 `-url`) can check the lines themselves. The lines are still forwarded to
 Loki, which is the deployment's own index.
+
+## Retraction
+
+With `-admin ADDR`, the sidecar serves `POST
+/admin/retract?stream=<stream>&seqs=<A-B>`, which retracts those batches
+while records keep coming in: the sweep is built between batches on the
+goroutine that publishes, and settled and published on the anchor ticks
+after. The answer, 202, names the sweep; 409 means a sweep of the stream
+is still in flight, and a range funded by more than one funding tree is
+refused (retract it one tree at a time). The admin API has no
+authentication of its own: keep it on loopback or behind your own access
+control. `blogs sweep` does the same with the sidecar stopped.
 
 ## Forwarding to Loki
 
@@ -155,7 +178,9 @@ retraction receipt with the sweep that retracted it.
 What the gateway does not prove: that a search found every matching line
 (a store can omit a line and return only true ones; coverage shows what the
 archive holds, not what the store searched), and anything on
-`/loki/api/v1/tail`, which is passed through unmarked. An auditor who trusts
+`/loki/api/v1/tail`, which is passed through unmarked. The gateway checks
+against one archive and trusts the chain checks that archive made when it
+stored each interval. An auditor who trusts
 neither the gateway nor its archive runs `blogs verify-interval` against any
 host or archive ([usage.md](usage.md)).
 
@@ -172,20 +197,20 @@ counters (`increase()` over the billing period), never as absolute totals.
 | `blogs_ingest_received_bytes_total{door}` | sidecar | bytes on the wire, before decompression |
 | `blogs_ingest_records_total{door}`, `blogs_ingest_requests_total{door,outcome}` | sidecar | records, requests and syslog connections |
 | `blogs_forward_lines_total`, `blogs_forward_dropped_lines_total` | sidecar | lines pushed to Loki, and not |
-| `blogs_retained_bytes{stream,kind}` | gateway | bytes the archive keeps now: `kind="content"`, the lines as sent (empty for a digest-only stream whose content the archive does not hold), and `kind="evidence"`, each carrier's BEEF with the funding tree it spends |
-| `blogs_retained_byte_seconds_total{stream,kind}` | gateway | the same integrated over time, measured every `-meter`: divide by 2.592e15 for **GB-months** (30-day months) |
+| `blogs_retained_bytes{stream,kind}` | gateway | bytes the archive keeps now: `kind="content"`, the lines as each batch records their size (the same for a digest-only stream whether or not the archive holds its content), and `kind="evidence"`, each carrier's BEEF on disk with the funding tree it spends, a cost and not billed |
+| `blogs_retained_byte_seconds_total{stream}` | gateway | retained **content** integrated over time, measured every `-meter`: divide by 2.592e15 for **GB-months** (30-day months) |
 | `blogs_gateway_lines_total{state,reason}` | gateway | lines returned, by mark |
 
 ## Running it
 
 One sidecar process drives both streams of one producer home and holds the
-home's lock, so `blogs sweep` (retraction) runs with the sidecar stopped.
+home's lock; retract through its admin API.
 
 ```bash
 blogs stream new app                 # app_<suffix>
 blogs stream new sec                 # sec_<suffix>, the confidential stream
 blogs ingest -stream app_<suffix> -confidential-stream sec_<suffix> -content-dir /var/lib/blogs/content \
-  -http 127.0.0.1:4318 -syslog 127.0.0.1:6514 -syslog-tls 0.0.0.0:6515 \
+  -http 127.0.0.1:4318 -admin 127.0.0.1:4319 -syslog 127.0.0.1:6514 -syslog-tls 0.0.0.0:6515 \
   -tls-cert server.pem -tls-key server.key -tls-client-ca ca.pem \
   -loki http://127.0.0.1:3100
 for s in app_<suffix> sec_<suffix>; do   # one archive per host; three hosts, three archives
@@ -213,7 +238,7 @@ A="--archive /a --archive /b --archive /c --stream app_<suffix> --stream sec_<su
    --gateway http://127.0.0.1:3101 --loki http://127.0.0.1:3100"
 scripts/backend-exit-test.py roots   $A    # the three archives agree on every interval they share
 scripts/backend-exit-test.py tamper  $A    # an altered copy pushed into Loki is marked altered
-scripts/backend-exit-test.py retract $A --blogs blogs   # with the sidecar stopped: a receipted hole
+scripts/backend-exit-test.py retract $A --admin http://127.0.0.1:4319   # through the sidecar: a receipted hole
 scripts/backend-exit-test.py soak    $A --duration 604800 --every 300   # the 7-day run
 ```
 

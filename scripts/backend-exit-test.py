@@ -11,8 +11,9 @@ Standard library only.
   tamper   pushes an altered copy of a verified line straight into Loki,
            with the original's placement, and checks the gateway marks the
            copy unverified (altered) and the original still verified
-  retract  retracts one proven batch with blogs sweep (the sidecar must be
-           stopped first: it holds the producer home), waits for every
+  retract  retracts one proven batch through the sidecar's admin API
+           (--admin), or with blogs sweep (--blogs, the sidecar stopped:
+           it holds the producer home), waits for every
            archive to keep the receipt, and checks the gateway marks the
            batch's lines retracted and its coverage names the receipt
   soak     repeats roots and a gateway sample every --every for --duration,
@@ -28,6 +29,7 @@ import os
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -137,10 +139,20 @@ def cmd_retract(a):
         return False
     leaves = ivs[max(ivs)][2]
     seq = a.seq or leaves[len(leaves) // 2][0]
-    out = subprocess.run([a.blogs, "sweep", stream, "-retract-seqs", str(seq), "-yes"], capture_output=True, text=True)
-    if out.returncode != 0:
-        print(json.dumps({"check": "retract", "ok": False, "seq": seq, "sweep": out.stdout + out.stderr}))
-        return False
+    if a.admin:
+        req = urllib.request.Request(a.admin.rstrip("/") + "/admin/retract?" + urllib.parse.urlencode({"stream": stream, "seqs": seq}), method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=120) as r:
+                said = r.read().decode()
+        except urllib.error.HTTPError as e:
+            print(json.dumps({"check": "retract", "ok": False, "seq": seq, "admin": e.code, "said": e.read().decode()}))
+            return False
+        out = subprocess.CompletedProcess([], 0, said, "")
+    else:
+        out = subprocess.run([a.blogs, "sweep", stream, "-retract-seqs", str(seq), "-yes"], capture_output=True, text=True)
+        if out.returncode != 0:
+            print(json.dumps({"check": "retract", "ok": False, "seq": seq, "sweep": out.stdout + out.stderr}))
+            return False
     deadline = time.time() + a.wait
     receipts = []
     while time.time() < deadline:
@@ -194,6 +206,7 @@ def main():
     p.add_argument("--gateway", default="http://127.0.0.1:3101")
     p.add_argument("--loki", default="http://127.0.0.1:3100")
     p.add_argument("--blogs", default="blogs", help="the blogs command, configured for the producer home")
+    p.add_argument("--admin", default="", help="retract: the sidecar's admin API, used instead of blogs sweep")
     p.add_argument("--selector", default='{service_name=~".+"}')
     p.add_argument("--minutes", type=int, default=30, help="how far back the gateway is asked")
     p.add_argument("--settle", type=int, default=600, help="seconds after which a line must be verified")

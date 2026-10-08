@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -52,6 +53,9 @@ back and checks each line against the archive's roots.
 
 One process drives both streams from one home and holds the home's lock.`
 
+// IngestTreeCount is ingest's default -tree-count.
+const IngestTreeCount = 16
+
 func cmdIngest(ctx context.Context, g *global, args []string) error {
 	fs := g.flagSet("ingest", ingestHelp)
 	var f produceFlags
@@ -74,7 +78,16 @@ func cmdIngest(ctx context.Context, g *global, args []string) error {
 	fs.DurationVar(&f.maxWait, "max-wait", limits.DefaultMaxWait, fmt.Sprintf("cut a batch this long after its first line (%s to %s)", limits.MinMaxWait, limits.MaxMaxWait))
 	fs.Float64Var(&f.maxRate, "max-rate", limits.DefaultRate, fmt.Sprintf("publish at most this many batches a second per stream (at most %d)", limits.MaxRate))
 	fs.DurationVar(&f.interval, "interval", limits.DefaultInterval, fmt.Sprintf("anchor once this long has passed since the last anchor (%s to %s)", limits.MinInterval, limits.MaxInterval))
+	admin := fs.String("admin", "", "address for the admin API (POST /admin/retract); keep it on loopback or behind your own access control")
 	engineFlags(fs, &f)
+	// A logging stream publishes many small batches, and every carrier's
+	// BEEF carries its whole funding tree: a smaller tree keeps the
+	// evidence an archive stores near the size of the lines.
+	for name, v := range map[string]string{"tree-count": strconv.Itoa(IngestTreeCount), "ahead": strconv.Itoa(IngestTreeCount / 2)} {
+		fl := fs.Lookup(name)
+		_ = fl.Value.Set(v)
+		fl.DefValue = v
+	}
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -208,19 +221,39 @@ func cmdIngest(ctx context.Context, g *global, args []string) error {
 	var ready atomic.Bool
 	doors := &ingest.Doors{Batcher: b, Metrics: m, Note: g.say, Ready: ready.Load}
 	errs := make(chan error, 4)
-	if *httpAddr != "" {
-		l, err := net.Listen("tcp", *httpAddr)
+	serve := func(addr string, h http.Handler, what string) error {
+		l, err := net.Listen("tcp", addr)
 		if err != nil {
 			return err
 		}
-		srv := &http.Server{Handler: doors.Handler(), ReadHeaderTimeout: 10 * time.Second}
+		srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}
 		go func() { <-runCtx.Done(); _ = srv.Close() }()
 		go func() {
 			if err := srv.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				errs <- err
 			}
 		}()
-		g.say("http: OTLP logs and Loki push on %s", l.Addr())
+		g.say("%s on %s", what, l.Addr())
+		return nil
+	}
+	// The HTTP doors open first and answer 503 until every stream has a
+	// funding tree to spend, so a sender never waits for a block.
+	if *httpAddr != "" {
+		if err := serve(*httpAddr, doors.Handler(), "http: OTLP logs and Loki push"); err != nil {
+			return err
+		}
+	}
+	if err := b.Prime(runCtx); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { done <- b.Run(runCtx, 30*time.Second) }()
+	if *admin != "" {
+		if err := serve(*admin, adminHandler(g, b, engines), "admin"); err != nil {
+			cancel()
+			<-done
+			return err
+		}
 	}
 	for _, d := range []struct {
 		addr string
@@ -232,6 +265,8 @@ func cmdIngest(ctx context.Context, g *global, args []string) error {
 		}
 		l, err := net.Listen("tcp", d.addr)
 		if err != nil {
+			cancel()
+			<-done
 			return err
 		}
 		if d.tls != nil {
@@ -245,8 +280,7 @@ func cmdIngest(ctx context.Context, g *global, args []string) error {
 		}()
 	}
 	ready.Store(true)
-	done := make(chan error, 1)
-	go func() { done <- b.Run(runCtx, 30*time.Second) }()
+	g.say("ready")
 	select {
 	case err := <-errs:
 		cancel()

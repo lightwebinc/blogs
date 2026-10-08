@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
@@ -292,5 +294,24 @@ func TestBatcherRefusesOnPublishError(t *testing.T) {
 	}
 	if err := b.Submit(ctx, []Record{{Body: strings.Repeat("z", MaxRecordLine)}}, true); err == nil {
 		t.Fatal("an over-long record was taken")
+	}
+}
+
+// Before the sidecar is ready the HTTP doors answer 503 with Retry-After,
+// and the health check says not ready.
+func TestDoorsNotReady(t *testing.T) {
+	d := &Doors{Batcher: &Batcher{}, Ready: func() bool { return false }}
+	h := d.Handler()
+	for _, path := range []string{"/v1/logs", "/loki/api/v1/push"} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, path, strings.NewReader("{}")))
+		if w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") == "" {
+			t.Fatalf("%s: %d", path, w.Code)
+		}
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("healthz: %d", w.Code)
 	}
 }

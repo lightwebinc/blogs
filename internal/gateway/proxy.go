@@ -37,8 +37,8 @@ type Gateway struct {
 // DeclareMetrics declares the gateway's metrics.
 func DeclareMetrics(m *metrics.Set) {
 	m.Counter("blogs_gateway_lines_total", "Lines returned, by mark and reason.")
-	m.Gauge("blogs_retained_bytes", "Bytes the archive keeps, by stream and kind: content (the lines) or evidence (carriers with their funding trees).")
-	m.Counter("blogs_retained_byte_seconds_total", "Retained bytes integrated over time, by stream and kind: divide by 2.592e15 for GB-months (30-day months).")
+	m.Gauge("blogs_retained_bytes", "Bytes the archive keeps, by stream and kind: content (the lines, as each batch records their size; billed) or evidence (carriers with their funding trees; not billed).")
+	m.Counter("blogs_retained_byte_seconds_total", "Retained content bytes integrated over time, by stream: the billed retention; divide by 2.592e15 for GB-months (30-day months).")
 }
 
 // Handler serves the Loki API, the coverage endpoint and the metrics.
@@ -86,8 +86,8 @@ func (g *Gateway) Meter(ctx context.Context, period time.Duration) {
 		for stream, kinds := range g.Verifier.Retained() {
 			for kind, n := range kinds {
 				g.Metrics.Set("blogs_retained_bytes", float64(n), "stream", stream, "kind", kind)
-				g.Metrics.Add("blogs_retained_byte_seconds_total", float64(n)*dt, "stream", stream, "kind", kind)
 			}
+			g.Metrics.Add("blogs_retained_byte_seconds_total", float64(kinds["content"])*dt, "stream", stream)
 		}
 		select {
 		case <-ctx.Done():

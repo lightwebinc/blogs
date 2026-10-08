@@ -310,10 +310,13 @@ func (v *Verifier) Coverage() ([]Coverage, error) {
 	return out, nil
 }
 
-// Retained sums, per stream, the bytes the archive keeps: the log content
-// (content/, the lines as sent) and the evidence (batches/, each carrier's
-// BEEF with the funding tree it spends). The gateway meters both over time
-// as GB-months.
+// Retained sums, per stream, the bytes the archive keeps for it in two
+// kinds. content is the size of every batch's lines as recorded in the
+// batch (the record's size field, so a digest-only batch counts the same
+// whether or not this archive holds its content): what is billed.
+// evidence is the carriers' BEEF on disk, each with the funding tree it
+// spends: the cost of proof, measured and not billed. A retracted batch
+// counts as neither once the archive has dropped it.
 func (v *Verifier) Retained() map[string]map[string]int64 {
 	out := map[string]map[string]int64{}
 	dirs, _ := filepath.Glob(filepath.Join(v.Dir, "*", "*"))
@@ -322,11 +325,22 @@ func (v *Verifier) Retained() map[string]map[string]int64 {
 		if out[stream] == nil {
 			out[stream] = map[string]int64{"content": 0, "evidence": 0}
 		}
-		for sub, kind := range map[string]string{"batches": "evidence", "content": "content"} {
-			ents, _ := os.ReadDir(filepath.Join(root, sub))
-			for _, e := range ents {
+		ents, _ := os.ReadDir(filepath.Join(root, "batches"))
+		for _, e := range ents {
+			name := e.Name()
+			switch {
+			case strings.HasSuffix(name, ".beef"):
 				if fi, err := e.Info(); err == nil && fi.Mode().IsRegular() {
-					out[stream][kind] += fi.Size()
+					out[stream]["evidence"] += fi.Size()
+				}
+			case strings.HasSuffix(name, ".json"):
+				raw, err := os.ReadFile(filepath.Join(root, "batches", name))
+				if err != nil {
+					continue
+				}
+				var bf archive.BatchFile
+				if json.Unmarshal(raw, &bf) == nil {
+					out[stream]["content"] += int64(bf.Size) //nolint:gosec // a batch is bounded far below 2^63
 				}
 			}
 		}

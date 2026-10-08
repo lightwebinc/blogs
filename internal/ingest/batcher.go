@@ -60,7 +60,38 @@ func (p *produceEngine) Publish(ctx context.Context, raw []byte, count int) ([]P
 	return got, err
 }
 
-func (p *produceEngine) Tick(ctx context.Context) error { return p.e.Tick(ctx, false) }
+// Tick also moves a sweep in flight (a retraction) along, waiting a few
+// seconds at most each time, so it never holds the batches up: a sweep
+// not mined yet stays persisted for the next tick.
+func (p *produceEngine) Tick(ctx context.Context) error {
+	if p.e.InFlight() {
+		sctx, cancel := context.WithTimeout(ctx, SweepStep)
+		err := p.e.FinishSweeps(sctx)
+		cancel()
+		if err != nil && sctx.Err() == nil && ctx.Err() == nil {
+			return fmt.Errorf("sweep: %w", err)
+		}
+	}
+	return p.e.Tick(ctx, false)
+}
+
+// SweepStep bounds how long one tick waits on a sweep in flight.
+var SweepStep = 3 * time.Second
+
+// Prime makes sure every lane's stream has a batch funding tree to spend,
+// minting and waiting for one when it has none, so that the first batch
+// after a start does not wait for a block. A lane whose engine is not a
+// producer engine is left as it is.
+func (b *Batcher) Prime(ctx context.Context) error {
+	for _, l := range b.Lanes {
+		if p, ok := l.Engine.(*produceEngine); ok {
+			if err := p.e.Prime(ctx); err != nil {
+				return fmt.Errorf("stream %s: %w", p.Stream(), err)
+			}
+		}
+	}
+	return nil
+}
 
 // Placed is a record as it was published: the line, its stream and
 // producer, and its batch's seq and its 1-based position in the batch.
@@ -96,7 +127,13 @@ type Batcher struct {
 	Queue int
 
 	in    chan *job
+	tasks chan task
 	state []*laneState
+}
+
+type task struct {
+	fn   func(context.Context) error
+	done chan error
 }
 
 type job struct {
@@ -147,6 +184,7 @@ func (b *Batcher) init() {
 			q = 1024
 		}
 		b.in = make(chan *job, q)
+		b.tasks = make(chan task)
 		b.state = make([]*laneState, len(b.Lanes))
 		for i := range b.state {
 			b.state[i] = &laneState{}
@@ -215,6 +253,24 @@ func (j *job) resolve(n int, err error) {
 	}
 }
 
+// Do runs fn on the publishing goroutine, between batches, and returns its
+// error: how an operation on an engine (a retraction) runs while the
+// sidecar keeps taking records.
+func (b *Batcher) Do(ctx context.Context, fn func(context.Context) error) error {
+	t := task{fn: fn, done: make(chan error, 1)}
+	select {
+	case b.tasks <- t:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case err := <-t.done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // Run publishes and anchors until ctx ends, then publishes what is queued
 // under a context of its own bounded by grace.
 func (b *Batcher) Run(ctx context.Context, grace time.Duration) error {
@@ -231,6 +287,8 @@ func (b *Batcher) Run(ctx context.Context, grace time.Duration) error {
 		select {
 		case j := <-b.in:
 			b.take(ctx, j)
+		case t := <-b.tasks:
+			t.done <- t.fn(ctx)
 		case <-wake.C:
 			if b.Metrics != nil {
 				b.Metrics.Set("blogs_ingest_queue", float64(len(b.in)))

@@ -381,6 +381,23 @@ func (e *Engine) Resume(ctx context.Context) error {
 	return e.St.Save()
 }
 
+// Prime publishes a carrier a previous run persisted, and makes sure the
+// stream has a batch funding tree with an output to spend, minting one and
+// waiting for it to mine when it has none. It spends nothing: the next
+// batch takes that output. A sidecar primes before it takes records, so no
+// sender waits for a block.
+func (e *Engine) Prime(ctx context.Context) error {
+	if e.St.Pending != "" {
+		if err := e.Resume(ctx); err != nil {
+			return err
+		}
+	}
+	if _, _, err := e.spend(ctx, e.trees, 1); err != nil {
+		return e.feeError(fmt.Errorf("batch funding tree: %w", err))
+	}
+	return nil
+}
+
 // Batch is one batch's content before encoding: LF-terminated lines.
 type Batch struct {
 	Raw   []byte

@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/lightwebinc/bcommon/headers"
@@ -152,9 +153,16 @@ type global struct {
 	stdout  io.Writer
 	stderr  io.Writer
 	getenv  func(string) string
+	// sayMu serializes say: the sidecar says things from several
+	// goroutines.
+	sayMu sync.Mutex
 }
 
-func (g *global) say(format string, args ...any) { fmt.Fprintf(g.stderr, format+"\n", args...) }
+func (g *global) say(format string, args ...any) {
+	g.sayMu.Lock()
+	defer g.sayMu.Unlock()
+	fmt.Fprintf(g.stderr, format+"\n", args...)
+}
 
 type command func(ctx context.Context, g *global, args []string) error
 

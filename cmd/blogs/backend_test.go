@@ -263,7 +263,6 @@ func backendFlow(t *testing.T, h *harness, stream, producer, conf string, hosts 
 	delete(h.env, "BLOGS_FACADE")
 	h.env["BLOGS_MODE"] = "unicast"
 	h.env["BLOGS_HOSTS"] = strings.Join(hosts, ",")
-	var r result
 	content := t.TempDir()
 	loki := &fakeLoki{}
 	lokiS := httptest.NewServer(loki)
@@ -358,14 +357,12 @@ func backendFlow(t *testing.T, h *harness, stream, producer, conf string, hosts 
 	gw.Loki, _ = url.Parse(lokiS.URL)
 	gwS := httptest.NewServer(gw.Handler())
 	defer gwS.Close()
-	// Retention metering: archive a holds both streams' content and
-	// evidence; archive b holds the confidential stream's evidence only.
-	ret := gw.Verifier.Retained()
-	if ret[stream]["content"] == 0 || ret[stream]["evidence"] == 0 || ret[conf]["content"] == 0 {
-		t.Fatalf("retained at archive a: %v", ret)
-	}
-	if rb := (&gateway.Verifier{Dir: dirs[1]}).Retained(); rb[conf]["content"] != 0 || rb[conf]["evidence"] == 0 {
-		t.Fatalf("retained at archive b: %v", rb)
+	// Retention metering: content is the batches' recorded sizes, the
+	// same at an archive holding the confidential lines (a) and one holding
+	// their digests only (b); evidence is what each keeps on disk.
+	ret, rb := gw.Verifier.Retained(), (&gateway.Verifier{Dir: dirs[1]}).Retained()
+	if ret[stream]["content"] == 0 || ret[stream]["evidence"] == 0 || ret[conf]["content"] == 0 || rb[conf]["content"] != ret[conf]["content"] {
+		t.Fatalf("retained at archive a %v, b %v", ret, rb)
 	}
 	for _, cat := range []bool{false, true} {
 		got := queryGateway(t, gwS.URL, cat)
@@ -400,12 +397,50 @@ func backendFlow(t *testing.T, h *harness, stream, producer, conf string, hosts 
 	// Retract the batch holding "otlp one".
 	one, _ := loki.find("otlp one")
 	seq := one.meta[ingest.MetaSeq]
-	r = h.must("", "sweep", stream, "-retract-seqs", seq, "-yes", "-poll", "50ms")
-	for i, d := range dirs {
-		r = h.must("", "archive", stream, producer, "-dir", d, "-host", hosts[i], "-recheck-all")
-		if !strings.Contains(r.stdout, "retracted seqs "+seq+": receipt and sweep kept") {
-			t.Fatalf("archive recheck:\n%s\n%s", r.stdout, r.stderr)
+	// Through the sidecar's admin API, with the sidecar up and taking
+	// records: no ingest gap.
+	adminAddr, http2 := listenPort(t), listenPort(t)
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	done2 := make(chan result, 1)
+	go func() {
+		done2 <- h.runCtx(ctx2, "", append([]string{"ingest", "-stream", stream, "-confidential-stream", conf, "-content-dir", content,
+			"-http", http2, "-admin", adminAddr, "-loki", lokiS.URL, "-max-wait", "20ms", "-max-rate", "50"}, fast...)...)
+	}()
+	waitUntil(t, "the sidecar again", func() bool {
+		resp, err := http.Get("http://" + http2 + "/healthz")
+		if err != nil {
+			return false
 		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	})
+	resp, err := http.Post("http://"+adminAddr+"/admin/retract?stream="+stream+"&seqs="+seq, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ansRaw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted || !strings.Contains(string(ansRaw), `"state":"submitted"`) {
+		t.Fatalf("retract: %d %s", resp.StatusCode, ansRaw)
+	}
+	// Records keep flowing while the sweep is in flight.
+	post(t, "http://"+http2+"/loki/api/v1/push", "application/json",
+		[]byte(`{"streams":[{"stream":{"service_name":"web"},"values":[["1791400000000000009","during the retraction"]]}]}`), http.StatusNoContent)
+	waitUntil(t, "the receipts", func() bool {
+		for i, d := range dirs {
+			r := h.run("", "archive", stream, producer, "-dir", d, "-host", hosts[i], "-recheck-all")
+			if !strings.Contains(r.stdout, "retracted seqs "+seq+": receipt and sweep kept") {
+				got, _ := filepath.Glob(filepath.Join(d, stream, producer, "retracted", "*.json"))
+				if len(got) == 0 {
+					return false
+				}
+			}
+		}
+		return true
+	})
+	cancel2()
+	if r := <-done2; r.code != 0 {
+		t.Fatalf("ingest exit %d\n%s\n%s", r.code, r.stdout, r.stderr)
 	}
 	retracted := 0
 	for _, l := range queryGateway(t, gwS.URL, false) {
@@ -419,7 +454,7 @@ func backendFlow(t *testing.T, h *harness, stream, producer, conf string, hosts 
 	if retracted == 0 {
 		t.Fatal("no line marked retracted")
 	}
-	resp, err := http.Get(gwS.URL + "/blogs/v1/coverage")
+	resp, err = http.Get(gwS.URL + "/blogs/v1/coverage")
 	if err != nil {
 		t.Fatal(err)
 	}

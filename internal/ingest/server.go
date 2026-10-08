@@ -140,8 +140,24 @@ func (d *Doors) submit(w http.ResponseWriter, r *http.Request, door string, recs
 	}
 }
 
+// notReady answers a request that came before the sidecar is ready (its
+// streams' first funding trees are being minted) with 503 and
+// Retry-After, which every shipper retries.
+func (d *Doors) notReady(w http.ResponseWriter, door string) bool {
+	if d.Ready == nil || d.Ready() {
+		return false
+	}
+	d.count(door, "not-ready")
+	w.Header().Set("Retry-After", "5")
+	http.Error(w, "not ready: minting the streams' first funding trees", http.StatusServiceUnavailable)
+	return true
+}
+
 func (d *Doors) otlp(w http.ResponseWriter, r *http.Request) {
 	const door = "otlp"
+	if d.notReady(w, door) {
+		return
+	}
 	b, err := d.body(door, r)
 	if err != nil {
 		d.count(door, "refused")
@@ -175,6 +191,9 @@ func (d *Doors) otlp(w http.ResponseWriter, r *http.Request) {
 
 func (d *Doors) loki(w http.ResponseWriter, r *http.Request) {
 	const door = "loki"
+	if d.notReady(w, door) {
+		return
+	}
 	b, err := d.body(door, r)
 	if err != nil {
 		d.count(door, "refused")
