@@ -161,7 +161,9 @@ host or archive ([usage.md](usage.md)).
 
 ## Metering
 
-Counters a billing pipeline scrapes; nothing here prices or bills.
+Counters a billing pipeline scrapes; nothing here prices or bills. Each
+starts at zero with its process, so a pipeline reads them as Prometheus
+counters (`increase()` over the billing period), never as absolute totals.
 
 | Metric | Where | Unit |
 | --- | --- | --- |
@@ -170,8 +172,8 @@ Counters a billing pipeline scrapes; nothing here prices or bills.
 | `blogs_ingest_received_bytes_total{door}` | sidecar | bytes on the wire, before decompression |
 | `blogs_ingest_records_total{door}`, `blogs_ingest_requests_total{door,outcome}` | sidecar | records, requests and syslog connections |
 | `blogs_forward_lines_total`, `blogs_forward_dropped_lines_total` | sidecar | lines pushed to Loki, and not |
-| `blogs_retained_bytes{stream}` | gateway | bytes the archive keeps now (batches and content) |
-| `blogs_retained_byte_seconds_total{stream}` | gateway | retained bytes integrated over time, measured every `-meter`: divide by 2.592e15 for **GB-months** (30-day months) |
+| `blogs_retained_bytes{stream,kind}` | gateway | bytes the archive keeps now: `kind="content"`, the lines as sent (empty for a digest-only stream whose content the archive does not hold), and `kind="evidence"`, each carrier's BEEF with the funding tree it spends |
+| `blogs_retained_byte_seconds_total{stream,kind}` | gateway | the same integrated over time, measured every `-meter`: divide by 2.592e15 for **GB-months** (30-day months) |
 | `blogs_gateway_lines_total{state,reason}` | gateway | lines returned, by mark |
 
 ## Running it

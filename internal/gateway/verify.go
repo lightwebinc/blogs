@@ -310,18 +310,23 @@ func (v *Verifier) Coverage() ([]Coverage, error) {
 	return out, nil
 }
 
-// Retained sums, per stream, the bytes the archive keeps: batches and
-// content. The gateway meters it over time as GB-months.
-func (v *Verifier) Retained() map[string]int64 {
-	out := map[string]int64{}
+// Retained sums, per stream, the bytes the archive keeps: the log content
+// (content/, the lines as sent) and the evidence (batches/, each carrier's
+// BEEF with the funding tree it spends). The gateway meters both over time
+// as GB-months.
+func (v *Verifier) Retained() map[string]map[string]int64 {
+	out := map[string]map[string]int64{}
 	dirs, _ := filepath.Glob(filepath.Join(v.Dir, "*", "*"))
 	for _, root := range dirs {
 		stream := filepath.Base(filepath.Dir(root))
-		for _, sub := range []string{"batches", "content"} {
+		if out[stream] == nil {
+			out[stream] = map[string]int64{"content": 0, "evidence": 0}
+		}
+		for sub, kind := range map[string]string{"batches": "evidence", "content": "content"} {
 			ents, _ := os.ReadDir(filepath.Join(root, sub))
 			for _, e := range ents {
 				if fi, err := e.Info(); err == nil && fi.Mode().IsRegular() {
-					out[stream] += fi.Size()
+					out[stream][kind] += fi.Size()
 				}
 			}
 		}

@@ -358,6 +358,15 @@ func backendFlow(t *testing.T, h *harness, stream, producer, conf string, hosts 
 	gw.Loki, _ = url.Parse(lokiS.URL)
 	gwS := httptest.NewServer(gw.Handler())
 	defer gwS.Close()
+	// Retention metering: archive a holds both streams' content and
+	// evidence; archive b holds the confidential stream's evidence only.
+	ret := gw.Verifier.Retained()
+	if ret[stream]["content"] == 0 || ret[stream]["evidence"] == 0 || ret[conf]["content"] == 0 {
+		t.Fatalf("retained at archive a: %v", ret)
+	}
+	if rb := (&gateway.Verifier{Dir: dirs[1]}).Retained(); rb[conf]["content"] != 0 || rb[conf]["evidence"] == 0 {
+		t.Fatalf("retained at archive b: %v", rb)
+	}
 	for _, cat := range []bool{false, true} {
 		got := queryGateway(t, gwS.URL, cat)
 		if len(got) != 11 {
