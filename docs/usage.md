@@ -170,7 +170,7 @@ tree running out does not stop the stream for a block.
 | `-tree-sats` | 1 | satoshis per batch output. A carrier carries its output's whole value and is never mined, so this value stays with the batch until a sweep |
 | `-ahead` | 25 | mint the next batch tree at this many outputs left |
 | `-anchor-tree-count` | 8 | outputs per anchor fee tree, at most 1000 |
-| `-anchor-tree-sats` | 1000 | satoshis per anchor fee output; one pays an anchor's fee (at the default 100 satoshis per 1000 bytes, the 250 satoshi floor), and the rest returns to the pool as change |
+| `-anchor-tree-sats` | 1000 | satoshis per anchor fee output; one pays an anchor's fee (at the default 100 satoshis per 1000 bytes, the 100 satoshi floor), and the rest returns to the pool as change |
 | `-anchor-ahead` | 2 | mint the next anchor fee tree at this many outputs left |
 | `-poll` | `5s` | how often proofs are asked for |
 
@@ -200,11 +200,11 @@ and `asset`; usable 100 blocks later; `-blocks N` blocks, `-batch N` per
 for coinbase the pool lacks instead of mining).
 
 Fees follow `fee_rate`, by default the network's 100 satoshis per 1000
-bytes with a floor of 250 satoshis per transaction (`fee_floor`), or with
+bytes with a floor of 100 satoshis per transaction (`fee_floor`), or with
 `fee_source = arc` the rate the broadcaster publishes, read once a run and
 held to `fee_min_rate` and `fee_max_rate` ([configuration.md](configuration.md#keys)).
 At the defaults each batch costs about 6 satoshis (its share of its tree's
-fee, and the satoshi it carries) and each anchor about 280.
+fee, and the satoshi it carries) and each anchor about 113.
 
 A tree minted ahead that a run ends without using is recorded in the state,
 and its change is back in the pool. The next `produce`, `anchor` or `sweep`

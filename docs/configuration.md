@@ -71,9 +71,9 @@ paces itself to that. A busy archive or backfill may want an API key
 | `asset` | `BLOGS_ASSET` | none | a node's asset API base URL. With `chain` unset it is the chain view (`asset:<asset>`); on a regtest chain it is also where `fund` reads coinbase |
 | `chain` | `BLOGS_CHAIN` | `woc:main`, `woc:test` by network (above) | the chain view: where transactions, proofs and spends are read. `woc:main`, `woc:test` (WhatsOnChain), `asset:URL` (a node), or several comma separated: `asset:URL,woc:main` asks the node first and WhatsOnChain for what it lacks; `woc:test,spend=asset:URL` takes spends from the node alone (a backend qualified by `tx=`, `proof=`, `spend=` or `known=` serves that one question). A `woc:` backend must name the configured network |
 | `facade` | `BLOGS_FACADE` | none | mode `plane`: the overlay host or bridge a producer publishes to (its `/submit` route), from which the plane delivers to every subscribed host. Refused in mode `unicast` |
-| `fee_dust` | `BLOGS_FEE_DUST` | `250` | the least change kept as an output, in satoshis; change below it goes to the fee |
-| `fee_floor` | `BLOGS_FEE_FLOOR` | `250` | the least fee a transaction pays, in satoshis |
-| `fee_max_rate` | `BLOGS_FEE_MAX_RATE` | none; `1/1` with `fee_source = arc` | the highest rate paid, `SATS/BYTES`: a rate above it is lowered to it |
+| `fee_dust` | `BLOGS_FEE_DUST` | `100` | the least change kept as an output, in satoshis; change below it goes to the fee |
+| `fee_floor` | `BLOGS_FEE_FLOOR` | `100` | the least fee a transaction pays, in satoshis |
+| `fee_max_rate` | `BLOGS_FEE_MAX_RATE` | `100/1000` | the highest rate paid, `SATS/BYTES`: a rate above it is lowered to it |
 | `fee_max_tx` | `BLOGS_FEE_MAX_TX` | none | the most one transaction may pay in fee, in satoshis; a fee above it is refused, not paid |
 | `fee_min_rate` | `BLOGS_FEE_MIN_RATE` | `100/1000` | with `fee_source = arc`: the lowest rate a published policy may set |
 | `fee_policy_urls` | `BLOGS_FEE_POLICY_URLS` | the `settle` installation | with `fee_source = arc`: broadcasters whose published policy (`/v1/policy`, or `<path>/policy`) is read, comma separated; the highest rate among them is used |

@@ -116,7 +116,7 @@ func TestAProducerNeedsNoNode(t *testing.T) {
 	stream, producer := h.producer()
 	h.noNode()
 	r := h.must("", "doctor")
-	for _, want := range []string{"node        none", "chain       woc:test", "fees        100/1000 sat/bytes, floor 250, static"} {
+	for _, want := range []string{"node        none", "chain       woc:test", "fees        100/1000 sat/bytes, floor 100, static"} {
 		if !strings.Contains(r.stdout, want) {
 			t.Fatalf("doctor lacks %q:\n%s", want, r.stdout)
 		}
@@ -358,7 +358,7 @@ func TestChainDefaults(t *testing.T) {
 	// The defaults are reported without asking anything of the network:
 	// the header source and broadcaster lines may fail offline.
 	r := h.run("", "-header-url", h.chainS.URL, "-settle", "tcp:127.0.0.1:9", "doctor")
-	for _, want := range []string{"chain       woc:test", "fees        50/1000 sat/bytes, floor 250, static", "settle      tcp:127.0.0.1:9"} {
+	for _, want := range []string{"chain       woc:test", "fees        50/1000 sat/bytes, floor 100, static", "settle      tcp:127.0.0.1:9"} {
 		if !strings.Contains(r.stdout, want) {
 			t.Fatalf("doctor lacks %q:\n%s\n%s", want, r.stdout, r.stderr)
 		}

@@ -29,7 +29,7 @@ headers and chain lookups come from the public WhatsOnChain API, checked
 against proof of work, and transactions are broadcast through GorillaPool's
 public arcade. Readers and auditors need only the hosts that keep a
 stream: no coin, no home. A producer pays for its own anchors and batches
-from coin it already owns (about 280 satoshis an anchor and 6 a batch):
+from coin it already owns (about 113 satoshis an anchor and 6 a batch):
 install, `init`, pay the fund address from your wallet, `fund`, produce
 ([QUICKSTART.md](QUICKSTART.md#on-mainnet-or-testnet)). A node of your own,
 or a header service you run, can replace any public service

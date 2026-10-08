@@ -22,7 +22,7 @@ block. Nobody, the producer included, can later insert, drop or reorder a
 line inside an anchored interval without the proof failing.
 
 What it does not prove: that a line is true, or when it was written before
-the anchor. What it costs: about 6 satoshis per batch and 280 per anchor
+the anchor. What it costs: about 6 satoshis per batch and 113 per anchor
 at the default fee (section 11).
 
 ## 2. Install
@@ -75,7 +75,7 @@ they answer is checked.
 | Header source | `header_url` | `woc:main` (`woc:test`), the public WhatsOnChain API | every header is hashed and must carry the proof of work it claims, so a lie costs a mined block |
 | Chain view | `chain` | `woc:main` (`woc:test`) | a transaction must hash to its txid, and a proof must verify against the headers; "unspent" and "not mined" are WhatsOnChain's word |
 | Broadcaster | `settle` | `arcade:main` (`arcade:test`), GorillaPool's public arcade | its verdict is held to the chain view's spends |
-| Miner fee | `fee_rate` | `100/1000`, the network's rate, with a 250 satoshi floor per transaction | |
+| Miner fee | `fee_rate` | `100/1000`, the network's rate, with a 100 satoshi floor per transaction | |
 
 The overlay hosts are the one thing you name, because a default there would
 send your batches, or your questions, to a server nobody chose. A producer
@@ -360,9 +360,9 @@ A setting past a cap exits 2 with a message naming the limit; one past a
 recommendation prints `warning: ...` and goes on.
 
 **Cost.** blogs pays the network's rate, 100 satoshis per 1000 bytes, with
-a floor of 250 satoshis per transaction (`fee_rate`, `fee_floor`). A batch
-costs about 6 satoshis and an anchor about 280. A stream anchored every ten
-minutes around the clock spends about 40,000 satoshis a day on anchors; batches follow how much
+a floor of 100 satoshis per transaction (`fee_rate`, `fee_floor`). A batch
+costs about 6 satoshis and an anchor about 113. A stream anchored every ten
+minutes around the clock spends about 16,000 satoshis a day on anchors; batches follow how much
 you log. `blogs doctor` shows the pool; `blogs sweep -retire` returns unused
 funding outputs to it.
 

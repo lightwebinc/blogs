@@ -89,8 +89,8 @@ global flags:
                       rpc:URL or tcp:host:port
   -fee-rate SATS/BYTES  miner fee rate (default 100/1000)
   -fee-source SRC     static (default) or arc: the broadcaster's published rate
-  -fee-floor SATS     least fee a transaction pays (default 250)
-  -fee-max-rate SATS/BYTES  most a rate may be (default none; 1/1 for arc)
+  -fee-floor SATS     least fee a transaction pays (default 100)
+  -fee-max-rate SATS/BYTES  most a rate may be (default 100/1000)
   -mode MODE          plane (submit once to facade; the default) or unicast
                       (submit to each of hosts)
   -network NET        main, test or regtest (default main)

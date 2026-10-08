@@ -98,14 +98,14 @@ a little over a week. The rate cap bounds the growth; a host's retention
 policy bounds the total.
 
 **Cost.** At the default fee of 100 satoshis per 1000 bytes, with a floor
-of 250 satoshis per transaction, a batch costs about 6 satoshis (a batch
+of 100 satoshis per transaction, a batch costs about 6 satoshis (a batch
 funding tree of 100 outputs is about 5,100 bytes and pays about 510, and
-each carrier carries 1 satoshi) and an anchor about 280 (an anchor of about
+each carrier carries 1 satoshi) and an anchor about 113 (an anchor of about
 430 bytes pays the floor, and an anchor fee tree of 8 outputs, about 580
 bytes, pays the floor once for 8 anchors). At the default rate, a stream
 that publishes every second it can spends at most about 1,040,000 satoshis
 a day on batches; at the cap, about 26,000,000. Anchors cost at most one per
-block, about 40,000 satoshis a day.
+block, about 16,000 satoshis a day.
 
 **Archives.** Asking the host again about every stored seq on every pass
 costs one lookup per seq per pass: a million-seq archive polling every

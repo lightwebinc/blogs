@@ -24,7 +24,7 @@ by default, and checks what they answer:
 | Header source (`header_url`) | `woc:main` or `woc:test`, the public WhatsOnChain API | every header is hashed and must carry the proof of work it claims, so a lie costs a mined block |
 | Chain view (`chain`) | `woc:main` or `woc:test` | a transaction must hash to its txid; a proof must verify against the headers. "Unspent" and "not mined" are WhatsOnChain's word |
 | Broadcaster (`settle`) | `arcade:main` or `arcade:test`, GorillaPool's public arcade | its verdict is held to the chain view's spends |
-| Fee rate (`fee_rate`) | 100 satoshis per 1000 bytes, the network's rate, with a 250 satoshi floor per transaction | |
+| Fee rate (`fee_rate`) | 100 satoshis per 1000 bytes, the network's rate, with a 100 satoshi floor per transaction | |
 
 A node of your own (`chain = asset:URL`), a header service you run
 (`header_url = bhs:URL` or `arcade:URL`), or another broadcaster
@@ -128,11 +128,11 @@ address (`m…` or `n…`); pay it from a testnet wallet or faucet.
 ### What it costs
 
 blogs pays the network's rate, 100 satoshis per 1000 bytes, with a floor
-of 250 satoshis per transaction. Each batch costs about 6 satoshis (its
+of 100 satoshis per transaction. Each batch costs about 6 satoshis (its
 share of the funding tree it spends, and the 1 satoshi it carries); a
 carrier is never mined and pays no fee of its own. Each anchor costs about
-280: the floor, and its share of the anchor fee tree. A stream anchored
-every ten minutes around the clock spends about 40,000 satoshis
+113: the floor, and its share of the anchor fee tree. A stream anchored
+every ten minutes around the clock spends about 16,000 satoshis
 (0.0004 BSV) a day on anchors; the batch cost follows how much you log.
 About 50,000 satoshis starts a stream: the first funding trees, and a
 reserve so the next tree is minted before the current one runs out.
