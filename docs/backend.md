@@ -83,10 +83,14 @@ no sender's request waits for a block.
 interval (`-interval`) is anchored, exactly as `blogs produce` does
 ([limits.md](limits.md)). The fee policy is the home's (default 0.1 sat a
 byte, [configuration.md](configuration.md)). Every carrier carries its
-funding tree, so `ingest` defaults to trees of 16 outputs (`-tree-count`,
-minted ahead at 8 left), where `produce` uses 100: for a logging stream's
-many small batches this keeps the evidence an archive stores close to the
-size of the lines, at the price of a mined tree every 16 batches.
+funding tree, so `ingest` defaults to trees of 32 outputs (`-tree-count`,
+the next minted ahead at 24 left), where `produce` uses 100: for a logging
+stream's many small batches this cuts the funding tree each carrier
+repeats to about a third, at the price of a mined tree every 32 batches. A
+tree must last until the next one mines: size `-tree-count` to at least
+twice the batches a stream publishes in a block interval, or senders wait
+for a tree (and on a 10 minute chain a busy stream needs the larger trees
+`produce` uses).
 
 ## Confidential records
 

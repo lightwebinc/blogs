@@ -54,7 +54,7 @@ back and checks each line against the archive's roots.
 One process drives both streams from one home and holds the home's lock.`
 
 // IngestTreeCount is ingest's default -tree-count.
-const IngestTreeCount = 16
+const IngestTreeCount = 32
 
 func cmdIngest(ctx context.Context, g *global, args []string) error {
 	fs := g.flagSet("ingest", ingestHelp)
@@ -83,7 +83,7 @@ func cmdIngest(ctx context.Context, g *global, args []string) error {
 	// A logging stream publishes many small batches, and every carrier's
 	// BEEF carries its whole funding tree: a smaller tree keeps the
 	// evidence an archive stores near the size of the lines.
-	for name, v := range map[string]string{"tree-count": strconv.Itoa(IngestTreeCount), "ahead": strconv.Itoa(IngestTreeCount / 2)} {
+	for name, v := range map[string]string{"tree-count": strconv.Itoa(IngestTreeCount), "ahead": strconv.Itoa(IngestTreeCount * 3 / 4)} {
 		fl := fs.Lookup(name)
 		_ = fl.Value.Set(v)
 		fl.DefValue = v
