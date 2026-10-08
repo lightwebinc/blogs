@@ -197,7 +197,7 @@ Shipper settings, in short:
 
 | Shipper | Setting |
 | --- | --- |
-| rsyslog | `omfwd`, `protocol="tcp"`, `TCP_Framing="octet-counted"`, `template="RSYSLOG_SyslogProtocol23Format"`; for TLS add `StreamDriver="gtls" StreamDriverMode="1" StreamDriverAuthMode="x509/name"` and the client certificate |
+| rsyslog | `omfwd`, `protocol="tcp"`, `TCP_Framing="octet-counted"`, `template="RSYSLOG_SyslogProtocol23Format"`; for TLS add `StreamDriver="ossl"` (or `"gtls"`, whichever driver the build ships), `StreamDriverMode="1" StreamDriverAuthMode="x509/name"` and the client certificate |
 | OpenTelemetry Collector | exporter `otlphttp` with `logs_endpoint: http://<sidecar>/v1/logs` |
 | Grafana Alloy, Promtail, Fluent Bit, Vector | Loki output with URL `http://<sidecar>/loki/api/v1/push` |
 

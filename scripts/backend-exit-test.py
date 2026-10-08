@@ -38,8 +38,8 @@ def get(url, headers=None):
         return json.load(r)
 
 
-def query(base, logql, minutes, limit=1000, categorized=True):
-    end = time.time_ns()
+def query(base, logql, minutes, limit=1000, categorized=True, end=None):
+    end = end or time.time_ns()
     q = urllib.parse.urlencode({"query": logql, "start": end - minutes * 60 * 10**9, "end": end, "limit": limit, "direction": "backward"})
     headers = {"X-Loki-Response-Encoding-Flags": "categorize-labels"} if categorized else {}
     ans = get(base.rstrip("/") + "/loki/api/v1/query_range?" + q, headers)
@@ -74,19 +74,25 @@ def check_roots(a):
     return ok, report
 
 
-def sample(a):
-    lines = query(a.gateway, a.selector, a.minutes)
+def tally(lines):
     states = {}
     for l in lines:
         k = l["meta"].get("blogs_state", "?") + "/" + l["meta"].get("blogs_reason", "")
         states[k] = states.get(k, 0) + 1
+    return states
+
+
+def sample(a):
+    recent = query(a.gateway, a.selector, a.minutes, limit=a.limit)
     # Lines older than the settle time must be verified: an interval is
-    # anchored, mined and archived by then.
-    cutoff = time.time_ns() - a.settle * 10**9
-    old_unverified = [l for l in lines if int(l["ts"]) < cutoff and l["meta"].get("blogs_state") != "verified"
-                      and l["meta"].get("blogs_reason") not in ("retracted", "altered", "relabeled")]
-    return not old_unverified, {"lines": len(lines), "states": states, "settled_unverified": len(old_unverified),
-                                "example": old_unverified[0]["meta"] if old_unverified else None}
+    # anchored, mined and archived by then. They are asked for in a window
+    # of their own, ending the settle time ago.
+    settled = query(a.gateway, a.selector, a.minutes, limit=a.limit, end=time.time_ns() - a.settle * 10**9)
+    bad = [l for l in settled if l["meta"].get("blogs_state") != "verified"
+           and l["meta"].get("blogs_reason") not in ("retracted", "altered", "relabeled")]
+    return not bad and len(settled) > 0, {"recent": {"lines": len(recent), "states": tally(recent)},
+                                          "settled": {"lines": len(settled), "states": tally(settled)},
+                                          "settled_unverified": len(bad), "example": bad[0]["meta"] if bad else None}
 
 
 def cmd_roots(a):
@@ -96,7 +102,7 @@ def cmd_roots(a):
 
 
 def cmd_tamper(a):
-    lines = query(a.gateway, a.selector, a.minutes, limit=200)
+    lines = query(a.gateway, a.selector, a.minutes, limit=200, end=time.time_ns() - a.settle * 10**9)
     target = next((l for l in lines if l["meta"].get("blogs_state") == "verified"), None)
     if target is None:
         print(json.dumps({"check": "tamper", "ok": False, "why": "no verified line to alter"}))
@@ -191,6 +197,7 @@ def main():
     p.add_argument("--selector", default='{service_name=~".+"}')
     p.add_argument("--minutes", type=int, default=30, help="how far back the gateway is asked")
     p.add_argument("--settle", type=int, default=600, help="seconds after which a line must be verified")
+    p.add_argument("--limit", type=int, default=5000, help="lines asked of the gateway per window")
     p.add_argument("--seq", type=int, default=0, help="retract: the seq (default: the middle of the last interval)")
     p.add_argument("--wait", type=int, default=900, help="retract: seconds to wait for the receipts")
     p.add_argument("--duration", type=int, default=3600)
