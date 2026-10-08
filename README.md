@@ -67,6 +67,7 @@ needed) with two hosts and a verified interval in about five minutes.
 | Look up a command, its flags, an exit code or a message | [docs/usage.md](docs/usage.md) |
 | Run without the multicast plane, and repair a host | [docs/unicast.md](docs/unicast.md) |
 | Know the defaults and caps, and why each is set where it is | [docs/limits.md](docs/limits.md) |
+| Run it as a logging backend: syslog, OTLP and Loki push in, Grafana out, every line marked verified | [docs/backend.md](docs/backend.md) |
 | Run a host other people reach | [docs/self-host.md](docs/self-host.md) |
 | Load the module into an overlay host you already run | [docs/host.md](docs/host.md) |
 | Implement a compatible producer, reader or host | [docs/spec.md](docs/spec.md) (the specification), [docs/frozen.md](docs/frozen.md) |
@@ -94,6 +95,7 @@ make docker-build      # the command's and the local chain's images
 make docker-smoke      # both images, offline and together
 make e2e-client  REFERENCE_HOST=/path/to/host   # the command against two reference hosts (plane-style)
 make e2e-unicast REFERENCE_HOST=/path/to/host   # the same in unicast mode
+make e2e-backend REFERENCE_HOST=/path/to/host   # the logging backend against three reference hosts
 make quickstart-check  # QUICKSTART.md, run as written, in Docker Compose
 ```
 

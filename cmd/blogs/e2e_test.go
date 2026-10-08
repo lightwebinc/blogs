@@ -62,7 +62,7 @@ func mysql(t *testing.T) int {
 	port = port[strings.LastIndex(strings.Split(port, "\n")[0], ":")+1:]
 	p, _ := strconv.Atoi(strings.Split(port, "\n")[0])
 	for i := 0; i < 120; i++ {
-		if exec.Command("docker", "exec", id, "mysql", "-h127.0.0.1", "-uroot", "-p"+e2ePassword, "-e", "create database if not exists overlay_b").Run() == nil {
+		if exec.Command("docker", "exec", id, "mysql", "-h127.0.0.1", "-uroot", "-p"+e2ePassword, "-e", "create database if not exists overlay_b; create database if not exists overlay_c").Run() == nil {
 			return p
 		}
 		time.Sleep(time.Second)
@@ -148,11 +148,17 @@ func refHosts(t *testing.T, chainURL, stream, producer string, names ...string) 
 	for _, name := range names {
 		port := freePort(t)
 		rh := &refHost{t: t, dir: dir, node: node, name: name, port: port, db: db, url: fmt.Sprintf("http://127.0.0.1:%d", port)}
+		// stream may name several streams, comma separated, each admitting
+		// only this producer.
+		var topics, admit []string
+		for _, s := range strings.Split(stream, ",") {
+			topics, admit = append(topics, "tm_log_"+s), append(admit, s+"="+producer)
+		}
 		rh.env = []string{
 			"PATH=" + os.Getenv("PATH"),
-			"OVERLAY_TOPICS=tm_log_" + stream,
+			"OVERLAY_TOPICS=" + strings.Join(topics, ","),
 			"OVERLAY_MODULES=" + module,
-			"BLOGS_STREAMS=" + stream + "=" + producer,
+			"BLOGS_STREAMS=" + strings.Join(admit, ","),
 			fmt.Sprintf("OVERLAY_KNEX_URL=mysql://root:%s@127.0.0.1:%d/overlay_%s", e2ePassword, db, name),
 			"OVERLAY_CHAIN_TRACKER_URL=" + chainURL,
 			"OVERLAY_ADMIN_TOKEN=blogs-e2e",
@@ -164,6 +170,20 @@ func refHosts(t *testing.T, chainURL, stream, producer string, names ...string) 
 		hosts[name] = rh
 	}
 	return hosts
+}
+
+// The logging backend against three reference hosts loading the bundle,
+// in mode unicast: the same flow as TestBackendSidecarToGateway.
+//
+//	make e2e-backend REFERENCE_HOST=/path/to/reference-host NODE=/path/to/node24
+func TestBackendE2E(t *testing.T) {
+	e2eSetup(t)
+	h := newHarness(t)
+	stream, producer := h.producer()
+	r := h.must("", "stream", "new", "sec")
+	conf := streamLine.FindStringSubmatch(r.stdout)[1]
+	hosts := refHosts(t, h.chainS.URL, stream+","+conf, producer, "a", "b", "c")
+	backendFlow(t, h, stream, producer, conf, []string{hosts["a"].url, hosts["b"].url, hosts["c"].url})
 }
 
 // e2eSetup skips without a reference host, and otherwise shortens the

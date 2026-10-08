@@ -150,6 +150,11 @@ type Engine struct {
 	// Note receives progress lines; Verbose adds one per batch.
 	Note    func(format string, args ...any)
 	Verbose bool
+	// Published, when set, is told of each batch this run builds and
+	// publishes: its seq, its carrier (the commitment, as a txid) and its
+	// lines. A carrier a previous run persisted and this one republishes
+	// is not reported.
+	Published func(seq uint64, carrier string, raw []byte)
 
 	topic       string
 	payer       *producer.Payer
@@ -492,6 +497,9 @@ func (e *Engine) publishOne(ctx context.Context, b Batch, content []byte) error 
 	}
 	if e.Verbose {
 		e.note("seq %d: %d line(s), %d byte(s), carrier %s", rec.Seq, b.Count, len(b.Raw), chainhash.Hash(c))
+	}
+	if e.Published != nil {
+		e.Published(rec.Seq, chainhash.Hash(c).String(), b.Raw)
 	}
 	return nil
 }

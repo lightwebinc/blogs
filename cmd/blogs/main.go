@@ -57,6 +57,10 @@ producer commands (a producer home):
   sweep <stream> (-retract-seqs A-B | -retract-tree TXID | -retire) [-yes]
                                retract batches, or retire unused funding outputs
   doctor                       local state and reachability; reads only
+  ingest -stream S [-confidential-stream S2] [doors] [-loki URL]
+                               the logging sidecar: syslog, OTLP logs and Loki
+                               push in, signed batches out, each line forwarded
+                               to Loki with where it was published
 
 reader commands (no home needed):
   read <stream> <producer>     fetch, verify and print a stream's batches
@@ -69,6 +73,9 @@ reader commands (no home needed):
   archive <stream> <producer> -dir DIR [-host URL] [-recheck N | -recheck-all]
                                keep a host's copy of a stream, with interval
                                proofs, in local files
+  gateway -archive DIR -loki URL
+                               the Loki API in front of Loki, marking each line
+                               verified or unverified against the archive
 
   version                      print the version
 
@@ -166,6 +173,8 @@ func init() {
 		"backfill":        cmdBackfill,
 		"sweep":           cmdSweep,
 		"archive":         cmdArchive,
+		"ingest":          cmdIngest,
+		"gateway":         cmdGateway,
 	}
 }
 

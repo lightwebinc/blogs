@@ -53,6 +53,8 @@ variables.
 | `sweep <stream>` | yes | as `produce`; `hosts` for `-retract-seqs`, and to reach hosts off the plane | retracts batches by sweeping their funding outputs, or retires unused funding outputs to the pool |
 | `backfill <stream> <producer>` | no | `-from` and `-to`, or two or more `hosts`; `chain` for `-sweeps`, and for a fee tree no sibling serves | fills a host's holes from its siblings, or brings every configured host into step; `-sweeps` also carries sweeps |
 | `archive <stream> <producer>` | no | `-dir`, a host, `header_url`; `chain` to find retractions, and for a fee tree the host does not serve | keeps one host's copy of a stream, with each interval's proof and each anchor's fee tree, in local files |
+| `ingest -stream S` | yes | as `produce`; `-loki` to forward | the logging sidecar: syslog, OTLP logs and Loki push to batches on one stream, or two with a digest-only confidential one; every published line forwarded to Loki with its placement ([backend.md](backend.md)) |
+| `gateway -archive DIR -loki URL` | no | an archive directory, a Loki | the Loki API in front of Loki, each returned line marked verified or unverified against the archive's roots; coverage and metering ([backend.md](backend.md)) |
 | `version` | no | nothing | prints the version |
 
 `<stream>` is always the full identifier `<name>_<suffix>`; the readable
@@ -758,6 +760,7 @@ Results go to stdout; progress and errors to stderr, errors as one line
 make verify                                    # includes the command's tests
 make e2e-client  REFERENCE_HOST=/path/to/host  # the command against two reference hosts
 make e2e-unicast REFERENCE_HOST=/path/to/host  # the same in mode unicast
+make e2e-backend REFERENCE_HOST=/path/to/host  # the logging backend against three reference hosts
 make docker-smoke                              # the images, offline and with the local chain
 make quickstart-check                          # QUICKSTART.md, in Docker Compose
 ```
@@ -794,6 +797,15 @@ both archives agreeing, and a retraction reaching both, recorded by both
 archives and proven across at both hosts. Both need Docker for
 the hosts' MySQL and a reference host directory holding its compiled
 `dist/index.js` and its `node_modules`.
+
+`make verify` also runs the logging backend ([backend.md](backend.md)) in
+process against three stand-in hosts and a stand-in Loki: records by every
+door (syslog over TCP, OTLP in JSON, Loki push in JSON and in snappy
+protobuf), a confidential record on the digest-only stream, three archives
+agreeing on every root, the gateway marking every line verified in both
+answer shapes, an altered and a relabeled line in the store caught, and a
+retraction shown as a receipted hole. `make e2e-backend` runs the same
+against three reference hosts loading the bundle.
 
 `make quickstart-check` runs [QUICKSTART.md](../QUICKSTART.md) as written
 in a throwaway Compose project, from the three images (`make docker-build`,

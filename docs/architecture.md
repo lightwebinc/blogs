@@ -100,6 +100,9 @@ Readers are the same in both. [unicast.md](unicast.md) has the tradeoff.
 | `internal/state` | a stream's durable state in the producer home |
 | `internal/reader` | the `ls_log` client that verifies every answer |
 | `internal/archive` | the archive's files and interval proofs |
+| `internal/ingest` | the logging sidecar: the doors (syslog, OTLP logs, Loki push), the line form, batching onto the producer engine, forwarding to Loki ([backend.md](backend.md)) |
+| `internal/gateway` | the read gateway: the Loki API proxy that marks lines against an archive, coverage, retention metering |
+| `internal/metrics` | counters and gauges in the Prometheus text format |
 | `internal/unicast` | submitting to each host, with retries and a quorum |
 | `internal/testchain` | in-process stand-ins for the chain and a host, for tests |
 | `host/` | the host module in TypeScript: `tm_log_<stream>` topic managers and the `ls_log` lookup service, bundled into one file for a reference overlay host ([host.md](host.md)) |

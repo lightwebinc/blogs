@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/lightwebinc/bcommon/bwallet"
 	"github.com/lightwebinc/bcommon/termsafe"
 
 	"github.com/lightwebinc/blogs/internal/config"
@@ -112,14 +113,8 @@ func (g *global) checkLimits(f *produceFlags, o produce.Options, legs produce.Le
 }
 
 func (g *global) engine(ctx context.Context, stream string, f *produceFlags, o produce.Options) (*produce.Engine, func(), error) {
-	if err := logrec.CheckStream(stream); err != nil {
-		return nil, nil, usage("%q is not a stream identifier <name>_<suffix>", stream)
-	}
-	if f.treeCount < 1 || f.anchorTreeCount < 1 || f.treeSats < 1 || f.anchorTreeSats < 1 {
-		return nil, nil, usage("tree counts and satoshis must be at least 1")
-	}
-	if f.poll <= 0 {
-		return nil, nil, usage("-poll must be positive")
+	if err := checkEngineFlags(stream, f); err != nil {
+		return nil, nil, err
 	}
 	legs, err := g.legs()
 	if err != nil {
@@ -136,18 +131,43 @@ func (g *global) engine(ctx context.Context, stream string, f *produceFlags, o p
 	if err != nil {
 		return nil, nil, err
 	}
-	st, err := state.Load(g.cfg.Home, stream)
+	e, err := g.openEngine(ctx, stream, f, o, w, legs)
 	if err != nil {
 		unlock()
-		if errors.Is(err, state.ErrNoStream) {
-			return nil, nil, usage("this home holds no stream %s (create one with `blogs stream new <name>`; a producer that lost a stream's state starts a new stream, never the old one again)", stream)
-		}
 		return nil, nil, err
+	}
+	return e, unlock, nil
+}
+
+// checkEngineFlags checks what an engine's flags must be before anything
+// is opened.
+func checkEngineFlags(stream string, f *produceFlags) error {
+	if err := logrec.CheckStream(stream); err != nil {
+		return usage("%q is not a stream identifier <name>_<suffix>", stream)
+	}
+	if f.treeCount < 1 || f.anchorTreeCount < 1 || f.treeSats < 1 || f.anchorTreeSats < 1 {
+		return usage("tree counts and satoshis must be at least 1")
+	}
+	if f.poll <= 0 {
+		return usage("-poll must be positive")
+	}
+	return nil
+}
+
+// openEngine starts an engine on a stream of a home the caller has locked,
+// with the wallet and legs the caller opened: one process may drive
+// several streams of one home this way.
+func (g *global) openEngine(ctx context.Context, stream string, f *produceFlags, o produce.Options, w *bwallet.Embedded, legs produce.Legs) (*produce.Engine, error) {
+	st, err := state.Load(g.cfg.Home, stream)
+	if err != nil {
+		if errors.Is(err, state.ErrNoStream) {
+			return nil, usage("this home holds no stream %s (create one with `blogs stream new <name>`; a producer that lost a stream's state starts a new stream, never the old one again)", stream)
+		}
+		return nil, err
 	}
 	fees, from, err := g.fees(ctx, legs.Arcade)
 	if err != nil {
-		unlock()
-		return nil, nil, err
+		return nil, err
 	}
 	if from != "" {
 		g.say("fee rate %s sat/bytes from %s", fees.Rate, from)
@@ -161,15 +181,13 @@ func (g *global) engine(ctx context.Context, stream string, f *produceFlags, o p
 	o.AnchorBatches = f.anchorBatches
 	e, err := produce.New(st, w.Signer(), w.Pool, legs, o)
 	if err != nil {
-		unlock()
-		return nil, nil, usage("%v", err)
+		return nil, usage("%v", err)
 	}
 	e.Note, e.Verbose = g.say, g.verbose
 	if err := e.Start(ctx); err != nil {
-		unlock()
-		return nil, nil, err
+		return nil, err
 	}
-	return e, unlock, nil
+	return e, nil
 }
 
 func cmdProduce(ctx context.Context, g *global, args []string) error {

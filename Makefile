@@ -8,7 +8,7 @@
 #
 #	make test NODE=/path/to/node24
 
-.PHONY: verify test go-test ts-test ts-check ts-build module node-check vet fmt-check deps-check licences licences-update lint vectors vectors-check e2e e2e-client e2e-unicast blogs devchain docker-build docker-build-host docker-smoke docker-smoke-host quickstart-check
+.PHONY: verify test go-test ts-test ts-check ts-build module node-check vet fmt-check deps-check licences licences-update lint vectors vectors-check e2e e2e-client e2e-unicast e2e-backend blogs devchain docker-build docker-build-host docker-smoke docker-smoke-host quickstart-check
 
 NODE ?= node
 TSC := $(NODE) node_modules/typescript/bin/tsc
@@ -142,6 +142,19 @@ e2e-unicast: ts-build
 	@test -n "$(REFERENCE_HOST)" || { echo "set REFERENCE_HOST=/path/to/reference-host"; exit 1; }
 	BLOGS_E2E_REFERENCE_HOST=$(abspath $(REFERENCE_HOST)) BLOGS_E2E_NODE=$(NODE) \
 		GOWORK=off go test -tags e2e -count=1 -v -run 'TestClientE2EUnicast$$' ./cmd/blogs/
+
+# The logging backend: blogs ingest taking records by syslog, OTLP and Loki
+# push into two streams (one digest-only) published in mode unicast to three
+# reference hosts loading the bundle, forwarding each line to a stand-in
+# Loki; three archives, one per host, agreeing on every root; blogs gateway
+# marking every line verified, an altered line altered, and a retracted
+# batch's lines retracted with the receipt in its coverage.
+#
+#	make e2e-backend REFERENCE_HOST=/path/to/reference-host
+e2e-backend: ts-build
+	@test -n "$(REFERENCE_HOST)" || { echo "set REFERENCE_HOST=/path/to/reference-host"; exit 1; }
+	BLOGS_E2E_REFERENCE_HOST=$(abspath $(REFERENCE_HOST)) BLOGS_E2E_NODE=$(NODE) \
+		GOWORK=off go test -tags e2e -count=1 -v -run 'TestBackendE2E$$' ./cmd/blogs/
 
 # Write both vector sets: the Go codec's under testdata/vectors, the
 # TypeScript codec's under testdata/ts. A change to either is a change to
