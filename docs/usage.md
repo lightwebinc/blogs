@@ -23,7 +23,7 @@ against block headers it chooses, before it prints a line.
 
 ## Build
 
-Go 1.27.1 or later, or Docker.
+Go 1.27.2 or later, or Docker.
 
 ```bash
 make blogs              # bin/blogs

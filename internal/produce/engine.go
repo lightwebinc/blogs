@@ -43,10 +43,10 @@ import (
 	"github.com/lightwebinc/bcommon/producer"
 	"github.com/lightwebinc/bcommon/publish"
 
+	"github.com/lightwebinc/bcommon/unicast"
 	"github.com/lightwebinc/blogs/internal/limits"
 	"github.com/lightwebinc/blogs/internal/logrec"
 	"github.com/lightwebinc/blogs/internal/state"
-	"github.com/lightwebinc/blogs/internal/unicast"
 )
 
 // Params are the carrier parameters of every blogs carrier.
@@ -528,7 +528,7 @@ var Retries = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
 func (e *Engine) publishCarrier(ctx context.Context, seq uint64, beef []byte, resumed bool) error {
 	if e.Legs.Hosts != nil {
 		// Unicast: every host is sent the carrier and retried on its own.
-		o := e.Legs.Hosts.Send(ctx, fmt.Sprintf("seq %d", seq), e.topic, beef, 0)
+		o := e.Legs.Hosts.Send(ctx, fmt.Sprintf("seq %d", seq), e.topic, beef, 0, nil)
 		if err := o.Err(); err != nil {
 			return fmt.Errorf("seq %d: publish: %w; the carrier is persisted and a later run publishes it", seq, err)
 		}
@@ -776,7 +776,7 @@ func (e *Engine) advance(ctx context.Context) error {
 		return err
 	}
 	if e.Legs.Hosts != nil {
-		o := e.Legs.Hosts.Send(ctx, fmt.Sprintf("anchor interval %d", inf.Interval), e.topic, beef, 0)
+		o := e.Legs.Hosts.Send(ctx, fmt.Sprintf("anchor interval %d", inf.Interval), e.topic, beef, 0, nil)
 		if err := o.Err(); err != nil {
 			e.note("anchor interval %d: publish failed (%v); published on the next tick", inf.Interval, err)
 			return nil

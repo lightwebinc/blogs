@@ -406,7 +406,7 @@ func (e *Engine) FinishSweeps(ctx context.Context) error {
 			if e.Legs.Hosts != nil {
 				// No lookup class names the sweep of a batch, so no backfill repairs a
 				// host that missed one: every host must take it.
-				o := e.Legs.Hosts.Send(ctx, "sweep "+sw.Txid, e.topic, beef, len(e.Legs.Hosts.Hosts))
+				o := e.Legs.Hosts.Send(ctx, "sweep "+sw.Txid, e.topic, beef, len(e.Legs.Hosts.Hosts), nil)
 				if err := o.Err(); err != nil {
 					return fmt.Errorf("sweep %s: publish: %w; it is mined and persisted, and the next sweep publishes it to every host", sw.Txid, err)
 				}
@@ -418,7 +418,7 @@ func (e *Engine) FinishSweeps(ctx context.Context) error {
 				// the plane receives it only directly, since no lookup
 				// class serves a sweep. Every host named must take it.
 				if d := e.Legs.SweepHosts; d != nil && len(d.Hosts) > 0 {
-					o := d.Send(ctx, "sweep "+sw.Txid, e.topic, beef, len(d.Hosts))
+					o := d.Send(ctx, "sweep "+sw.Txid, e.topic, beef, len(d.Hosts), nil)
 					if err := o.Err(); err != nil {
 						return fmt.Errorf("sweep %s: published to the facade, but not to every host directly: %w; it is mined and persisted, and the next sweep sends it again", sw.Txid, err)
 					}

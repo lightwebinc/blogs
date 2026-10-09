@@ -75,7 +75,7 @@ needed) with two hosts and a verified interval in about five minutes.
 ## Install
 
 ```bash
-go install github.com/lightwebinc/blogs/cmd/blogs@latest      # Go 1.27.1 or later
+go install github.com/lightwebinc/blogs/cmd/blogs@latest      # Go 1.27.2 or later
 ```
 
 | | |

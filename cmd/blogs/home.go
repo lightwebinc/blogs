@@ -24,12 +24,12 @@ import (
 	"github.com/lightwebinc/bcommon/publish"
 	"github.com/lightwebinc/bcommon/termsafe"
 
+	"github.com/lightwebinc/bcommon/unicast"
 	"github.com/lightwebinc/blogs/internal/config"
 	"github.com/lightwebinc/blogs/internal/limits"
 	"github.com/lightwebinc/blogs/internal/logrec"
 	"github.com/lightwebinc/blogs/internal/produce"
 	"github.com/lightwebinc/blogs/internal/state"
-	"github.com/lightwebinc/blogs/internal/unicast"
 )
 
 // openWallet opens the home's embedded wallet.

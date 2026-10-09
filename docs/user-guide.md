@@ -34,7 +34,7 @@ at the default fee (section 11).
   Mount a named volume at `/home/nonroot/.blogs` and pass settings as
   `BLOGS_<KEY>` variables.
 - **Go**: `go install github.com/lightwebinc/blogs/cmd/blogs@latest`
-  (Go 1.27.1 or later).
+  (Go 1.27.2 or later).
 - **Release binaries**: static `blogs` for Linux and macOS (amd64, arm64)
   on the [releases page](https://github.com/lightwebinc/blogs/releases),
   with `SHA256SUMS`.

@@ -54,12 +54,13 @@ fmt-check:
 # arriving by accident is invisible in a diff that only adds an import.
 #  - go.mod and go.sum are tidy, so their direct and indirect markers can be
 #    trusted, and no module is replaced;
-#  - the direct set is exactly go-sdk and bcommon;
+#  - the direct set is exactly go-sdk, bcommon and bcommon's devkit
+#    (imported only by tests and the devchain and vectors commands);
 #  - go-sdk resolves to exactly v1.7.1, the version bcommon pins and the
 #    vectors were made with. Minimal version selection takes the higher of
 #    two pins, so a library asking for a later go-sdk would change what
 #    blogs ships without a line changing here.
-DEPS_DIRECT := github.com/bsv-blockchain/go-sdk github.com/lightwebinc/bcommon
+DEPS_DIRECT := github.com/bsv-blockchain/go-sdk github.com/lightwebinc/bcommon github.com/lightwebinc/bcommon/devkit
 DEPS_SDK    := github.com/bsv-blockchain/go-sdk v1.7.1
 
 deps-check:
