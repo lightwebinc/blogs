@@ -119,7 +119,9 @@ control. `blogs sweep` does the same with the sidecar stopped.
 
 With `-loki`, every published line is pushed to Loki's push API, in the
 order published, unchanged, under its labels, with its placement as
-structured metadata:
+structured metadata. `-loki-tenant ID` sends `ID` as the
+`X-Scope-OrgID` header on every push, for a multi-tenant Loki; unset, no
+header is sent:
 
 | Name | Value |
 | --- | --- |
@@ -204,6 +206,15 @@ counters (`increase()` over the billing period), never as absolute totals.
 | `blogs_retained_bytes{stream,kind}` | gateway | bytes the archive keeps now: `kind="content"`, the lines as each batch records their size (the same for a digest-only stream whether or not the archive holds its content), and `kind="evidence"`, each carrier's BEEF on disk with the funding tree it spends, a cost and not billed |
 | `blogs_retained_byte_seconds_total{stream}` | gateway | retained **content** integrated over time, measured every `-meter`: divide by 2.592e15 for **GB-months** (30-day months) |
 | `blogs_gateway_lines_total{state,reason}` | gateway | lines returned, by mark |
+
+Error counters, for alerting rather than billing:
+
+| Metric | Where | Meaning |
+| --- | --- | --- |
+| `blogs_ingest_publish_errors_total{stream}` | sidecar | publishes that failed; their lines were refused to the sender |
+| `blogs_ingest_anchor_errors_total{stream}` | sidecar | anchor ticks that failed; the next tick tries again |
+| `blogs_ingest_unsafe_lines_total{stream}` | sidecar | lines holding characters a terminal must be protected from, published and counted |
+| `blogs_forward_errors_total` | sidecar | pushes to Loki that failed and were retried or dropped |
 
 ## Running it
 

@@ -27,6 +27,12 @@ jobs:
             goarch: arm64
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The TypeScript codec package other applications vendor is the tag's:
+      # its version must be the tag's, or a consumer's version check fails.
+      - name: the codec package's version is the tag's
+        run: |
+          v=$(node -p "require('./host/package.json').version")
+          [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "host/package.json is $v, the tag is $GITHUB_REF_NAME"; exit 1; }
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           # go.mod's Go version and the Dockerfile builder's toolchain.

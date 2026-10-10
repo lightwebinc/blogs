@@ -10,7 +10,7 @@ map.
 ```mermaid
 flowchart LR
   P["producer<br/>blogs produce"] -->|"carriers, trees, anchors<br/>/submit"| F["facade (plane)<br/>or each host (unicast)"]
-  F --> H1["overlay host<br/>tm_log, ls_log"]
+  F --> H1["overlay host<br/>tm_log_#lt;name#gt;_#lt;suffix#gt;, ls_log"]
   F --> H2["overlay host"]
   P -->|"funding trees, anchors, sweeps"| B["broadcaster<br/>settle: arcade (default), ARC, node RPC, ingress"]
   B --> C[("BSV chain")]

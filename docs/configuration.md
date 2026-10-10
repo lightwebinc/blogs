@@ -62,6 +62,7 @@ What is trusted, and what is checked:
 WhatsOnChain's free tier allows 3 requests a second, and the chain view
 paces itself to that. A busy archive or backfill may want an API key
 (`woc_key`, with `woc_rate` set to its plan's rate) or a node.
+The backend forms these keys accept are bcommon's: see [chain views](https://github.com/lightwebinc/bcommon/blob/main/docs/configuration.md#chain-views-nodeapi-interfaces).
 
 ## Keys
 
