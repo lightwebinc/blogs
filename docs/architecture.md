@@ -19,6 +19,11 @@ flowchart LR
   R -->|"ls_log lookups"| H2
   R -->|"headers, proof of work checked"| S["header source<br/>WhatsOnChain (default), bhs, arcade, chaintracks"]
   H1 -->|headers| S
+  %% The last node is an invisible spacer in the rightmost rank: the rendered
+  %% viewer places its zoom and pan controls over the bottom-right corner.
+  H1 ~~~ pad
+  pad["&nbsp;<br/>&nbsp;<br/>&nbsp;<br/>&nbsp;<br/>&nbsp;"]:::pad
+  classDef pad fill:none,stroke:none,color:transparent
 ```
 
 | Party | Holds | Trusted for |

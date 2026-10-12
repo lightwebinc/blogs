@@ -13,6 +13,11 @@ flowchart LR
   C --> H["host: blogs-host"]
   H --> D[(mysql)]
   H -->|"headers, proof of work checked"| W[header source]
+  %% The last node is an invisible spacer in the rightmost rank: the rendered
+  %% viewer places its zoom and pan controls over the bottom-right corner.
+  H ~~~ pad
+  pad["&nbsp;<br/>&nbsp;<br/>&nbsp;<br/>&nbsp;<br/>&nbsp;"]:::pad
+  classDef pad fill:none,stroke:none,color:transparent
 ```
 
 To try everything on one machine first, with no coin and no domain, use

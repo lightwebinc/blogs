@@ -159,6 +159,11 @@ flowchart LR
   B -->|"settle, proofs, headers"| C["chain (local)"]
   A -->|headers| C
   H -->|headers| C
+  %% The last node is an invisible spacer in the rightmost rank: the rendered
+  %% viewer places its zoom and pan controls over the bottom-right corner.
+  A ~~~ pad
+  pad["&nbsp;<br/>&nbsp;<br/>&nbsp;<br/>&nbsp;<br/>&nbsp;"]:::pad
+  classDef pad fill:none,stroke:none,color:transparent
 ```
 
 ### 1. Start the local chain
