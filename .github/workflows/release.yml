@@ -13,7 +13,7 @@ jobs:
   # binary is a release nobody can use. Four platforms, each a static
   # binary in a tarball beside the licenses.
   build:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, lax]
     strategy:
       matrix:
         include:
@@ -69,7 +69,7 @@ jobs:
 
   release:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, lax]
     permissions:
       contents: write
     steps:
