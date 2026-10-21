@@ -14,12 +14,16 @@
 # producer key must be in each host's configuration before run). It writes
 # DEMO_DIR/stream.env and prints the BLOGS_STREAMS entry and topic.
 #
-# run publishes DEMO_LINES new lines on the stream and anchors them, then:
+# run publishes DEMO_LINES new lines on the stream and anchors them, naming
+# A, B and C as the producer's hosts (in mode plane a host named there gets
+# every sweep directly, so C, off the plane, is not left serving a retracted
+# batch), then:
 #   1. waits until archives A and B (on the plane) hold the new interval;
 #   2. reads the new lines from A and from B and compares them to the input;
 #   3. verify-interval against A and B;
 #   4. finds the new interval missing at C (off the plane, deliberately empty),
-#      backfills C from A, then reads and verifies it at C;
+#      backfills C from A with -sweeps (carrying any sweep C missed), then
+#      reads and verifies it at C;
 #   5. runs blogs archive against A, B and C into three directories;
 #   6. requires one root for the interval: the audit's at A, B and C and
 #      each archive's interval file.
@@ -166,11 +170,11 @@ run() {
 	for i in $(seq 1 "$DEMO_LINES"); do
 		printf 'blogs plane demo %s line %d of %d\n' "$id" "$i" "$DEMO_LINES"
 	done >"$input"
-	blogs produce "$STREAM" -max-lines "$DEMO_MAX_LINES" -anchor-wait "$ANCHOR_WAIT" <"$input" >"$dir/produce.out" 2>"$dir/produce.err" ||
+	blogs -hosts "$ARCHIVE_A,$ARCHIVE_B,$ARCHIVE_C" produce "$STREAM" -max-lines "$DEMO_MAX_LINES" -anchor-wait "$ANCHOR_WAIT" <"$input" >"$dir/produce.out" 2>"$dir/produce.err" ||
 		fail "produce exited $? (see $dir/produce.err)"
 	read -r first last < <(sed -n 's/.*published seq \([0-9]*\) to \([0-9]*\)$/\1 \2/p' "$dir/produce.out")
 	[ -n "${last:-}" ] || fail "produce published nothing (see $dir/produce.out)"
-	blogs anchor "$STREAM" -wait "$ANCHOR_WAIT" >"$dir/anchor.out" 2>"$dir/anchor.err" || fail "anchor exited $?"
+	blogs -hosts "$ARCHIVE_A,$ARCHIVE_B,$ARCHIVE_C" anchor "$STREAM" -wait "$ANCHOR_WAIT" >"$dir/anchor.out" 2>"$dir/anchor.err" || fail "anchor exited $?"
 	k=$(sed -n 's/^anchored to seq \([0-9]*\): interval \([0-9]*\),.*/\1 \2/p' "$dir/anchor.out")
 	[ -n "$k" ] || fail "nothing is anchored (see $dir/anchor.out)"
 	[ "${k%% *}" -ge "$last" ] || fail "anchored to seq ${k%% *}, published to $last"
@@ -212,7 +216,7 @@ run() {
 	*) fail "verify-interval at $ARCHIVE_C exited $code before backfill (see $dir/verify-c-before.out)" ;;
 	esac
 	for i in $(seq 1 "$k"); do
-		blogs backfill "$STREAM" "$PRODUCER" -from "$ARCHIVE_A" -to "$ARCHIVE_C" -interval "$i" >>"$dir/backfill.out" 2>&1 ||
+		blogs backfill "$STREAM" "$PRODUCER" -from "$ARCHIVE_A" -to "$ARCHIVE_C" -interval "$i" -sweeps >>"$dir/backfill.out" 2>&1 ||
 			fail "backfill of interval $i into $ARCHIVE_C exited $? (see $dir/backfill.out)"
 	done
 	say "$(grep '^backfill ' "$dir/backfill.out" | tail -1)"

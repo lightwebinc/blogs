@@ -816,10 +816,11 @@ three archive hosts, two that receive the stream from the plane and one
 that does not. Its endpoints come from a local file
 (`scripts/plane-demo.env.example` lists the keys); `setup` creates the home,
 funds it and creates the stream once, and prints the lines each host's
-configuration needs; `run` publishes new lines and anchors them, reads them
-back from the two plane hosts, audits the interval at both, backfills the
-third host and audits it there, archives all three, and requires one root
-from all six. Each run adds an interval, so it is run twice in a row.
+configuration needs; `run` publishes new lines and anchors them with all
+three hosts named in `hosts` (so a sweep reaches the third directly), reads
+them back from the two plane hosts, audits the interval at both, backfills
+the third host with `-sweeps` and audits it there, archives all three, and
+requires one root from all six. Each run adds an interval, so it is run twice in a row.
 
 ### Moving bcommon
 
