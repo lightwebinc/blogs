@@ -248,10 +248,17 @@ func cmdIngest(ctx context.Context, g *global, args []string) error {
 	}
 	done := make(chan error, 1)
 	go func() { done <- b.Run(runCtx, 30*time.Second) }()
+	// stop ends the publisher on an early return, saying why it ended when
+	// that was not the stop itself.
+	stop := func() {
+		cancel()
+		if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+			g.say("ingest: the publisher stopped: %v", err)
+		}
+	}
 	if *admin != "" {
 		if err := serve(*admin, adminHandler(g, b, engines), "admin"); err != nil {
-			cancel()
-			<-done
+			stop()
 			return err
 		}
 	}
@@ -265,8 +272,7 @@ func cmdIngest(ctx context.Context, g *global, args []string) error {
 		}
 		l, err := net.Listen("tcp", d.addr)
 		if err != nil {
-			cancel()
-			<-done
+			stop()
 			return err
 		}
 		if d.tls != nil {
@@ -283,8 +289,7 @@ func cmdIngest(ctx context.Context, g *global, args []string) error {
 	g.say("ready")
 	select {
 	case err := <-errs:
-		cancel()
-		<-done
+		stop()
 		return err
 	case err := <-done:
 		if errors.Is(err, context.Canceled) {
