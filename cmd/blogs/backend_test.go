@@ -302,17 +302,31 @@ func backendFlow(t *testing.T, h *harness, stream, producer, conf string, hosts 
 	}
 	c.Close()
 	waitUntil(t, "every line in Loki", func() bool { return loki.count() == 11 })
-	m, err := http.Get("http://" + httpAddr + "/metrics")
-	if err != nil {
-		t.Fatal(err)
-	}
-	metricsText, _ := io.ReadAll(m.Body)
-	m.Body.Close()
-	for _, want := range []string{`blogs_ingest_lines_total{stream="` + stream + `"} 10`, `blogs_ingest_lines_total{stream="` + conf + `"} 1`,
-		`blogs_ingest_records_total{door="syslog"} 6`, `blogs_forward_lines_total 11`} {
-		if !strings.Contains(string(metricsText), want) {
-			t.Fatalf("metrics lack %q:\n%s", want, metricsText)
+	// The forwarder counts a push once Loki has answered it, so the
+	// counters may trail Loki's own count by a moment.
+	wants := []string{`blogs_ingest_lines_total{stream="` + stream + `"} 10`, `blogs_ingest_lines_total{stream="` + conf + `"} 1`,
+		`blogs_ingest_records_total{door="syslog"} 6`, `blogs_forward_lines_total 11`}
+	var metricsText []byte
+	lacks := func() string {
+		m, err := http.Get("http://" + httpAddr + "/metrics")
+		if err != nil {
+			return err.Error()
 		}
+		metricsText, _ = io.ReadAll(m.Body)
+		m.Body.Close()
+		for _, want := range wants {
+			if !strings.Contains(string(metricsText), want) {
+				return want
+			}
+		}
+		return ""
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for miss := lacks(); miss != ""; miss = lacks() {
+		if time.Now().After(deadline) {
+			t.Fatalf("metrics lack %q:\n%s", miss, metricsText)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	cancel()
 	if r := <-done; r.code != 0 {
