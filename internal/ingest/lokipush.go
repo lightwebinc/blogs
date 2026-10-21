@@ -12,7 +12,8 @@ import (
 // Loki push (POST /loki/api/v1/push): logproto.PushRequest as protobuf
 // (snappy-compressed by every client that speaks it) or as JSON. A
 // stream's labels are the record's labels, an entry's structured metadata
-// its attributes, and its line the body.
+// its attributes, and its line the body. Field numbers and wire types are
+// Loki v3.7.9's pkg/push/push.proto (TestLokiUpstreamFields).
 
 // DecodeLokiProto reads a PushRequest in protobuf (already decompressed).
 func DecodeLokiProto(b []byte) ([]Record, error) {
@@ -21,7 +22,7 @@ func DecodeLokiProto(b []byte) ([]Record, error) {
 		if num != 1 {
 			return errSkip
 		}
-		sb, err := p.bytes()
+		sb, err := p.lenField(wt)
 		if err != nil {
 			return err
 		}
@@ -30,14 +31,14 @@ func DecodeLokiProto(b []byte) ([]Record, error) {
 		if err := each(sb, func(p *pbuf, num, wt int) error {
 			switch num {
 			case 1:
-				s, err := p.bytes()
+				s, err := p.lenField(wt)
 				if err != nil {
 					return err
 				}
 				labels, err = ParseLabels(string(s))
 				return err
 			case 2:
-				e, err := p.bytes()
+				e, err := p.lenField(wt)
 				entries = append(entries, e)
 				return err
 			}
@@ -51,7 +52,7 @@ func DecodeLokiProto(b []byte) ([]Record, error) {
 			if err := each(eb, func(p *pbuf, num, wt int) error {
 				switch num {
 				case 1:
-					tb, err := p.bytes()
+					tb, err := p.lenField(wt)
 					if err != nil {
 						return err
 					}
@@ -60,9 +61,9 @@ func DecodeLokiProto(b []byte) ([]Record, error) {
 						var err error
 						switch num {
 						case 1:
-							sec, err = p.varint()
+							sec, err = p.varField(wt)
 						case 2:
-							nanos, err = p.varint()
+							nanos, err = p.varField(wt)
 						default:
 							return errSkip
 						}
@@ -76,21 +77,23 @@ func DecodeLokiProto(b []byte) ([]Record, error) {
 					rec.Ts = int64(sec)*1e9 + int64(nanos) //nolint:gosec // bounded above
 					return nil
 				case 2:
-					s, err := p.bytes()
+					s, err := p.lenField(wt)
 					rec.Body = string(s)
 					return err
 				case 3:
-					pb, err := p.bytes()
+					pb, err := p.lenField(wt)
 					if err != nil {
 						return err
 					}
 					var k, v string
 					if err := each(pb, func(p *pbuf, num, wt int) error {
-						s, err := p.bytes()
-						switch num {
-						case 1:
+						if num != 1 && num != 2 {
+							return errSkip
+						}
+						s, err := p.lenField(wt)
+						if num == 1 {
 							k = string(s)
-						case 2:
+						} else {
 							v = string(s)
 						}
 						return err

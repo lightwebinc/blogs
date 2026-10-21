@@ -66,6 +66,25 @@ func (p *pbuf) fixed32() (uint32, error) {
 	return v, nil
 }
 
+// lenField reads a length-delimited field's value (wire type 2: a string,
+// bytes or an embedded message); any other wire type for such a field is
+// malformed, as a protobuf parser holds it.
+func (p *pbuf) lenField(wt int) ([]byte, error) {
+	if wt != 2 {
+		return nil, errWire
+	}
+	return p.bytes()
+}
+
+// varField reads a varint field's value (wire type 0: int32, int64,
+// uint32, uint64, bool, enum).
+func (p *pbuf) varField(wt int) (uint64, error) {
+	if wt != 0 {
+		return 0, errWire
+	}
+	return p.varint()
+}
+
 // skip passes over a field of wire type wt.
 func (p *pbuf) skip(wt int) error {
 	var err error

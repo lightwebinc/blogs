@@ -56,8 +56,14 @@ because the producer would carry it as several lines.
 | --- | --- | --- |
 | `-syslog ADDR` | syslog over TCP, RFC 6587 framing (octet counted or newline, decided per frame) | RFC 5424: `APP-NAME` is the label `service_name`, `HOSTNAME` the label `host`; facility, `PROCID`, `MSGID` and each structured data parameter (`sd.<id>.<name>`) are attributes; severity by name (`err`, `info` ...). A message that is not RFC 5424 keeps its priority and is the body whole |
 | `-syslog-tls ADDR` | the same over TLS (RFC 5425); `-tls-client-ca` requires client certificates | as above |
-| `-http ADDR` | OTLP logs over HTTP, `POST /v1/logs`, protobuf or JSON | the resource's `service.name` is `service_name`; other resource attributes are `resource.<key>`; record attributes as they are; `trace_id`, `span_id` in hex; `scope`; severity text, or the name of the severity number |
+| `-http ADDR` | OTLP logs over HTTP, `POST /v1/logs`, protobuf or JSON | the resource's `service.name` is `service_name`; other resource attributes are `resource.<key>`; record attributes as they are; `trace_id`, `span_id` in hex; `scope`; `event_name`; severity text, or the name of the severity number |
 | `-http ADDR` | Loki push, `POST /loki/api/v1/push`, protobuf (snappy) or JSON | stream labels are labels; structured metadata are attributes; the line is the body |
+
+The protobuf decoders read the messages as opentelemetry-proto v1.11.1
+and Loki v3.7.9 (`pkg/push/push.proto`) define them: every field they map
+is read by its number and wire type, a mapped field with another wire type
+is refused (HTTP 400), and every other field is skipped, as protobuf
+requires, so a later upstream field does not break a door.
 
 The HTTP doors also serve `GET /metrics` and `GET /healthz`. A gzip
 `Content-Encoding` is accepted; a body is bounded at 16 MiB before and after

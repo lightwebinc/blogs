@@ -20,7 +20,13 @@ import (
 // attributes as they are, its trace and span ids are trace_id and span_id
 // in hex, its severity text (or, without one, the name of its severity
 // number) is the severity, and its body is the body: a string as it is,
-// anything else as JSON. A record with no time takes its observed time.
+// anything else as JSON; its event name, when set, is the attribute
+// event_name. A record with no time takes its observed time.
+//
+// Field numbers and wire types are opentelemetry-proto v1.11.1's
+// (TestOTLPUpstreamFields covers every field of the messages read).
+// AnyValue.string_value_strindex and KeyValue.key_strindex are defined for
+// the profiles signal only, and a logs reader treats them as absent.
 
 // severityNames are OTLP's severity numbers 1 to 24, by range.
 var severityNames = []string{"TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"}
@@ -37,7 +43,7 @@ type otlpResource struct {
 	attrs  map[string]string
 }
 
-func (r otlpResource) record(scope string, ts, observed int64, sevText string, sevNum int64, body string, attrs map[string]string, trace, span []byte) Record {
+func (r otlpResource) record(scope string, ts, observed int64, sevText string, sevNum int64, body string, attrs map[string]string, trace, span []byte, event string) Record {
 	rec := Record{Ts: ts, Body: body, Labels: map[string]string{}, Attrs: map[string]string{}}
 	if rec.Ts == 0 {
 		rec.Ts = observed
@@ -60,6 +66,9 @@ func (r otlpResource) record(scope string, ts, observed int64, sevText string, s
 	}
 	if len(span) > 0 {
 		rec.Attrs["span_id"] = hex.EncodeToString(span)
+	}
+	if event != "" {
+		rec.Attrs["event_name"] = event
 	}
 	rec.Sev = sevText
 	if rec.Sev == "" {
@@ -93,7 +102,7 @@ func DecodeOTLPProto(b []byte) ([]Record, error) {
 		if num != 1 {
 			return errSkip
 		}
-		rl, err := p.bytes()
+		rl, err := p.lenField(wt)
 		if err != nil {
 			return err
 		}
@@ -110,7 +119,7 @@ func otlpResourceLogs(b []byte) ([]Record, error) {
 	err := each(b, func(p *pbuf, num, wt int) error {
 		switch num {
 		case 1:
-			rb, err := p.bytes()
+			rb, err := p.lenField(wt)
 			if err != nil {
 				return err
 			}
@@ -119,7 +128,7 @@ func otlpResourceLogs(b []byte) ([]Record, error) {
 				if num != 1 {
 					return errSkip
 				}
-				kv, err := p.bytes()
+				kv, err := p.lenField(wt)
 				if err != nil {
 					return err
 				}
@@ -130,7 +139,7 @@ func otlpResourceLogs(b []byte) ([]Record, error) {
 			res = newResource(attrs)
 			return nil
 		case 2:
-			sb, err := p.bytes()
+			sb, err := p.lenField(wt)
 			scopes = append(scopes, sb)
 			return err
 		}
@@ -149,7 +158,7 @@ func otlpResourceLogs(b []byte) ([]Record, error) {
 		if err := each(sb, func(p *pbuf, num, wt int) error {
 			switch num {
 			case 1:
-				ib, err := p.bytes()
+				ib, err := p.lenField(wt)
 				if err != nil {
 					return err
 				}
@@ -157,12 +166,12 @@ func otlpResourceLogs(b []byte) ([]Record, error) {
 					if num != 1 {
 						return errSkip
 					}
-					n, err := p.bytes()
+					n, err := p.lenField(wt)
 					scope = string(n)
 					return err
 				})
 			case 2:
-				lb, err := p.bytes()
+				lb, err := p.lenField(wt)
 				logs = append(logs, lb)
 				return err
 			}
@@ -183,7 +192,7 @@ func otlpResourceLogs(b []byte) ([]Record, error) {
 
 func pbLogRecord(b []byte, res otlpResource, scope string) (Record, error) {
 	var ts, observed, sevNum int64
-	var sevText, body string
+	var sevText, body, event string
 	var trace, span []byte
 	attrs := map[string]string{}
 	err := each(b, func(p *pbuf, num, wt int) error {
@@ -203,38 +212,42 @@ func pbLogRecord(b []byte, res otlpResource, scope string) (Record, error) {
 			}
 			return err
 		case 2:
-			v, err := p.varint()
+			v, err := p.varField(wt)
 			sevNum = int64(v) //nolint:gosec // an enum; out of range is no name
 			return err
 		case 3:
-			v, err := p.bytes()
+			v, err := p.lenField(wt)
 			sevText = string(v)
 			return err
 		case 5:
-			v, err := p.bytes()
+			v, err := p.lenField(wt)
 			if err != nil {
 				return err
 			}
 			body, err = pbAnyValue(v)
 			return err
 		case 6:
-			kv, err := p.bytes()
+			kv, err := p.lenField(wt)
 			if err != nil {
 				return err
 			}
 			return pbKeyValue(kv, attrs)
 		case 9:
-			v, err := p.bytes()
+			v, err := p.lenField(wt)
 			trace = v
 			return err
 		case 10:
-			v, err := p.bytes()
+			v, err := p.lenField(wt)
 			span = v
+			return err
+		case 12:
+			v, err := p.lenField(wt)
+			event = string(v)
 			return err
 		}
 		return errSkip
 	})
-	return res.record(scope, ts, observed, sevText, sevNum, body, attrs, trace, span), err
+	return res.record(scope, ts, observed, sevText, sevNum, body, attrs, trace, span, event), err
 }
 
 func pbKeyValue(b []byte, into map[string]string) error {
@@ -242,11 +255,11 @@ func pbKeyValue(b []byte, into map[string]string) error {
 	err := each(b, func(p *pbuf, num, wt int) error {
 		switch num {
 		case 1:
-			s, err := p.bytes()
+			s, err := p.lenField(wt)
 			k = string(s)
 			return err
 		case 2:
-			s, err := p.bytes()
+			s, err := p.lenField(wt)
 			if err != nil {
 				return err
 			}
@@ -287,15 +300,15 @@ func pbAny(b []byte) (any, error) {
 	err := each(b, func(p *pbuf, num, wt int) error {
 		switch num {
 		case 1:
-			s, err := p.bytes()
+			s, err := p.lenField(wt)
 			out = string(s)
 			return err
 		case 2:
-			v, err := p.varint()
+			v, err := p.varField(wt)
 			out = v != 0
 			return err
 		case 3:
-			v, err := p.varint()
+			v, err := p.varField(wt)
 			out = int64(v) //nolint:gosec // int64 on the wire
 			return err
 		case 4:
@@ -306,7 +319,7 @@ func pbAny(b []byte) (any, error) {
 			out = math.Float64frombits(v)
 			return err
 		case 5:
-			ab, err := p.bytes()
+			ab, err := p.lenField(wt)
 			if err != nil {
 				return err
 			}
@@ -315,7 +328,7 @@ func pbAny(b []byte) (any, error) {
 				if num != 1 {
 					return errSkip
 				}
-				vb, err := p.bytes()
+				vb, err := p.lenField(wt)
 				if err != nil {
 					return err
 				}
@@ -326,7 +339,7 @@ func pbAny(b []byte) (any, error) {
 			out = arr
 			return err
 		case 6:
-			lb, err := p.bytes()
+			lb, err := p.lenField(wt)
 			if err != nil {
 				return err
 			}
@@ -335,7 +348,7 @@ func pbAny(b []byte) (any, error) {
 				if num != 1 {
 					return errSkip
 				}
-				kvb, err := p.bytes()
+				kvb, err := p.lenField(wt)
 				if err != nil {
 					return err
 				}
@@ -344,11 +357,11 @@ func pbAny(b []byte) (any, error) {
 				err = each(kvb, func(p *pbuf, num, wt int) error {
 					switch num {
 					case 1:
-						s, err := p.bytes()
+						s, err := p.lenField(wt)
 						k = string(s)
 						return err
 					case 2:
-						s, err := p.bytes()
+						s, err := p.lenField(wt)
 						if err != nil {
 							return err
 						}
@@ -363,7 +376,7 @@ func pbAny(b []byte) (any, error) {
 			out = m
 			return err
 		case 7:
-			s, err := p.bytes()
+			s, err := p.lenField(wt)
 			out = base64.StdEncoding.EncodeToString(s)
 			return err
 		}
@@ -398,6 +411,7 @@ type jsonLogs struct {
 				Attributes           []jsonKV        `json:"attributes"`
 				TraceID              string          `json:"traceId"`
 				SpanID               string          `json:"spanId"`
+				EventName            string          `json:"eventName"`
 			} `json:"logRecords"`
 		} `json:"scopeLogs"`
 	} `json:"resourceLogs"`
@@ -431,7 +445,7 @@ func DecodeOTLPJSON(b []byte) ([]Record, error) {
 				if err := errors.Join(err6, err7); err != nil {
 					return nil, fmt.Errorf("traceId or spanId is not hex: %w", err)
 				}
-				out = append(out, res.record(sl.Scope.Name, ts, obs, lr.SeverityText, sev, body, la, trace, span))
+				out = append(out, res.record(sl.Scope.Name, ts, obs, lr.SeverityText, sev, body, la, trace, span, lr.EventName))
 			}
 		}
 	}
