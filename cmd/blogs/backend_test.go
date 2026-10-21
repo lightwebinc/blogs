@@ -376,6 +376,23 @@ func backendFlow(t *testing.T, h *harness, stream, producer, conf string, hosts 
 		}
 	}
 
+	// A second archive cross-checks: the second host's agrees, so every
+	// line stays verified; one that has proven nothing makes every line
+	// pending.
+	gw.Verifier.Cross = dirs[1]
+	for _, l := range queryGateway(t, gwS.URL, true) {
+		if l.state != gateway.Verified {
+			t.Fatalf("cross-checked: %q is %s (%s)", l.line, l.state, l.reason)
+		}
+	}
+	gw.Verifier.Cross = t.TempDir()
+	for _, l := range queryGateway(t, gwS.URL, true) {
+		if l.state != gateway.Unverified || l.reason != gateway.ReasonPending {
+			t.Fatalf("cross-checked against an empty archive: %q is %s (%s)", l.line, l.state, l.reason)
+		}
+	}
+	gw.Verifier.Cross = ""
+
 	// An altered line in the store: same placement, other text.
 	orig, _ := loki.find("loki json")
 	altered := lokiEntry{labels: orig.labels, ts: orig.ts, line: strings.Replace(orig.line, "loki json", "loki JSON", 1), meta: orig.meta}

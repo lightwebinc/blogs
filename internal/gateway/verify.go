@@ -49,7 +49,9 @@ const (
 	// ReasonNoProvenance: the line carries no placement at all.
 	ReasonNoProvenance = "no-provenance"
 	// ReasonUnreadable: the archive's files for the batch could not be
-	// read or did not verify.
+	// read or did not verify, or, with a second archive, that archive's
+	// interval file did not verify or disagrees on the root or the line's
+	// path.
 	ReasonUnreadable = "unreadable"
 )
 
@@ -66,6 +68,13 @@ type Verifier struct {
 	Dir string
 	// Fetch finds digest-only content.
 	Fetch reader.Fetch
+	// Cross, when set, is a second archive's root: a line is verified
+	// only when Cross also holds a verified interval file covering its seq
+	// that agrees with Dir's on the interval, its root and token, and the
+	// line's commitment and inclusion path. Cross lacking the interval
+	// marks the line pending; a file there that does not verify, or that
+	// disagrees, marks it unreadable.
+	Cross string
 	// Rescan is how stale the interval list may be before a line past its
 	// end makes it read again.
 	Rescan time.Duration
@@ -88,10 +97,10 @@ func (v *Verifier) root(stream, producer string) string {
 	return filepath.Join(v.Dir, stream, producer)
 }
 
-// list returns the stream's proven intervals, read again when seq is past
-// the last and the list is older than Rescan.
-func (v *Verifier) list(stream, producer string, seq uint64) *intervalList {
-	key := stream + "/" + producer
+// list returns the stream's proven intervals in the archive at dir, read
+// again when seq is past the last and the list is older than Rescan.
+func (v *Verifier) list(dir, stream, producer string, seq uint64) *intervalList {
+	key := dir + "\x00" + stream + "/" + producer
 	l := v.intervals[key]
 	if l != nil {
 		n := len(l.files)
@@ -101,7 +110,7 @@ func (v *Verifier) list(stream, producer string, seq uint64) *intervalList {
 		}
 	}
 	l = &intervalList{scanned: time.Now(), bad: map[uint64]string{}}
-	names, _ := filepath.Glob(filepath.Join(v.root(stream, producer), "intervals", "*.json"))
+	names, _ := filepath.Glob(filepath.Join(dir, stream, producer, "intervals", "*.json"))
 	sort.Strings(names)
 	for _, n := range names {
 		raw, err := os.ReadFile(n)
@@ -157,7 +166,7 @@ func (v *Verifier) Check(ctx context.Context, meta map[string]string, line, ts s
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	root := v.root(stream, producer)
-	l := v.list(stream, producer, seq)
+	l := v.list(v.Dir, stream, producer, seq)
 	f := l.covering(seq)
 	if f == nil {
 		return Verdict{State: Unverified, Reason: ReasonPending}
@@ -185,7 +194,7 @@ func (v *Verifier) Check(ctx context.Context, meta map[string]string, line, ts s
 	if err != nil {
 		// A line not in the line form proves only its text.
 		out.State, out.Reason = Verified, ""
-		return out
+		return v.crossCheck(out, f, stream, producer, seq)
 	}
 	if ts != "" && ts != strconv.FormatInt(rec.Ts, 10) {
 		out.Reason = ReasonRelabeled
@@ -198,7 +207,58 @@ func (v *Verifier) Check(ctx context.Context, meta map[string]string, line, ts s
 		}
 	}
 	out.State = Verified
+	return v.crossCheck(out, f, stream, producer, seq)
+}
+
+// crossCheck holds a verified line to the second archive, when there is
+// one: its interval file covering seq must verify and agree with f.
+func (v *Verifier) crossCheck(out Verdict, f *archive.IntervalFile, stream, producer string, seq uint64) Verdict {
+	if v.Cross == "" {
+		return out
+	}
+	if why := v.crossDisagrees(f, stream, producer, seq); why != "" {
+		out.State, out.Reason = Unverified, why
+	}
 	return out
+}
+
+// crossDisagrees is "" when the second archive agrees with f at seq, and
+// otherwise the reason the line is not verified.
+func (v *Verifier) crossDisagrees(f *archive.IntervalFile, stream, producer string, seq uint64) string {
+	l := v.list(v.Cross, stream, producer, seq)
+	if _, bad := l.bad[f.Interval]; bad {
+		return ReasonUnreadable
+	}
+	g := l.covering(seq)
+	if g == nil {
+		return ReasonPending
+	}
+	if disagree(f, g, seq) != "" {
+		return ReasonUnreadable
+	}
+	return ""
+}
+
+// disagree names what two archives' interval files covering seq differ
+// on, or is "" when they agree on the interval, its root and token, and
+// the commitment and inclusion path at seq.
+func disagree(f, g *archive.IntervalFile, seq uint64) string {
+	switch {
+	case g.Interval != f.Interval || g.First != f.First || g.Count != f.Count:
+		return fmt.Sprintf("seq %d: interval %d (seqs %d to %d) there, %d (seqs %d to %d) here", seq, g.Interval, g.First, g.First+g.Count-1, f.Interval, f.First, f.First+f.Count-1)
+	case g.Root != f.Root:
+		return fmt.Sprintf("interval %d: root %s there, %s here", f.Interval, g.Root, f.Root)
+	case g.Token != f.Token:
+		return fmt.Sprintf("interval %d: token %s there, %s here", f.Interval, g.Token, f.Token)
+	}
+	a, b := f.Leaves[seq-f.First], g.Leaves[seq-g.First]
+	if a.Commitment != b.Commitment {
+		return fmt.Sprintf("seq %d: commitment %s there, %s here", seq, b.Commitment, a.Commitment)
+	}
+	if strings.Join(a.Path, ",") != strings.Join(b.Path, ",") {
+		return fmt.Sprintf("seq %d: the inclusion paths differ", seq)
+	}
+	return ""
 }
 
 // batchLines reads the batch the leaf commits from the archive, checks it
@@ -247,6 +307,21 @@ type Coverage struct {
 	Retracted []Receipt `json:"retracted"`
 	// Refused are interval files whose paths do not lead to their root.
 	Refused map[string]string `json:"refused,omitempty"`
+	// Cross is the second archive's agreement, when the gateway has one.
+	Cross *Cross `json:"cross,omitempty"`
+}
+
+// Cross is how a second archive's interval files compare with the
+// archive's, for the intervals the archive has proven.
+type Cross struct {
+	// Agree counts the intervals both hold and agree on.
+	Agree uint64 `json:"agree"`
+	// Missing are intervals the second archive has not proven: their
+	// lines are pending.
+	Missing []uint64 `json:"missing"`
+	// Disagree are intervals whose files there do not verify or differ,
+	// each with the first difference: their lines are unreadable.
+	Disagree map[string]string `json:"disagree,omitempty"`
 }
 
 // Span is one proven interval.
@@ -279,8 +354,8 @@ func (v *Verifier) Coverage() ([]Coverage, error) {
 	for _, d := range dirs {
 		root := filepath.Dir(d)
 		producer, stream := filepath.Base(root), filepath.Base(filepath.Dir(root))
-		delete(v.intervals, stream+"/"+producer)
-		l := v.list(stream, producer, ^uint64(0))
+		delete(v.intervals, v.Dir+"\x00"+stream+"/"+producer)
+		l := v.list(v.Dir, stream, producer, ^uint64(0))
 		c := Coverage{Stream: stream, Producer: producer, Proven: []Span{}, Holes: []uint64{}, Retracted: []Receipt{}}
 		for _, f := range l.files {
 			c.Intervals = f.Interval
@@ -292,6 +367,9 @@ func (v *Verifier) Coverage() ([]Coverage, error) {
 				c.Refused = map[string]string{}
 			}
 			c.Refused[strconv.FormatUint(k, 10)] = why
+		}
+		if v.Cross != "" {
+			c.Cross = v.crossCoverage(l, stream, producer)
 		}
 		names, _ := filepath.Glob(filepath.Join(root, "retracted", "*.json"))
 		sort.Strings(names)
@@ -308,6 +386,43 @@ func (v *Verifier) Coverage() ([]Coverage, error) {
 		out = append(out, c)
 	}
 	return out, nil
+}
+
+func (v *Verifier) crossCoverage(l *intervalList, stream, producer string) *Cross {
+	delete(v.intervals, v.Cross+"\x00"+stream+"/"+producer)
+	x := v.list(v.Cross, stream, producer, ^uint64(0))
+	out := &Cross{Missing: []uint64{}}
+	for _, f := range l.files {
+		k := strconv.FormatUint(f.Interval, 10)
+		if why, bad := x.bad[f.Interval]; bad {
+			if out.Disagree == nil {
+				out.Disagree = map[string]string{}
+			}
+			out.Disagree[k] = why
+			continue
+		}
+		why := ""
+		for seq := f.First; seq < f.First+f.Count && why == ""; seq++ {
+			g := x.covering(seq)
+			if g == nil {
+				why = "missing"
+				break
+			}
+			why = disagree(f, g, seq)
+		}
+		switch why {
+		case "":
+			out.Agree++
+		case "missing":
+			out.Missing = append(out.Missing, f.Interval)
+		default:
+			if out.Disagree == nil {
+				out.Disagree = map[string]string{}
+			}
+			out.Disagree[k] = why
+		}
+	}
+	return out
 }
 
 // Retained sums, per stream, the bytes the archive keeps for it in two

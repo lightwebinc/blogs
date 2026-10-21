@@ -25,7 +25,7 @@ content, and everything below is a convention of these two commands.
                                         └─ each published line + placement ─▶ Loki (stock, unmodified)
                                                                                  │
  Grafana (unchanged) ◀── Loki API, each line marked ── blogs gateway ◀───────────┘
-                                                            └─ checks against archive A's interval files
+                                                            └─ checks against archive A's interval files (and B's, with -cross-archive)
 ```
 
 ## The line form (version 1)
@@ -154,20 +154,23 @@ Loki. The lines of a `query` or `query_range` answer are each checked:
 3. its content, read from the carrier or, for a digest-only batch, from
    `-content-dir` and checked against the digest, holds this exact line at
    this position;
-4. the line's `ts` and labels agree with what Loki answered.
+4. the line's `ts` and labels agree with what Loki answered;
+5. with `-cross-archive DIR`, a second archive's interval file covering the
+   seq verifies and agrees with the first on the interval, its seqs, root
+   and token, and on the line's commitment and inclusion path.
 
 The mark is `blogs_state`, `verified` or `unverified`, and for an
 unverified line `blogs_reason`:
 
 | Reason | Meaning |
 | --- | --- |
-| `pending` | no interval the archive has proven covers the line yet: normal for the interval plus a block plus an archive pass after it was sent |
+| `pending` | no interval the archive (or, with `-cross-archive`, the second archive) has proven covers the line yet: normal for the interval plus a block plus an archive pass after it was sent |
 | `altered` | the line is not the one at its position in the committed batch |
 | `relabeled` | the text is, but its time or a label in the store differ |
 | `retracted` | the producer retracted the batch; the archive holds the receipt, and the anchor still commits the position |
 | `hole` | the root commits the position and the archive never held the batch |
 | `no-provenance` | the line carries no placement |
-| `unreadable` | the archive's files for the batch did not read or verify |
+| `unreadable` | the archive's files for the batch did not read or verify, or the second archive's interval file did not verify or disagrees |
 
 A client that asks for categorized labels (`X-Loki-Response-Encoding-Flags:
 categorize-labels`, which Grafana sends) gets the marks as structured
@@ -179,14 +182,27 @@ transformation of the labels, where a value mapping can color
 
 `GET /blogs/v1/coverage` answers, per stream in the archive, every interval
 proven (first and last seq, root, token, height), the holes, and each
-retraction receipt with the sweep that retracted it.
+retraction receipt with the sweep that retracted it. With `-cross-archive`
+it adds `cross`: how many proven intervals the second archive agrees on,
+the intervals it has not proven (`missing`), and each interval it disagrees
+on with the first difference (`disagree`).
+
+**A second archive.** By default the gateway checks against one archive
+and trusts the chain checks that archive made when it stored each
+interval. `-cross-archive DIR` names a second archive directory, kept by
+its own `blogs archive -follow` from another host, and a line is
+`verified` only when both archives' interval files agree on its root and
+its path. Disagreement is not a reason of its own: such a line is
+`unreadable`, and coverage names the interval and the difference. The
+second archive needs only its interval files; the line itself is read
+from the first.
 
 What the gateway does not prove: that a search found every matching line
 (a store can omit a line and return only true ones; coverage shows what the
 archive holds, not what the store searched), and anything on
-`/loki/api/v1/tail`, which is passed through unmarked. The gateway checks
-against one archive and trusts the chain checks that archive made when it
-stored each interval. An auditor who trusts
+`/loki/api/v1/tail`, which is passed through unmarked. The gateway trusts
+the chain checks its archives made when they stored each interval: one
+archive, or two that agree. An auditor who trusts
 neither the gateway nor its archive runs `blogs verify-interval` against any
 host or archive ([usage.md](usage.md)).
 
@@ -232,7 +248,8 @@ for s in app_<suffix> sec_<suffix>; do   # one archive per host; three hosts, th
   blogs archive $s <producer> -dir /var/lib/blogs/archive -host https://host-a.example.com -follow \
     -content-dir /var/lib/blogs/content &
 done
-blogs gateway -archive /var/lib/blogs/archive -loki http://127.0.0.1:3100 -content-dir /var/lib/blogs/content
+blogs gateway -archive /var/lib/blogs/archive -loki http://127.0.0.1:3100 -content-dir /var/lib/blogs/content \
+  -cross-archive /var/lib/blogs/archive-b   # optional: a second host's archive must agree
 ```
 
 Shipper settings, in short:
