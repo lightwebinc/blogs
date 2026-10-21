@@ -39,6 +39,8 @@ or a header service you run, can replace any public service
 then gives a local development sandbox (a private regtest chain, no coin
 needed) with two hosts and a verified interval in about five minutes.
 
+> **Frozen (2026-10-21).** `host/src` takes bug fixes only; new behavior goes to the Go core. The Go overlay engine (go-overlay-services on MongoDB) will replace this host module. Design: `1bsv-ops` `docs/integration/overlay/go-engine-migration.md`.
+
 ## How it works
 
 - **Batches are never mined.** Each rides an unmined carrier transaction
