@@ -1,6 +1,6 @@
 {
   "name": "@lightwebinc/blogs-host",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "private": true,
   "description": "The blogs record layer in TypeScript and the host module for an overlay host: batch, locator and anchor records, stream identifiers, the topic manager's transaction rules held to the Go codec's vectors, and tm_log with ls_log as a module the host loads by path",
   "license": "Apache-2.0",
