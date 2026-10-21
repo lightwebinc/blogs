@@ -15,11 +15,15 @@
  * must be configured here, because a blogs topic left to the host's default
  * manager would admit anything; the host itself refuses a configured stream
  * whose topic OVERLAY_TOPICS does not name.
+ *
+ * Retention (retention.ts) is off unless BLOGS_KEEP_DAYS is set, with
+ * BLOGS_STATE_DIR naming the directory for its state.
  */
 import type { Module, ModuleHost } from '@lightwebinc/bcommon'
 import { fromHex, validatePolicy, type Policy } from './admit.js'
 import { LookupService, TopicPrefix, checkProducer, checkStream, topic } from './logrec.js'
 import { LogLookupService } from './ls_log.js'
+import { RetentionEvery, fileStore, parseRetention, type Retention } from './retention.js'
 import { AdmitKinds, LogTopicManager, Reasons } from './tm_log.js'
 
 /**
@@ -72,8 +76,12 @@ export function parseStreams(raw: string | undefined): StreamConfig[] {
   return out
 }
 
-/** The module for these streams. `overlayTopics` is OVERLAY_TOPICS, when known. */
-export function blogsModule(host: ModuleHost, streams: StreamConfig[], overlayTopics?: readonly string[]): Module {
+/**
+ * The module for these streams. `overlayTopics` is OVERLAY_TOPICS, when
+ * known; `retention`, when given, drops proven carriers older than its
+ * policy (a pass after restore and every hour).
+ */
+export function blogsModule(host: ModuleHost, streams: StreamConfig[], overlayTopics?: readonly string[], retention?: Retention): Module {
   if (streams.length === 0) throw new Error('blogs: no streams configured')
   const names = new Set(streams.map((s) => topic(s.stream)))
   for (const t of overlayTopics ?? []) {
@@ -86,8 +94,8 @@ export function blogsModule(host: ModuleHost, streams: StreamConfig[], overlayTo
     host.metrics.preset('blogs_refused_total', { reason, recorded: 'yes' })
     host.metrics.preset('blogs_refused_total', { reason, recorded: 'no' })
   }
-  for (const c of ['blogs_retractions_total', 'blogs_candidates_dropped_total', 'blogs_tokens_dropped_total']) host.metrics.preset(c)
-  const ls = new LogLookupService(names, host)
+  for (const c of ['blogs_retractions_total', 'blogs_candidates_dropped_total', 'blogs_tokens_dropped_total', 'blogs_retired_total']) host.metrics.preset(c)
+  const ls = new LogLookupService(names, host, retention)
   host.metrics.gauge('blogs_streams', () => ls.streamCount)
   host.metrics.gauge('blogs_batches', () => ls.batchCount)
   host.metrics.gauge('blogs_anchor_tokens', () => ls.tokenCount)
@@ -95,10 +103,21 @@ export function blogsModule(host: ModuleHost, streams: StreamConfig[], overlayTo
   host.metrics.gauge('blogs_retracted_batches', () => ls.retractedCount)
   host.metrics.gauge('blogs_missing_positions', () => ls.missingCount)
   host.metrics.gauge('blogs_fork_positions', () => ls.forkSeqCount)
+  host.metrics.gauge('blogs_retired_positions', () => ls.retiredCount)
+  if (retention !== undefined) {
+    setInterval(() => {
+      ls.retain().catch((e: unknown) => host.log('ls_log retention pass failed', { err: String(e) }))
+    }, RetentionEvery).unref()
+  }
   const topics: Record<string, LogTopicManager> = {}
   for (const s of streams) topics[topic(s.stream)] = new LogTopicManager(topic(s.stream), s.policy, ls.coin, host)
   const build = typeof BLOGS_BUILD === 'string' ? BLOGS_BUILD : 'unbundled'
-  host.log('blogs module mounted', { topics: [...names].join(','), lookup: LookupService, build })
+  host.log('blogs module mounted', {
+    topics: [...names].join(','),
+    lookup: LookupService,
+    build,
+    retention: retention === undefined ? 'off' : `${retention.keepMs / 86400000} days`,
+  })
   return { topics, lookups: { [LookupService]: ls } }
 }
 
@@ -106,8 +125,11 @@ export function blogsModule(host: ModuleHost, streams: StreamConfig[], overlayTo
 export default function create(host: ModuleHost): Module {
   const overlay = process.env['OVERLAY_TOPICS']
   const topics = overlay === undefined ? undefined : overlay.split(',').map((t) => t.trim()).filter((t) => t !== '')
-  return blogsModule(host, parseStreams(process.env['BLOGS_STREAMS']), topics)
+  const streams = parseStreams(process.env['BLOGS_STREAMS'])
+  const r = parseRetention(process.env)
+  return blogsModule(host, streams, topics, r === undefined ? undefined : { keepMs: r.keepMs, store: fileStore(r.stateDir) })
 }
 
 export { LogTopicManager, Unrecorded } from './tm_log.js'
 export { LogLookupService, parseQuery } from './ls_log.js'
+export { parseRetention } from './retention.js'

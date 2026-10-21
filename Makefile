@@ -111,7 +111,7 @@ ts-test: ts-build
 
 # One publish-and-lookup on a local reference overlay host loading the
 # bundle, staged beside the host's node_modules as a deployment places it,
-# with restart and restore. Not part of verify: it needs Docker (for MySQL) and a reference
+# with restart and restore, and retention across two restarts. Not part of verify: it needs Docker (for MySQL) and a reference
 # host directory holding its compiled dist/index.js and its node_modules.
 #
 #	make e2e REFERENCE_HOST=/path/to/reference-host

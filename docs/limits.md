@@ -95,7 +95,11 @@ its carrier and the funding output it spends in a host's storage. A
 reference host with its default heap has been seen to fail to start at
 about 1.4 million outputs; at one batch a second a stream reaches that in
 a little over a week. The rate cap bounds the growth; a host's retention
-policy bounds the total.
+policy bounds the total: with `BLOGS_KEEP_DAYS` the module drops proven
+carriers older than that from its index and storage, and keeps the anchor
+tokens and funding trees the specification requires ([host.md](host.md),
+"Retention"). The module's index holds about 3 KB of heap per batch it
+keeps (measured in process, 32-output funding trees).
 
 **Cost.** At the default fee of 100 satoshis per 1000 bytes, with a floor
 of 100 satoshis per transaction, a batch costs about 6 satoshis (a batch

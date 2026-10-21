@@ -60,6 +60,12 @@ would admit anything. A host that receives its objects from the plane also
 needs the stream's topic in its plane subscription; the module decides
 admission, not delivery.
 
+| Variable | Default | |
+| --- | --- | --- |
+| `BLOGS_STREAMS` | none (required) | the streams and their producer policy, as above |
+| `BLOGS_KEEP_DAYS` | unset: keep everything | how long a proven batch carrier is kept, in days (a decimal is allowed); at least 1. See [Retention](#retention) |
+| `BLOGS_STATE_DIR` | none | an absolute directory for the retention state; required with `BLOGS_KEEP_DAYS`, refused without it |
+
 The tsc tree `host/dist/module.js` loads the same way from inside this
 repository, where `host/node_modules` resolves its imports; the tests use
 it, and deployments use the bundle.
@@ -83,9 +89,10 @@ the host's own `@bsv/sdk`.
 | `blogsModule(host, streams, overlayTopics?)` | the same, from a parsed configuration |
 | `parseStreams(raw)` | parses `BLOGS_STREAMS` |
 | `LogTopicManager` | one stream's topic manager |
-| `LogLookupService` | `ls_log`, with `restore`, `report(stream?)`, `batchStatusOf(producer, stream, txid)` and `treeCount` |
+| `LogLookupService` | `ls_log`, with `restore`, `retain`, `report(stream?)`, `batchStatusOf(producer, stream, txid)` and `treeCount` |
 | `Unrecorded` | the error a topic manager raises for a refusal the engine must not record |
 | `parseQuery(query)` | the question rules of spec section 7.2 |
+| `parseRetention(env)` | reads `BLOGS_KEEP_DAYS` and `BLOGS_STATE_DIR` |
 
 ## Admission
 
@@ -142,8 +149,61 @@ per row: the service reads each such row again with its BEEF); the service walks
 to the outputs its transaction spent, the outputs that spent it, and its
 transaction's other outputs, asking storage for each, so spent anchor tokens
 and spent funding outputs are found too. An output connected to no unspent
-output is not restored. A storage failure stops the start. Memory and start
-time scale with the topic.
+output is not restored (a funding tree whose every carrier retention
+dropped is answered from storage instead). A storage failure stops the
+start. Memory and start time scale with what the host keeps.
+
+## Retention
+
+Without `BLOGS_KEEP_DAYS` a host keeps every carrier it admitted, and its
+memory and start time grow with the stream ([limits.md](limits.md)). With
+it, a proven carrier is dropped once it is older than the policy. How long
+batches are kept is host policy ([frozen.md](frozen.md) section 8); what
+the specification requires a host to keep is kept regardless:
+
+| What | Kept |
+| --- | --- |
+| an anchor token | for the host's life |
+| a funding output, spent or not, with its transaction and proof, and a sweep | for the host's life (spec section 8.1; the tree class answers them) |
+| a carrier no complete interval covers yet | until one does: unproven carriers are never dropped (spec section 8.1) |
+| a carrier of a complete interval | until the interval's anchor timestamp is `BLOGS_KEEP_DAYS` old and every earlier interval of the stream is dropped |
+
+An interval is dropped whole, oldest first, and only when it is canonical
+and complete (every seq held as a batch or a retraction receipt, and the
+held candidates reproduce its root): its candidates at every seq, fork
+candidates and retracted carriers included, leave the index and the
+engine's storage. The age is the anchor record's timestamp, the
+producer's clock: a producer that dates its anchors early has its own
+carriers dropped early, never another producer's. The floor of one day
+leaves an archive that follows the host time to catch up.
+
+Once an interval is dropped the host answers `{stream, producer, seq}` for
+its seqs with nothing, as for any batch it does not hold; readers and
+auditors ask an archive or another host. The interval class still answers
+its token and the tree class every funding tree. `report()` shows a dropped
+interval as `complete` with `retired: true`, its seqs are not holes, and
+the next batch is `linked` when its `prev` is the dropped interval's last
+commitment.
+
+A pass runs once the index is restored and hourly after, never while a
+restore is in flight. It writes the state file first, then deletes the
+dropped carriers' outputs from storage. The engine keeps its record that a
+dropped carrier's transaction was applied, so the same carrier offered
+again (by a sibling's catch-up, or a backfill) is a duplicate and does not
+return; a carrier at a dropped position that does reach the module is not
+indexed and is deleted at the next pass. On a store without `deleteOutput`
+the module says so once in the log, and what it dropped stays in storage,
+unanswered and skipped by restore. A dropped position stays dropped:
+turning retention off later does not bring its carriers back.
+
+`BLOGS_STATE_DIR/blogs-retention.json` holds, per producer and stream, the
+last dropped interval, its last seq and that seq's commitment, and, per
+funding tree some of whose carriers were dropped, the lowest funding
+output whose carrier was. It is written whole, flushed, and renamed over
+the last; a write that fails deletes nothing until one succeeds. A file
+that does not parse stops the host, because a dropped position read as
+held again would be counted a hole. It names keys, streams, txids and
+positions, never a line.
 
 ## Metrics
 
@@ -159,6 +219,8 @@ Every counter is preset at start.
 | `blogs_funding_trees` | gauge | mined transactions (funding trees, and sweeps by their tombstones) the tree class answers |
 | `blogs_missing_positions` | gauge | seqs below each stream's highest that nothing holds |
 | `blogs_fork_positions` | gauge | seqs holding more than one candidate |
+| `blogs_retired_total` | counter | carriers retention dropped |
+| `blogs_retired_positions` | gauge | seqs whose carriers retention dropped, over every stream |
 
 ## Limits
 
@@ -170,7 +232,7 @@ Every counter is preset at start.
   until then it keeps serving the batches the sweep retracted.
 - The index is in memory and restore reads every unspent output of the
   module's topics, so a host's memory and start time grow with what it
-  keeps ([limits.md](limits.md)).
+  keeps ([limits.md](limits.md)); retention bounds what it keeps.
 - An engine's unproven eviction, if an operator runs it, removes carriers,
   and the index follows it. The specification forbids evicting carriers.
 
@@ -179,8 +241,11 @@ Every counter is preset at start.
 `make test` runs the module's tests: every transaction and refusal vector
 through the topic manager, the lookup rules and statuses, the module loaded
 by absolute path as the host loads it, the module inside the overlay engine
-over an in-memory store, the bundle mounted and admitting the golden
+over an in-memory store, retention over that store and across a restart, the bundle mounted and admitting the golden
 transactions, and the bundle step's refusals. `make e2e
 REFERENCE_HOST=/path` stages the bundle beside the reference host's
 `node_modules`, runs one publish and lookup on that host with a MySQL
-container, restarts it, and asks again from the restored index.
+container, restarts it, and asks again from the restored index; then
+restarts it twice with `BLOGS_KEEP_DAYS` set and checks that the proven
+carriers left the index and MySQL while the anchors and the funding tree
+are still answered.

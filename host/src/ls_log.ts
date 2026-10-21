@@ -20,6 +20,12 @@
  * outputs the topic holds: every admitted funding output is retained once
  * spent (spec section 8.1), so a tree whose outputs are all spent, which a
  * pruning node no longer serves, is still answered here with its proof.
+ *
+ * With a retention policy (retention.ts), proven carriers older than the
+ * policy are dropped from the index and from storage, a stream's oldest
+ * intervals first; what was dropped is recorded in a state file so that a
+ * restart neither counts those positions as holes nor indexes a dropped
+ * carrier again.
  */
 import { MerklePath, Transaction } from '@bsv/sdk'
 import type {
@@ -46,6 +52,7 @@ import {
   type Anchor,
 } from './logrec.js'
 import { intervalRoot } from './merkle.js'
+import type { Mark, Retention } from './retention.js'
 import { bytesEq, isFundingShape, readPushDrop } from './script.js'
 
 /** Candidates kept and answered per seq, and anchor tokens per interval (spec section 11). */
@@ -90,6 +97,10 @@ class Stream {
   readonly batches = new Map<number, BatchEntry[]>()
   readonly tokens = new Map<number, TokenEntry[]>()
   highest = 0
+  /** Dropped by retention: intervals 1 to retiredInterval, seqs 1 to retiredSeq; retiredC is C at retiredSeq (hex). */
+  retiredInterval = 0
+  retiredSeq = 0
+  retiredC = ''
   /** Cached canonical chain, index k - 1 for interval k; cleared on any token change. */
   chain: { tokens: TokenEntry[]; joinFailed: Set<string> } | undefined
   constructor(
@@ -106,6 +117,8 @@ export interface IntervalReport {
   status: IntervalStatus
   /** Seqs the interval covers that are held by no batch and no receipt. */
   missing: number[]
+  /** Complete when retention dropped its carriers; nothing of it is held now but its token. */
+  retired?: boolean
 }
 
 export interface StreamReport {
@@ -125,9 +138,20 @@ export interface StreamReport {
   tokens: Array<{ interval: number; txid: string; status: Exclude<TokenStatus, 'canonical'> }>
 }
 
-/** What restore may ask storage for, with the engine's optional BEEF flag. */
+/** What restore may ask storage for, with the engine's optional BEEF flag, and the delete retention uses. */
 interface FullStorage extends RestoreStorage {
   findOutput: (txid: string, outputIndex: number, topic?: string, spent?: boolean, includeBEEF?: boolean) => Promise<Output | null>
+  deleteOutput?: (txid: string, outputIndex: number, topic: string) => Promise<void>
+}
+
+/** What a retention pass did. */
+export interface RetentionPass {
+  /** Intervals whose carriers were dropped. */
+  intervals: number
+  /** Carriers dropped from the index. */
+  carriers: number
+  /** Carrier outputs deleted from storage, this pass's and any left from before. */
+  deleted: number
 }
 
 const compareKey = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
@@ -172,11 +196,28 @@ export class LogLookupService implements LookupService {
   private readonly noted = new Set<string>()
   private forkSeqs = 0
   private storage: FullStorage | undefined
+  /** producer | stream -> the retained prefix's mark, from the state file. */
+  private readonly marks = new Map<string, Mark>()
+  /** topic | tree txid -> the lowest funding output whose carrier retention dropped. */
+  private readonly treeLow = new Map<string, number>()
+  /** Carrier outputs to delete from storage. */
+  private drops: Array<{ txid: string; vout: number; topic: string }> = []
+  private restoring = false
+  /** The marks or treeLow changed since the state file was last written. */
+  private stateDirty = false
+  private readonly warned = new Set<string>()
 
   constructor(
     private readonly topics: ReadonlySet<string>,
     private readonly host: ModuleHost,
-  ) {}
+    private readonly retention?: Retention,
+  ) {
+    if (retention !== undefined) {
+      const st = retention.store.load()
+      for (const m of st.marks) this.marks.set(`${m.producer}|${m.stream}`, m)
+      for (const [k, v] of st.trees) this.treeLow.set(k, v)
+    }
+  }
 
   // ---- the topic manager's previous coins
 
@@ -215,10 +256,17 @@ export class LogLookupService implements LookupService {
     return this.retracted.size
   }
 
-  /** Seqs below each stream's highest that nothing holds. */
+  /** Seqs below each stream's highest that nothing holds and retention did not drop. */
   get missingCount(): number {
     let n = 0
-    for (const s of this.streams.values()) n += s.highest - s.batches.size
+    for (const s of this.streams.values()) n += Math.max(0, s.highest - s.retiredSeq - s.batches.size)
+    return n
+  }
+
+  /** Seqs whose carriers retention dropped, over every stream. */
+  get retiredCount(): number {
+    let n = 0
+    for (const m of this.marks.values()) n += m.seq
     return n
   }
 
@@ -238,8 +286,7 @@ export class LogLookupService implements LookupService {
       this.host.log('ls_log ignored an admission whose BEEF did not parse', { topic: payload.topic })
       return
     }
-    this.index(payload.topic, tx, payload.outputIndex)
-    this.noteSpends(tx)
+    if (this.index(payload.topic, tx, payload.outputIndex)) this.noteSpends(tx)
   }
 
   outputEvicted(txid: string, outputIndex: number): void {
@@ -250,10 +297,14 @@ export class LogLookupService implements LookupService {
     this.drop(outpointKey(txid, outputIndex), topic)
   }
 
-  /** Index one admitted output of tx on topic. */
-  private index(topic: string, tx: Transaction, outputIndex: number): void {
+  /**
+   * Index one admitted output of tx on topic. False for a carrier at a
+   * position retention has dropped: it is not indexed, and its output is
+   * deleted from storage at the next pass.
+   */
+  private index(topic: string, tx: Transaction, outputIndex: number): boolean {
     const out = tx.outputs[outputIndex]
-    if (out === undefined) return
+    if (out === undefined) return true
     const txid = tx.id('hex')
     const script = Uint8Array.from(out.lockingScript.toBinary())
     const op = outpointKey(txid, outputIndex)
@@ -261,36 +312,41 @@ export class LogLookupService implements LookupService {
     const pd = readPushDrop(script)
     if (pd !== undefined && isBatch(pd.fields[0]!)) {
       const b = decodeBatch(pd.fields[0]!)
-      if (b.stream !== stream) return
+      if (b.stream !== stream) return true
       const funding = inputsOf(tx)[0]
-      if (funding === undefined) return
+      if (funding === undefined) return true
+      const s = this.streamOf(toHex(b.producer), b.stream)
+      if (b.seq <= s.retiredSeq) {
+        this.drops.push({ txid, vout: outputIndex, topic })
+        return false
+      }
       const c = Uint8Array.from(tx.hash() as number[])
       // A carrier output is never a valid anchor input; it is held with an
       // empty script so that rule 7 refuses an anchor that spends it.
       this.hold(topic, op, { lockingScript: new Uint8Array(0), satoshis: out.satoshis ?? 0 })
-      const s = this.streamOf(toHex(b.producer), b.stream)
       this.addBatch(topic, s, { seq: b.seq, prev: toHex(b.prev), c, cKey: toHex(c), txid, outputIndex, funding })
-      return
+      return true
     }
     this.hold(topic, op, { lockingScript: script, satoshis: out.satoshis ?? 0 })
     if (pd !== undefined && pd.fields.length === 3 && bytesEq(pd.fields[0]!, TagAnchor)) {
       const a = decodeAnchor(pd.fields[1]!)
-      if (a.stream !== stream) return
+      if (a.stream !== stream) return true
       const s = this.streamOf(toHex(a.producer), a.stream)
       const at = position(tx, txid)
       this.addToken(topic, s, { anchor: a, txid, txidKey: hashKey(txid), outputIndex, outpoint: op, ...at, inputs: inputsOf(tx) })
-      return
+      return true
     }
     // A funding output: held so that a later spend of it can be read, and
     // so that the tree class can answer its transaction.
     if (!isFundingShape(script)) {
       this.host.log('ls_log indexed an output of no known kind', { topic, outpoint: op })
-      return
+      return true
     }
     const k = `${topic}|${txid}`
     let vouts = this.trees.get(k)
     if (vouts === undefined) this.trees.set(k, (vouts = new Set()))
     vouts.add(outputIndex)
+    return true
   }
 
   private hold(topic: string, op: string, coin: Coin): void {
@@ -307,7 +363,16 @@ export class LogLookupService implements LookupService {
   private streamOf(producer: string, stream: string): Stream {
     const k = `${producer}|${stream}`
     let s = this.streams.get(k)
-    if (s === undefined) this.streams.set(k, (s = new Stream(producer, stream)))
+    if (s === undefined) {
+      this.streams.set(k, (s = new Stream(producer, stream)))
+      const m = this.marks.get(k)
+      if (m !== undefined) {
+        s.retiredInterval = m.interval
+        s.retiredSeq = m.seq
+        s.retiredC = m.c
+        s.highest = m.seq
+      }
+    }
     return s
   }
 
@@ -432,7 +497,7 @@ export class LogLookupService implements LookupService {
       if (list.length === 0) {
         s.batches.delete(seq)
         if (seq === s.highest) {
-          s.highest = 0
+          s.highest = s.retiredSeq
           for (const k of s.batches.keys()) if (k > s.highest) s.highest = k
         }
       }
@@ -462,6 +527,7 @@ export class LogLookupService implements LookupService {
     if (this.isRetracted(e)) return 'retracted'
     if ((s.batches.get(e.seq) ?? []).some((o) => o.cKey !== e.cKey)) return 'fork'
     if (e.seq === 1) return 'linked'
+    if (e.seq - 1 === s.retiredSeq) return e.prev === s.retiredC ? 'linked' : 'fork'
     const before = s.batches.get(e.seq - 1)
     if (before === undefined || before.length === 0) return 'gap'
     return before.some((p) => p.cKey === e.prev) ? 'linked' : 'fork'
@@ -514,12 +580,18 @@ export class LogLookupService implements LookupService {
    * tried anyway, so the root, not the link, decides.
    */
   private intervalReport(s: Stream, t: TokenEntry): IntervalReport {
+    return this.intervalChoice(s, t).report
+  }
+
+  /** The interval's report, and when it is complete the candidates whose root is the token's, in seq order. */
+  private intervalChoice(s: Stream, t: TokenEntry): { report: IntervalReport; chosen?: BatchEntry[] } {
     const a = t.anchor
     const last = a.first + a.count - 1
+    const base = { interval: a.interval, first: a.first, count: a.count, txid: t.txid }
+    if (a.interval <= s.retiredInterval) return { report: { ...base, status: 'complete', missing: [], retired: true } }
     const missing: number[] = []
     for (let seq = a.first; seq <= last; seq++) if ((s.batches.get(seq)?.length ?? 0) === 0) missing.push(seq)
-    const base = { interval: a.interval, first: a.first, count: a.count, txid: t.txid }
-    if (missing.length > 0) return { ...base, status: 'incomplete', missing }
+    if (missing.length > 0) return { report: { ...base, status: 'incomplete', missing } }
     for (const end of s.batches.get(last)!) {
       const chosen: BatchEntry[] = [end]
       for (let seq = last - 1; seq >= a.first; seq--) {
@@ -528,9 +600,9 @@ export class LogLookupService implements LookupService {
         if (pick === undefined) break
         chosen.unshift(pick)
       }
-      if (chosen.length === a.count && bytesEq(intervalRoot(chosen.map((e) => e.c)), a.root)) return { ...base, status: 'complete', missing }
+      if (chosen.length === a.count && bytesEq(intervalRoot(chosen.map((e) => e.c)), a.root)) return { report: { ...base, status: 'complete', missing }, chosen }
     }
-    return { ...base, status: 'root-mismatch', missing }
+    return { report: { ...base, status: 'root-mismatch', missing } }
   }
 
   /** Statuses of every (producer, stream) held, or of one stream. */
@@ -542,7 +614,8 @@ export class LogLookupService implements LookupService {
       const forks: number[] = []
       const retracted: number[] = []
       // Over the held seqs only: a producer may number a batch 2^53 - 1.
-      let last = 0
+      // Seqs retention dropped are not holes.
+      let last = s.retiredSeq
       for (const seq of [...s.batches.keys()].sort((a, b) => a - b)) {
         if (seq > last + 1) holes.push([last + 1, seq - 1])
         last = seq
@@ -591,9 +664,20 @@ export class LogLookupService implements LookupService {
     if ('tree' in q) {
       // One output answers the whole transaction: the engine hydrates it as
       // the tree's BEEF, with the proof it was admitted with.
-      const vouts = this.trees.get(`${TopicPrefix}${q.stream}|${q.tree}`)
-      if (vouts === undefined || vouts.size === 0) return []
-      return [{ txid: q.tree, outputIndex: Math.min(...vouts) }]
+      const topic = `${TopicPrefix}${q.stream}`
+      const k = `${topic}|${q.tree}`
+      const held = [...(this.trees.get(k) ?? [])]
+      const low = this.treeLow.get(k)
+      if (low !== undefined) held.push(low)
+      if (held.length > 0) return [{ txid: q.tree, outputIndex: Math.min(...held) }]
+      // A tree whose every carrier retention dropped is no longer in the
+      // index; its outputs are still in storage, and output 0 is the lowest
+      // there can be (a lower one dropped is in treeLow).
+      if (this.retention !== undefined && this.storage !== undefined) {
+        const o = await this.storage.findOutput(q.tree, 0, topic)
+        if (o !== null && isFundingShape(Uint8Array.from(o.outputScript))) return [{ txid: q.tree, outputIndex: 0 }]
+      }
+      return []
     }
     const s = this.streams.get(`${q.producer}|${q.stream}`)
     if (s === undefined) return []
@@ -624,6 +708,18 @@ export class LogLookupService implements LookupService {
    * skipped a retraction would serve retracted batches.
    */
   async restore(outputs: Output[], storage: RestoreStorage): Promise<number> {
+    this.restoring = true
+    try {
+      return await this.restoreIndex(outputs, storage)
+    } finally {
+      this.restoring = false
+      if (this.retention !== undefined) {
+        this.retain().catch((e: unknown) => this.host.log('ls_log retention pass failed', { err: String(e) }))
+      }
+    }
+  }
+
+  private async restoreIndex(outputs: Output[], storage: RestoreStorage): Promise<number> {
     this.streams.clear()
     this.byOutpoint.clear()
     this.held.clear()
@@ -633,6 +729,7 @@ export class LogLookupService implements LookupService {
     this.retracted.clear()
     this.noted.clear()
     this.forkSeqs = 0
+    this.drops = []
     const full = storage as FullStorage
     this.storage = full
     const key = (topic: string, txid: string, vout: number): string => `${topic}|${outpointKey(txid, vout)}`
@@ -644,12 +741,17 @@ export class LogLookupService implements LookupService {
       queue.push(o)
     }
     const txs = new Map<string, Transaction | undefined>()
+    // Outputs storage no longer has (a carrier retention deleted), and the
+    // funding outputs every spender of which is such an output.
+    const absent = new Set<string>()
+    const fundings: Array<{ topic: string; op: string; spenders: string[] }> = []
     const visit = async (topic: string, txid: string, vout: number): Promise<void> => {
       const k = key(topic, txid, vout)
       if (seen.has(k)) return
       seen.add(k)
       const o = await full.findOutput(txid, vout, topic, undefined, true)
       if (o !== null) queue.push(o)
+      else absent.add(k)
     }
     let indexed = 0
     while (queue.length > 0) {
@@ -673,9 +775,13 @@ export class LogLookupService implements LookupService {
         this.host.log('ls_log could not restore an output without its transaction', { topic: o.topic, txid: o.txid, outputIndex: o.outputIndex })
       } else {
         try {
-          this.index(o.topic, tx, o.outputIndex)
-          this.noteSpends(tx)
-          indexed++
+          if (this.index(o.topic, tx, o.outputIndex)) {
+            this.noteSpends(tx)
+            indexed++
+            if (this.retention !== undefined && o.consumedBy.length > 0 && this.trees.get(`${o.topic}|${o.txid}`)?.has(o.outputIndex) === true) {
+              fundings.push({ topic: o.topic, op: outpointKey(o.txid, o.outputIndex), spenders: o.consumedBy.map((c) => key(o.topic, c.txid, c.outputIndex)) })
+            }
+          }
         } catch (e) {
           // Admission checked every stored output; one that no longer
           // decodes is logged and skipped rather than stopping the start.
@@ -686,7 +792,151 @@ export class LogLookupService implements LookupService {
       for (const c of o.consumedBy) await visit(o.topic, c.txid, c.outputIndex)
       if (first && tx !== undefined) for (let j = 0; j < tx.outputs.length; j++) await visit(o.topic, o.txid, j)
     }
+    // A funding output spent only by carriers retention deleted: the tree
+    // class still answers its tree, and the index need not hold it.
+    for (const f of fundings) {
+      if (f.spenders.every((k) => absent.has(k)) && (this.carriersByFunding.get(f.op)?.size ?? 0) === 0) this.retireFunding(f.topic, f.op)
+    }
     return indexed
+  }
+
+  // ---- retention (retention.ts)
+
+  private running: Promise<RetentionPass> | undefined
+
+  /**
+   * One retention pass at the host's time: for each stream, its oldest
+   * intervals not yet dropped, in order, while each is canonical, complete
+   * and older than the policy, have every carrier dropped from the index;
+   * the state file is written; then the dropped carriers' outputs are
+   * deleted from storage. Never while a restore is in flight; a pass asked
+   * for while one runs is that pass.
+   */
+  retain(): Promise<RetentionPass> {
+    if (this.running !== undefined) return this.running
+    this.running = this.retainPass().finally(() => {
+      this.running = undefined
+    })
+    return this.running
+  }
+
+  private async retainPass(): Promise<RetentionPass> {
+    const out: RetentionPass = { intervals: 0, carriers: 0, deleted: 0 }
+    const r = this.retention
+    if (r === undefined || this.restoring || this.storage === undefined) return out
+    const now = (r.now ?? Date.now)()
+    for (const s of this.streams.values()) {
+      const chain = this.chainOf(s).tokens
+      for (let k = s.retiredInterval + 1; k <= chain.length; k++) {
+        const t = chain[k - 1]!
+        if (now - t.anchor.timestamp < r.keepMs) break
+        const { report, chosen } = this.intervalChoice(s, t)
+        if (report.status !== 'complete' || chosen === undefined) break
+        const topic = `${TopicPrefix}${s.stream}`
+        for (let seq = t.anchor.first; seq <= t.anchor.first + t.anchor.count - 1; seq++) {
+          const list = s.batches.get(seq) ?? []
+          if (list.length > 1) this.forkSeqs--
+          for (const e of list) {
+            this.retireBatch(topic, e)
+            out.carriers++
+          }
+          s.batches.delete(seq)
+        }
+        s.retiredInterval = k
+        s.retiredSeq = t.anchor.first + t.anchor.count - 1
+        s.retiredC = chosen[chosen.length - 1]!.cKey
+        this.marks.set(`${s.producer}|${s.stream}`, { producer: s.producer, stream: s.stream, interval: k, seq: s.retiredSeq, c: s.retiredC })
+        this.stateDirty = true
+        out.intervals++
+      }
+    }
+    if (out.carriers > 0) {
+      this.host.metrics.inc('blogs_retired_total', undefined, out.carriers)
+      this.host.log('ls_log retention dropped proven carriers', { intervals: out.intervals, carriers: out.carriers })
+    }
+    if (this.stateDirty) {
+      // Written before anything is deleted: a crash between the two leaves
+      // carriers in storage that restore skips and the next pass deletes,
+      // never a deleted carrier counted as a hole. Until it is written,
+      // nothing is deleted.
+      try {
+        r.store.save({ marks: [...this.marks.values()], trees: [...this.treeLow] })
+        this.stateDirty = false
+      } catch (e) {
+        this.host.log('ls_log could not write the retention state; nothing is deleted from storage until it is', { err: String(e) })
+        return out
+      }
+    }
+    out.deleted = await this.deleteDrops()
+    return out
+  }
+
+  /** Takes a carrier out of the index, with its funding output when no other carrier spends it, and queues its output for deletion. */
+  private retireBatch(topic: string, e: BatchEntry): void {
+    this.forget(e)
+    const op = outpointKey(e.txid, e.outputIndex)
+    this.held.delete(`${topic}|${op}`)
+    this.unref(op, topic)
+    this.noted.delete(e.txid)
+    this.drops.push({ txid: e.txid, vout: e.outputIndex, topic })
+    if ((this.carriersByFunding.get(e.funding)?.size ?? 0) === 0) this.retireFunding(topic, e.funding)
+  }
+
+  /**
+   * Takes a funding output out of the index. Storage keeps it, spent, with
+   * its transaction (spec section 8.1); the tree class answers its tree
+   * from what is left of it in the index, from treeLow, or from storage.
+   */
+  private retireFunding(topic: string, op: string): void {
+    this.held.delete(`${topic}|${op}`)
+    this.unref(op, topic)
+    this.spenders.delete(op)
+    const dot = op.lastIndexOf('.')
+    const k = `${topic}|${op.slice(0, dot)}`
+    const vout = Number(op.slice(dot + 1))
+    const vouts = this.trees.get(k)
+    if (vouts === undefined || !vouts.has(vout)) return
+    vouts.delete(vout)
+    const low = Math.min(this.treeLow.get(k) ?? Infinity, vout)
+    if (vouts.size > 0 || low !== 0) this.treeLow.set(k, low)
+    else this.treeLow.delete(k)
+    if (vouts.size === 0) this.trees.delete(k)
+    this.stateDirty = true
+  }
+
+  private unref(op: string, topic: string): void {
+    const refs = this.byOutpoint.get(op)
+    if (refs === undefined) return
+    const keep = refs.filter((r) => r.topic !== topic)
+    if (keep.length === 0) this.byOutpoint.delete(op)
+    else this.byOutpoint.set(op, keep)
+  }
+
+  /** Deletes the queued carrier outputs from storage; one that fails stays queued. */
+  private async deleteDrops(): Promise<number> {
+    const s = this.storage
+    if (this.drops.length === 0 || s === undefined) return 0
+    if (s.deleteOutput === undefined) {
+      if (!this.warned.has('delete')) {
+        this.warned.add('delete')
+        this.host.log('ls_log cannot delete dropped carriers: the storage has no deleteOutput; they stay in storage and restore skips them')
+      }
+      this.drops = []
+      return 0
+    }
+    const queue = this.drops
+    this.drops = []
+    let n = 0
+    for (const d of queue) {
+      try {
+        await s.deleteOutput(d.txid, d.vout, d.topic)
+        n++
+      } catch (e) {
+        this.drops.push(d)
+        this.host.log('ls_log could not delete a dropped carrier; the next pass tries again', { txid: d.txid, err: String(e) })
+      }
+    }
+    return n
   }
 
   async getDocumentation(): Promise<string> {

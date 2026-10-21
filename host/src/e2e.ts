@@ -14,7 +14,11 @@
  * native header shape (/v1/root/<height>, /v1/tip). It submits the
  * transaction vectors in a scrambled order, interval 2's anchor before
  * interval 1's among them, asks ls_log over HTTP, restarts the host, and
- * asks again from the restored index. Everything it starts, it stops.
+ * asks again from the restored index. Then it restarts the host with a
+ * retention policy, under which every carrier is proven and old enough:
+ * the pass after restore drops them from the index and from MySQL, the
+ * anchors and the tree stay answered, and so after one more restart.
+ * Everything it starts, it stops.
  */
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
@@ -88,10 +92,11 @@ interface Host {
   out: string[]
 }
 
-async function startHost(dir: string, moduleFile: string, db: number, hdr: number, port: number): Promise<Host> {
+async function startHost(dir: string, moduleFile: string, db: number, hdr: number, port: number, extra: Record<string, string> = {}): Promise<Host> {
   const out: string[] = []
   const proc = spawn(process.execPath, [resolve(dir, 'dist/index.js')], {
     env: {
+      ...extra,
       PATH: process.env['PATH'] ?? '',
       OVERLAY_TOPICS: v.topic,
       OVERLAY_MODULES: moduleFile,
@@ -217,6 +222,30 @@ async function main(): Promise<void> {
     if (!host.out.join('').includes('ls_log')) fail(`no restore line:\n${host.out.join('')}`)
     await answers('restored', true)
     expect('restored: retracted seq 1 answers nothing', await ask(host, q('seq', 1)), [])
+
+    // Retention: the vectors' anchors are dated long ago, so with a policy
+    // of one day both intervals are old enough, and both are complete.
+    const retention = { BLOGS_KEEP_DAYS: '1', BLOGS_STATE_DIR: join(staged.root, 'state') }
+    const carriers = ['carrier-seq-1', 'carrier-seq-2', 'carrier-seq-3'].map(id)
+    const rows = (): string =>
+      docker('exec', db.id, 'mysql', '-h127.0.0.1', '-uroot', `-p${password}`, '-N', '-e',
+        `select count(*) from overlay.outputs where txid in (${carriers.map((c) => `'${c}'`).join(',')})`).split('\n').pop()!.trim()
+    expect('before retention: the carriers are in MySQL', rows(), '3')
+    for (const when of ['retained', 'retained and restarted']) {
+      await stopHost(host)
+      host = await startHost(dir, staged.file, db.port, hport, port, retention)
+      for (let i = 0; i < 40 && (await ask(host, q('seq', 3))).length > 0; i++) await sleep(250)
+      expect(`${when}: seq 3 answers nothing`, await ask(host, q('seq', 3)), [])
+      expect(`${when}: the carriers left MySQL`, rows(), '0')
+      expect(`${when}: interval 1`, await ask(host, q('interval', 1)), [id('anchor-interval-1')])
+      expect(`${when}: interval 2`, await ask(host, q('interval', 2)), [id('anchor-interval-2')])
+      const tree = await askTree(host, id('funding-tree'))
+      expect(`${when}: the funding tree, by txid`, tree.map(([t]) => t), [id('funding-tree')])
+      if (!v.headers.some((h) => h.height === tree[0]![1])) fail(`${when}: the tree's BEEF carries no proof at a vector height`)
+      const m = await (await fetch(`${host.url}/metrics`)).text()
+      const gauge = m.split('\n').find((l) => l.startsWith('blogs_retired_positions'))
+      expect(`${when}: three positions retired`, gauge?.trim().split(' ').pop(), '3')
+    }
     console.log('e2e: PASS')
   } finally {
     if (host !== undefined) await stopHost(host)

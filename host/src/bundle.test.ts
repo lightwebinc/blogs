@@ -79,10 +79,10 @@ test('the bundle names its versions in its banner and in the host log', async ()
   assert.equal(`// ${String(mounted[0]?.extra?.['build'])}`, banner)
 })
 
-test('the bundle imports nothing but @bsv/sdk and carries no source map', () => {
+test('the bundle imports nothing but @bsv/sdk and the Node built-ins retention needs, and carries no source map', () => {
   const text = readFileSync(bundleUrl, 'utf8')
   const specifiers = new Set([...text.matchAll(/^\s*(?:import|export)\b[^'"]*?from\s*["']([^"']+)["']/gm)].map((m) => m[1]))
-  assert.deepEqual([...specifiers], ['@bsv/sdk'])
+  assert.deepEqual([...specifiers].sort(), ['@bsv/sdk', 'node:fs', 'node:path'])
   assert.equal(/\bimport\s*\(|\brequire\s*\(/.test(text), false, 'no dynamic import or require')
   assert.equal(text.includes('sourceMappingURL'), false)
   assert.equal(existsSync(new URL('../bundle/blogs-module.js.map', import.meta.url)), false)
