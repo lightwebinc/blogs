@@ -35,8 +35,8 @@ jobs:
           [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "host/package.json is $v, the tag is $GITHUB_REF_NAME"; exit 1; }
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          # go.mod's Go version and the Dockerfile builder's toolchain.
-          go-version: "1.27.2"
+          # The Dockerfile builder's toolchain; it may lead go.mod's go line.
+          go-version: "1.27.3"
 
       - name: Build
         env:
