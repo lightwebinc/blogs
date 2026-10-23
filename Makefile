@@ -80,7 +80,7 @@ deps-check:
 	if [ "$$sdk" != "$(DEPS_SDK)" ]; then echo "deps-check: go-sdk must resolve to exactly $(lastword $(DEPS_SDK)), found: $$sdk"; exit 1; fi
 
 # LICENSE-THIRD-PARTY is generated from what the binaries link, so a new
-# dependency brings its licence obligation into the file rather than
+# dependency brings its license obligation into the file rather than
 # leaving it undischarged. licences fails when the file is stale.
 licences:
 	python3 scripts/gen-third-party-licenses.py . --check

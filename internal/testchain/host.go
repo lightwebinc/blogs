@@ -27,7 +27,7 @@ import (
 // mined transaction admitted here that spends the funding output a held
 // carrier spent retracts that carrier: the batch class stops answering it.
 // Restore and the link statuses are the real host module's and are not
-// modelled.
+// modeled.
 type Host struct {
 	mu      sync.Mutex
 	chain   *Chain

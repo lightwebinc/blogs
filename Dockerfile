@@ -70,8 +70,8 @@ USER nonroot:nonroot
 COPY --from=builder /out/blogs /usr/local/bin/blogs
 COPY --from=builder --chown=65532:65532 --chmod=0700 /state/.blogs /home/nonroot/.blogs
 
-# The licences travel with the image. The binary statically contains
-# go-sdk and the other modules LICENSE-THIRD-PARTY lists, whose licences
+# The licenses travel with the image. The binary statically contains
+# go-sdk and the other modules LICENSE-THIRD-PARTY lists, whose licenses
 # require their text in any copy, and static linking leaves those files
 # behind.
 COPY LICENSE NOTICE LICENSE-THIRD-PARTY /usr/share/doc/blogs/

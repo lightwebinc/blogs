@@ -75,7 +75,7 @@ async function mysql(): Promise<{ id: string; port: number }> {
   const port = Number(docker('port', id, '3306/tcp').split('\n')[0]!.split(':').pop())
   for (let i = 0; i < 120; i++) {
     try {
-      // Over TCP, which the image's initialisation server does not listen on.
+      // Over TCP, which the image's initialization server does not listen on.
       docker('exec', id, 'mysql', '-h127.0.0.1', '-uroot', `-p${password}`, '-e', 'select 1')
       return { id, port }
     } catch {

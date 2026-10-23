@@ -87,7 +87,7 @@ that package. @bsv/sdk is not in it. The file imports @bsv/sdk by bare
 specifier from the overlay host's own installation, so the obligation for
 @bsv/sdk belongs to whoever installs it, which is the host operator. The
 host image built from host/Dockerfile adds the file to a reference
-overlay host image, whose own licence files travel in that image.
+overlay host image, whose own license files travel in that image.
 
 The npm @bsv packages are under the Open BSV License Version 6, whose
 attribution is "© BSV Association" without the comma, not the Version 5

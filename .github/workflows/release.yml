@@ -51,9 +51,9 @@ jobs:
           GOWORK=off go build -trimpath -buildvcs=false \
             -ldflags "-s -w -X main.version=${version}" \
             -o "dist/${dir}/blogs" ./cmd/blogs
-          # The licences travel INSIDE the tarball. A statically linked
+          # The licenses travel INSIDE the tarball. A statically linked
           # binary contains its dependencies' code, and three of those
-          # licences require their own text to reach whoever receives a
+          # licenses require their own text to reach whoever receives a
           # binary rather than only whoever receives source.
           cp LICENSE NOTICE LICENSE-THIRD-PARTY README.md "dist/${dir}/"
           tar -C dist -czf "dist/${dir}.tar.gz" "${dir}"

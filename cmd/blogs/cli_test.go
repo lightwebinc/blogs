@@ -87,7 +87,7 @@ func (h *harness) want(r result, code int, stderrHas string) {
 var streamLine = regexp.MustCompile(`(?m)^stream   ([a-z_]+)$`)
 var identityLine = regexp.MustCompile(`(?m)^identity     ([0-9a-f]{66})$`)
 
-// producer initialises and funds the home, creates a stream, and returns
+// producer initializes and funds the home, creates a stream, and returns
 // the stream and the producer's key.
 func (h *harness) producer() (string, string) {
 	h.t.Helper()
