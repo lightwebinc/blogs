@@ -159,7 +159,14 @@ Without `BLOGS_KEEP_DAYS` a host keeps every carrier it admitted, and its
 memory and start time grow with the stream ([limits.md](limits.md)). With
 it, a proven carrier is dropped once it is older than the policy. How long
 batches are kept is host policy ([frozen.md](frozen.md) section 8); what
-the specification requires a host to keep is kept regardless:
+the specification requires a host to keep is kept regardless.
+
+A host that serves logging streams should set `BLOGS_KEEP_DAYS=1`: the
+archives hold the record, and a host only needs recent batches to answer
+fast. Keeping everything is the default so that no host drops proven data
+unless its operator chose to.
+
+What is kept regardless:
 
 | What | Kept |
 | --- | --- |
