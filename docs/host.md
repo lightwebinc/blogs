@@ -205,6 +205,31 @@ that does not parse stops the host, because a dropped position read as
 held again would be counted a hole. It names keys, streams, txids and
 positions, never a line.
 
+## The Go module
+
+The same module exists in Go, `module/` in this repository, written to
+bcommon's engine-neutral contract (`github.com/lightwebinc/bcommon/module`)
+for a Go overlay host that carries the adapter: `tm_log_<stream>` for each
+configured stream and `ls_log` for all of them, with the same three
+question classes and the same answers, the same statuses, restore and
+retention (the state file `blogs-retention.json` is the same file, so a
+host can move between the two). It reads the same `BLOGS_STREAMS`,
+`BLOGS_KEEP_DAYS` and `BLOGS_STATE_DIR` and refuses the same mistakes, and
+counts the same metrics below. Its admission rules are `logrec.Admit`, its
+questions `logrec.ParseQuery`, and its tests drive it with the transaction
+and refusal vectors and the TypeScript module's own cases. blogs has no
+priced class, so the Go module has no terms route and no port of its own:
+`ls_log` answers through the host's `/lookup`.
+
+On the Go host the topic manager reads the submission's bytes exactly as
+they arrived (`module.WithSubmission`), as the TypeScript manager reads the
+submitted BEEF, and decides recorded and raised refusals by the same rule.
+`ls_log` answers with outputs the host hydrates from its storage. Retention
+deletes a dropped carrier's output through `DeleteOutput` on the storage a
+restore is handed; the host keeps its record that the carrier's
+transaction was applied, as above. The host logs `blogs module mounted`
+with the topics, `ls_log`, the build and the retention policy.
+
 ## Metrics
 
 Every counter is preset at start.
