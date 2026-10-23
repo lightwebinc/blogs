@@ -266,7 +266,7 @@ Shipper settings, in short:
 | OpenTelemetry Collector | exporter `otlphttp` with `logs_endpoint: http://<sidecar>/v1/logs` |
 | Grafana Alloy, Promtail, Fluent Bit, Vector | Loki output with URL `http://<sidecar>/loki/api/v1/push` |
 
-## Exit test
+## Acceptance checks
 
 `scripts/backend-exit-test.py` checks a running deployment (standard
 library Python only):
@@ -277,7 +277,7 @@ A="--archive /a --archive /b --archive /c --stream app_<suffix> --stream sec_<su
 scripts/backend-exit-test.py roots   $A    # the three archives agree on every interval they share
 scripts/backend-exit-test.py tamper  $A    # an altered copy pushed into Loki is marked altered
 scripts/backend-exit-test.py retract $A --admin http://127.0.0.1:4319   # through the sidecar: a receipted hole
-scripts/backend-exit-test.py soak    $A --duration 604800 --every 300   # the 7-day run
+scripts/backend-exit-test.py soak    $A --duration 604800 --every 300   # a 7-day soak
 ```
 
 Each prints one JSON line per check and exits 0 only when it passed.

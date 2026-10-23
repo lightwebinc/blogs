@@ -120,14 +120,14 @@ no longer serves.
 
 ## Would need a frozen change
 
-Nothing here needed one. These would, and are not made:
+None of the limits above changes frozen.md. These would:
 
 - **A lookup class for sweeps.** A question that answers "the sweep that
   spent this carrier's funding output" would let any backfill carry sweeps
   without a spend source. The question classes are signed
   ([frozen.md](frozen.md) section 6), so it would be a new, separately
-  named class, added as the tree class was (a funding tree by its txid,
-  which serves audits but names no spender).
+  named class, like the tree class (a funding tree by its txid, which
+  serves audits but names no spender).
 - **A smaller carried-content bound for the plane.** The 256 KiB floor is
   what every reader accepts, and a floor is never lowered. The plane default
   is producer policy for that reason.

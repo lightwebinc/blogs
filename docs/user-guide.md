@@ -54,7 +54,7 @@ nothing, and is the first thing to run when something is wrong.
 | **Batch** | Up to a few thousand lines, signed, with a `seq` (1, 2, 3, ...) and `prev`, the commitment of the batch before it. The lines ride in the record (`full`) or live elsewhere under their SHA-256 (`digest`) |
 | **Carrier** | The unmined transaction a batch rides in. It spends one output of a mined **funding tree**, so it verifies by SPV without paying for block space. Its txid is the batch's **commitment** |
 | **Anchor** | One mined transaction per **interval** that commits the RFC 6962 root over the interval's batches and spends the previous interval's anchor, so the anchors form one chain covering every batch once |
-| **Host** | An overlay host that keeps the stream's topic and answers two questions: the batch at a `seq`, and the anchor of an interval. Hosts are replicas, not authorities: a host can withhold, but it cannot forge |
+| **Host** | An overlay host that keeps the stream's topic and answers three questions: the batch at a `seq`, the anchor of an interval, and a funding tree by its txid. Hosts are replicas, not authorities: a host can withhold, but it cannot forge |
 | **Plane or unicast** | How a producer reaches the hosts: once to a facade on the multicast plane, which delivers to every subscribed host and repairs loss; or to each host itself (section 10) |
 | **Retraction** | A producer takes batches back by mining a **sweep** that spends their funding outputs. Hosts drop the bytes and keep the position, which the anchor still commits |
 

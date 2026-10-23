@@ -334,8 +334,7 @@ and does not show its proof to the topic manager or the lookup service, so
 the mined state of a transaction first seen unmined would never reach the
 index. A producer therefore mints its next funding tree before the current
 one runs out (mint-ahead), so batches do not wait for a block at a tree's
-rollover. Mint-ahead is added to bcommon `producer` as a change of its own,
-and a blogs producer is built only on a bcommon version that has it. A
+rollover; bcommon's `producer` mints ahead. A
 carrier spends only a mined tree's outputs; that also means no carrier can be
 stranded by a different version of its parent being mined.
 
