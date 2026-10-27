@@ -36,8 +36,8 @@ type Config struct {
 	// Settle.
 	ArcadeKey string
 	// Asset is a node's asset API base URL. It is the chain view when Chain
-	// is not set (asset:<Asset>), and the node coinbase is read from on a
-	// regtest chain.
+	// is not set (asset:<Asset>), and the node a regtest chain's coinbase
+	// is read from.
 	Asset string
 	// Chain is the chain view (nodeapi.ParseChain): where transactions,
 	// proofs and spends are read. woc:main or woc:test (WhatsOnChain, no
@@ -238,7 +238,7 @@ func Defaults() Config {
 }
 
 // Keys is the file grammar's key list, in lexicographic order. A key not in
-// it is an error: a misspelt key that was silently ignored would leave a
+// it is an error: a misspelled key that was silently ignored would leave a
 // setting at its default with no sign that the file was ever read.
 var Keys = []string{"arcade_key", "asset", "chain", "facade", "fee_dust", "fee_floor", "fee_max_rate", "fee_max_tx",
 	"fee_min_rate", "fee_policy_urls", "fee_rate", "fee_source", "fund_mined_only", "header_url", "home", "hosts", "mode",

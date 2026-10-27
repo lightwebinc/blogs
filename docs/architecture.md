@@ -108,15 +108,17 @@ Readers are the same in both. [unicast.md](unicast.md) has the tradeoff.
 | `internal/ingest` | the logging sidecar: the doors (syslog, OTLP logs, Loki push), the line form, batching onto the producer engine, forwarding to Loki ([backend.md](backend.md)) |
 | `internal/gateway` | the read gateway: the Loki API proxy that marks lines against an archive, coverage, retention metering |
 | `internal/metrics` | counters and gauges in the Prometheus text format |
-| `internal/unicast` | submitting to each host, with retries and a quorum |
 | `internal/testchain` | in-process stand-ins for the chain and a host, for tests |
-| `host/` | the host module in TypeScript: `tm_log_<stream>` topic managers and the `ls_log` lookup service, bundled into one file for a reference overlay host ([host.md](host.md)) |
+| `internal/vectors` | the generator behind `cmd/vectors`: transaction, refusal and query vectors from the Go codec |
+| `host/` | the host module in TypeScript: `tm_log_<stream>` topic managers and the `ls_log` lookup service, bundled into one file for a reference overlay host ([host.md](host.md)). Frozen: bug fixes only |
+| `module/` | the same module in Go, for a Go overlay host built on bcommon's engine-neutral module contract ([host.md](host.md#the-go-module)) |
 | `deploy/` | `compose.yaml` for a public host, `quickstart/compose.yaml` for the sandbox |
 
 The Go codec (`internal/logrec`) and the TypeScript codec (`host/src`) each
 decode the other's golden vectors, so the producer and the hosts cannot
 drift apart unnoticed. The shared building blocks (wallet, funding trees,
-carriers, header client, publishing) come from
+carriers, header client, publishing, unicast submission with retries and a
+quorum) come from
 [bcommon](https://github.com/lightwebinc/bcommon); the only other direct Go
 dependency is [go-sdk](https://github.com/bsv-blockchain/go-sdk).
 

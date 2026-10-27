@@ -16,6 +16,8 @@
 #
 # Optional: BLOGS_IMAGE, BLOGS_HOST_IMAGE and DEVCHAIN_IMAGE name the images
 # (default: the published ones, tag latest).
+# HOST_A_PORT and HOST_B_PORT move the hosts' loopback ports (default 8081
+# and 8082) when something else holds them.
 
 name: blogs-quickstart
 
@@ -64,7 +66,7 @@ services:
       OVERLAY_KNEX_URL: mysql://overlay:quickstart@db:3306/overlay_a
       OVERLAY_CHAIN_TRACKER_URL: http://chain:8080
     ports:
-      - "127.0.0.1:8081:8080"
+      - "127.0.0.1:${HOST_A_PORT:-8081}:8080"
 
   host-b:
     <<: *host
@@ -73,7 +75,7 @@ services:
       OVERLAY_KNEX_URL: mysql://overlay:quickstart@db:3306/overlay_b
       OVERLAY_CHAIN_TRACKER_URL: http://chain:8080
     ports:
-      - "127.0.0.1:8082:8080"
+      - "127.0.0.1:${HOST_B_PORT:-8082}:8080"
 
   # The command, run with `docker compose run --rm -T blogs <command>`. Its
   # home (identity, coin pool, streams) is the named volume `home`.

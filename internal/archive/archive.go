@@ -197,7 +197,7 @@ type Summary struct {
 	// Stopped says why the interval walk stopped, when it did short of
 	// what the host holds.
 	Stopped string
-	// Refused counts answers refused; Refusals are they, each with what
+	// Refused counts answers refused; Refusals lists them, each with what
 	// answered it.
 	Refused  int
 	Refusals []reader.Refusal

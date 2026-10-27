@@ -126,11 +126,10 @@ func (r *Report) incomplete(format string, args ...any) *Report {
 // their commitments to equal the token's. A seq no host serves takes its
 // commitment from the next batch's prev, as an archive's does, and is
 // reported in Unserved; one whose commitment nothing names leaves the
-// interval Incomplete. The outputs a token's inputs
-// spend are read from the predecessor token's transaction, from the funding
-// trees the interval's carriers carry, from the tree class (the local
-// sources and the hosts, each tree's proof checked against the headers),
-// or from Txs.
+// interval Incomplete. The outputs a token's inputs spend are read from
+// the predecessor token's transaction, from the funding trees the
+// interval's carriers carry, from the tree class (the local sources and
+// the hosts, each tree's proof checked against the headers), or from Txs.
 //
 // An error is no verdict: a host or the header source could not be asked.
 func (c *Client) VerifyInterval(ctx context.Context, stream string, producer []byte, n uint64) (*Report, error) {

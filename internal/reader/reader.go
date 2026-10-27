@@ -2,9 +2,9 @@
 // every answer itself (docs/spec.md sections 7.2 and 13): a batch carrier's
 // rules, its funding parent's proof against the reader's own headers, an
 // anchor token's rules and its proof, a funding tree's txid and proof, the
-// chain of anchors and an interval's root. A host is trusted for nothing: an answer is either
-// verified here or reported as refused, and an empty answer means only that
-// the host holds nothing that answers.
+// chain of anchors and an interval's root. A host is trusted for nothing:
+// an answer is either verified here or reported as refused, and an empty
+// answer means only that the host holds nothing that answers.
 package reader
 
 import (

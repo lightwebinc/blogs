@@ -6,7 +6,7 @@ is how a producer's objects reach the hosts.
 
 | | `plane` (the default) | `unicast` |
 | --- | --- | --- |
-| The producer submits each object | once, to `facade` | to every host in `hosts`, one by one |
+| The producer submits each object | once, to `facade` | to every host in `hosts`, each on its own |
 | Every other host receives it | from the multicast plane, which repairs loss | only from the producer, or later from a sibling by `blogs backfill` |
 | The producer's upload per object | one copy | one copy per host |
 | A host that was down | receives what it missed from the plane's repair | misses it until a backfill copies it across |
@@ -132,7 +132,7 @@ blogs backfill app_qzxkvbmwtr 02c0ffee... -seqs 12-13 -anchors 4
 ```
 
 `-to URL` fills one host from all the others; `-from URL` copies from one
-host only. Nothing needs the producer's home, so an archive operator can
+host only. Nothing needs the producer's home, so a host operator can
 repair their own host. When in doubt about what a host missed, repair the
 whole stream: positions a host holds are reported `held` and cost one
 question each. `-seqs` takes at most 65536 seqs per run. A host that was

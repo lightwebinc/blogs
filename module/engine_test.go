@@ -16,8 +16,7 @@ import (
 // The module inside an engine's ordinary admission path over an in-memory
 // store, the twin of engine.test.ts: what the engine records for a
 // refusal, the out-of-order anchor, a delivery in scrambled order,
-// retraction, and a restore from the engine's own storage. The real Go
-// engine runs the same in overlay-engine's integration test.
+// retraction, and a restore from the engine's own storage.
 
 type setup struct {
 	host *fakeHost

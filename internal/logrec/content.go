@@ -24,9 +24,9 @@ func CheckFetched(l *Locator, content []byte) error {
 
 // Expand decodes a batch's content (carried or fetched) under its encoding
 // and checks it against the record: exactly Size bytes, exactly Count
-// LF-terminated lines, valid UTF-8 is NOT required here (a renderer filters
-// text, docs/spec.md section 10). Decompression stops at Size+1 bytes, so a
-// compressed bomb costs at most MaxExpanded+1 bytes of output.
+// LF-terminated lines; valid UTF-8 is NOT required here (a renderer
+// filters text, docs/spec.md section 10). Decompression stops at Size+1
+// bytes, so a compressed bomb costs at most MaxExpanded+1 bytes of output.
 func Expand(b *Batch, content []byte) ([]byte, error) {
 	var out []byte
 	switch b.Encoding {

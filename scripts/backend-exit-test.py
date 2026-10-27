@@ -13,9 +13,9 @@ Standard library only.
            copy unverified (altered) and the original still verified
   retract  retracts one proven batch through the sidecar's admin API
            (--admin), or with blogs sweep (--blogs, the sidecar stopped:
-           it holds the producer home), waits for every
-           archive to keep the receipt, and checks the gateway marks the
-           batch's lines retracted and its coverage names the receipt
+           it holds the producer home), waits for every archive to keep
+           the receipt, and checks the gateway marks the batch's lines
+           retracted and its coverage names the receipt
   soak     repeats roots and a gateway sample every --every for --duration,
            one JSON line per round, and fails if any round failed
 

@@ -275,6 +275,14 @@ directory (`blogs archive -dir`) asked before the hosts.
 | `-recheck-all` | off | ask about every stored seq in this pass |
 | `-content-dir DIR`, `-allow-host HOST` | none | as for `read` |
 
+**`ingest`** and **`gateway`**: the logging backend's flags are in
+[backend.md](backend.md). `ingest` takes `produce`'s batching flags
+(`-encoding`, `-max-bytes`, `-max-lines`, `-max-wait`, `-max-rate`,
+`-interval`) and its funding flags, with trees of 32 outputs
+(`-tree-count`) and the next minted ahead at 24 (`-ahead`); `gateway`
+listens on `127.0.0.1:3101` (`-listen`) and measures retained bytes every
+`1m` (`-meter`).
+
 `init`, `stream new`, `stream list`, `doctor` and `version` take no flags
 beyond `-v`.
 
@@ -282,7 +290,7 @@ beyond `-v`.
 
 | Image | What it runs |
 | --- | --- |
-| `ghcr.io/lightwebinc/blogs` | the `blogs` command as its entrypoint, as uid 65532 (`nonroot`) on a distroless base. It listens on nothing |
+| `ghcr.io/lightwebinc/blogs` | the `blogs` command as its entrypoint, as uid 65532 (`nonroot`) on a distroless base. It exposes no port: only `ingest` and `gateway` listen, where their flags say |
 | `ghcr.io/lightwebinc/blogs-host` | a reference overlay host with the blogs module built in ([self-host.md](self-host.md)) |
 | `ghcr.io/lightwebinc/blogs-devchain` | the local development chain on port 8080: a private regtest chain for the sandbox, never for a network |
 

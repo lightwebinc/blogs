@@ -84,8 +84,7 @@ const (
 	// outputs; every carrier's BEEF carries its tree. MaxTreeCount bounds an
 	// anchor fee tree too, under bcommon's mint.MaxFundingOutputs (1023), so
 	// a larger tree is refused before a run rather than at its mint.
-	// PlaneTreeCountWarn
-	// is where the tree alone is about 10 fragments.
+	// PlaneTreeCountWarn is where the tree alone is about 10 fragments.
 	DefaultTreeCount   = 100
 	MaxTreeCount       = 1000
 	PlaneTreeCountWarn = 250

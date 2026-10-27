@@ -67,7 +67,7 @@ func TestReadNamesAHostThatSubstitutesBytes(t *testing.T) {
 	if r.stdout != "" || strings.Contains(r.stderr, "MISSING") || strings.Contains(r.stderr, "no host holds") {
 		t.Fatalf("read, every host substituting bytes:\n%s\n%s", r.stdout, r.stderr)
 	}
-	// The owner's retraction plan says the same, and builds nothing.
+	// The producer's retraction plan says the same, and builds nothing.
 	r = h.run("", "sweep", stream, "-retract-seqs", "1")
 	h.want(r, exitIncomplete, "seq 1: the hosts answered its carrier only with what does not verify against the header source "+h.chainS.URL)
 	a.SetRewrite(nil)

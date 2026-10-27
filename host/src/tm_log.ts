@@ -83,7 +83,7 @@ export class Unrecorded extends Error {
 /**
  * The engine has verified a submitted transaction's proof against the
  * host's headers before calling a topic manager (Transaction.verify on
- * submit; GASP verifies a graph before its unverified finalisation). What
+ * submit; GASP verifies a graph before its unverified finalization). What
  * remains for rule 8 and the funding tree rule is that the proof is present
  * and names the transaction, which MerklePath.verify checks before it asks
  * a tracker; this tracker answers yes to what the engine already checked.

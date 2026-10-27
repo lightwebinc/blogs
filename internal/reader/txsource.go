@@ -12,8 +12,9 @@ import (
 
 // TxSource is a copy of the chain answering a mined transaction by its
 // txid: a funding tree an anchor's input spends that no host asked serves
-// by the tree class, a sweep, a payment. Its answer is never trusted. The caller holds the bytes to the txid it asked for, and a
-// proof, when it needs one, to its own header source.
+// by the tree class, a sweep, a payment. Its answer is never trusted. The
+// caller holds the bytes to the txid it asked for, and a proof, when it
+// needs one, to its own header source.
 type TxSource interface {
 	// Tx returns the transaction; with proof, carrying its merkle path.
 	Tx(ctx context.Context, txid string, proof bool) (*transaction.Transaction, error)

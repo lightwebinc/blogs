@@ -133,7 +133,7 @@ share of the funding tree it spends, and the 1 satoshi it carries); a
 carrier is never mined and pays no fee of its own. Each anchor costs about
 113: the floor, and its share of the anchor fee tree. A stream anchored
 every ten minutes around the clock spends about 16,000 satoshis
-(0.0004 BSV) a day on anchors; the batch cost follows how much you log.
+(0.00016 BSV) a day on anchors; the batch cost follows how much you log.
 About 50,000 satoshis starts a stream: the first funding trees, and a
 reserve so the next tree is minted before the current one runs out.
 `blogs doctor` shows the pool, and `blogs sweep -retire` returns unused
@@ -272,7 +272,7 @@ INCOMPLETE interval 2: no host answered; an empty answer proves nothing
 $ blogs backfill $STREAM $PRODUCER -seqs 5-5 -anchors 2
 ...
 backfill app_yuqhfqxzfo to http://host-b:8080: 1 held, 2 filled, 0 missing, 0 refused, 0 unserved, 0 sweep(s) carried
-note: backfill carried batches and anchors, not sweeps: ...
+note: backfill carried batches, anchors and their fee trees, not sweeps: ...
 $ blogs -hosts http://host-b:8080 verify-interval $STREAM $PRODUCER 2
 VERIFIED interval 2 of app_yuqhfqxzfo ...
 ```

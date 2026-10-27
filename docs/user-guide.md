@@ -61,7 +61,8 @@ nothing, and is the first thing to run when something is wrong.
 ## 4. Configuration
 
 Settings come from global flags, then `BLOGS_<KEY>` variables, then the
-config file (`$BLOGS_HOME/config`, else `~/.blogs/config`), then defaults.
+config file (`-config PATH`, else `$BLOGS_HOME/config`, else
+`$XDG_CONFIG_HOME/blogs/config`, else `~/.blogs/config`), then defaults.
 The file is one `key = value` per line; an unknown key is an error, never
 ignored. Every key, variable and flag is in [configuration.md](configuration.md).
 
@@ -178,7 +179,7 @@ is on the chain and not yet mined is waited for, 10 minutes at most; after
 that the run goes on and the next one asks again. You have nothing to do;
 `blogs doctor` shows a tree still waiting to be asked about. A tree the
 hosts could not be given is published by the next run, first thing. The
-details are in [usage.md](usage.md), An interrupted funding tree. This
+details are in [usage.md](usage.md#an-interrupted-funding-tree). This
 covers trees paid from the home's own pool, which is how every producer
 pays; a tree funded through a BRC-100 wallet (bcommon's `Trees.Fund`) is
 not covered.

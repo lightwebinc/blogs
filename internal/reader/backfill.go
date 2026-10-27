@@ -18,9 +18,10 @@ import (
 // anchor tokens of intervals 1 to Intervals and the batches at Seqs, each
 // asked of To first and, only when To holds nothing, fetched from the
 // first sibling whose answer verifies (a sibling that answers what does
-// not verify is named, and the next is asked), and submitted to To's submit route
-// (docs/spec.md section 12, Archive). It is also how a host that missed a
-// unicast producer's submissions is repaired from the hosts that took them.
+// not verify is named, and the next is asked), and submitted to To's
+// submit route (docs/spec.md section 12, Archive). It is also how a host
+// that missed a unicast producer's submissions is repaired from the hosts
+// that took them.
 type Backfill struct {
 	// From are the siblings, asked in order.
 	From     []string

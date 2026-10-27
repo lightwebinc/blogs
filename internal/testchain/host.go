@@ -21,9 +21,9 @@ import (
 // Host is a stand-in overlay host for blogs streams: /submit runs the
 // engine's SPV and the blogs topic manager (logrec.Admit) over the topic's
 // previous coins, and /lookup answers the three ls_log classes, the question
-// validated by logrec.ParseQuery. Refusals the
-// specification says leave no record (anchor-input, unmined) are not
-// recorded, so the same transaction offered again is decided afresh. A
+// validated by logrec.ParseQuery. Refusals the specification says leave
+// no record (anchor-input, unmined) are not recorded, so the same
+// transaction offered again is decided afresh. A
 // mined transaction admitted here that spends the funding output a held
 // carrier spent retracts that carrier: the batch class stops answering it.
 // Restore and the link statuses are the real host module's and are not

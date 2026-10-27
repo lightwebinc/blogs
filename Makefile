@@ -111,8 +111,9 @@ ts-test: ts-build
 
 # One publish-and-lookup on a local reference overlay host loading the
 # bundle, staged beside the host's node_modules as a deployment places it,
-# with restart and restore, and retention across two restarts. Not part of verify: it needs Docker (for MySQL) and a reference
-# host directory holding its compiled dist/index.js and its node_modules.
+# with restart and restore, and retention across two restarts. Not part of
+# verify: it needs Docker (for MySQL) and a reference host directory
+# holding its compiled dist/index.js and its node_modules.
 #
 #	make e2e REFERENCE_HOST=/path/to/reference-host
 e2e: ts-build
@@ -121,12 +122,12 @@ e2e: ts-build
 
 # The blogs command end to end: init, fund, stream, produce (both profiles,
 # gzip, a restart, a publish that fails and is resumed, a funding tree
-# whose publish fails and is repeated), read,
-# verify-interval, backfill, archive and sweep, against two local reference
-# hosts loading the bundle, over a local chain (internal/testchain) serving
-# the node's API and the header source. Not part of verify: it needs Docker
-# (for MySQL) and a reference host directory holding its compiled
-# dist/index.js and its node_modules.
+# whose publish fails and is repeated), read, verify-interval, backfill,
+# archive and sweep, against two local reference hosts loading the bundle,
+# over a local chain (internal/testchain) serving the node's API and the
+# header source. Not part of verify: it needs Docker (for MySQL) and a
+# reference host directory holding its compiled dist/index.js and its
+# node_modules.
 #
 #	make e2e-client REFERENCE_HOST=/path/to/reference-host
 e2e-client: ts-build

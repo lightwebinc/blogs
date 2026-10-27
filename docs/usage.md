@@ -11,7 +11,7 @@ against block headers it chooses, before it prints a line.
   ─────────────                                   ───────────────────────────────────────
   init ─▶ fund ─▶ stream new ─▶ produce ──carriers, trees, anchors──▶ facade (mode plane)
                                   │                                 or each of hosts (mode unicast)
-                                  │  └─trees, anchors──▶ settlement leg ─▶ chain
+                                  │  └─trees, anchors──▶ broadcaster ─▶ chain
                                   └─ anchor (finish, resume)
   reader (no home)
   ────────────────
@@ -80,7 +80,7 @@ prints `warning: ...` and goes on.
 | `identity.json` | the identity key (mode 0600); the producer is this key |
 | `wallet.json` | the coin pool (mode 0600): fees for funding trees come from here |
 | `config` | the config file, when it is kept here |
-| `lock` | held while `produce`, `anchor`, `sweep` or `fund` runs |
+| `lock` | held while `produce`, `anchor`, `sweep`, `fund` or `ingest` runs |
 | `streams/<stream>/state.json` | one stream's state (mode 0600), written atomically before every publish |
 
 A stream's state holds its head (`seq` and commitment), the carrier
@@ -92,9 +92,9 @@ its head must not restart the stream (specification section 12): `produce`
 refuses a stream the home does not hold, and the answer is a new stream
 from `stream new`.
 
-One `produce`, `anchor` or `fund` runs per home at a time, because they
-share the coin pool; a second exits 2. To run several producers at once,
-give each its own home. The fund key is the embedded wallet's key under
+One `produce`, `anchor`, `sweep`, `fund` or `ingest` runs per home at a
+time, because they share the coin pool; a second exits 2. To run several
+producers at once, give each its own home. The fund key is the embedded wallet's key under
 `[1, "blogs"]`, key id `fund`, counterparty `self`: only this home can
 derive it.
 
@@ -147,7 +147,7 @@ distance ([limits.md](limits.md)).
 Once `-interval` (default `10m`, from `1m` to `24h`) has passed since the
 last anchor and a published batch is unanchored, or `-anchor-batches`
 (default 4096, at most 65536) batches are unanchored, `produce` builds the
-next anchor over the unanchored batches (at most `-anchor-batches`), hands it to the settlement leg, and
+next anchor over the unanchored batches (at most `-anchor-batches`), hands it to the broadcaster, and
 publishes it to the facade once it has mined, with its proof. Nothing is
 anchored while an anchor is in flight: the next one waits for it and covers
 what arrived meanwhile. At the end of the input, `produce` anchors what is
@@ -226,7 +226,7 @@ two carriers are ever built for one. An anchor built and not yet published
 is collected by the next run, and an anchor the network refused is built
 again over the same batches from the next anchor fee output. Refused means
 the chain view names another transaction as the spender of one of its inputs,
-whether the settlement leg refused the anchor or accepted it first; any
+whether the broadcaster refused the anchor or accepted it first; any
 other failure to settle is tried again on the next tick. When the input
 spent elsewhere is the previous anchor token, no anchor can follow it: the
 anchor stays in flight with a `WARNING` rather than being rebuilt, and
@@ -590,10 +590,10 @@ goes back to the pool when the chain view shows it unspent (`its fee coin
 not given back, and the message says which. A retirement pays its fee from
 the outputs it spends, so it has no coin to give back. A sweep whose inputs
 the chain view shows unspent, or spent by the sweep itself, stays in flight
-whatever a settlement leg said, since a leg answers a second submission of
-a transaction it already holds the same way: a timeout, a busy leg or a
-leg's refusal exits 2 and the next `sweep` sends it again. `doctor` lists a
-sweep in flight (`sweep T (retract) in flight`) and a failed one (`sweep T
+whatever a broadcaster said, since a broadcaster answers a second
+submission of a transaction it already holds the same way: a timeout, a
+busy broadcaster or a broadcaster's refusal exits 2 and the next `sweep`
+sends it again. `doctor` lists a sweep in flight (`sweep T (retract) in flight`) and a failed one (`sweep T
 (retract) FAILED: ...`), and `sweep <stream>` with no flags lists every
 sweep with its height or its failure. The outputs a failed sweep named stay
 marked used: a retraction may be asked for again, and builds a new sweep
@@ -743,7 +743,7 @@ Results go to stdout; progress and errors to stderr, errors as one line
 | `backfill S to URL: H held, F filled, M missing, R refused, U unserved, W sweep(s) carried` | `backfill`, on stdout, one per host filled |
 | `seq N: served by no host (retracted, or not delivered); seq N+1's prev names it: unserved` | `backfill`, on stdout |
 | `seq N: the sibling URL answered something REFUSED: ...; it is not used` | `backfill`, on stdout: the next sibling is asked; it fails nothing |
-| `note: backfill carried batches and anchors, not sweeps: ...` | `backfill` without `-sweeps` |
+| `note: backfill carried batches, anchors and their fee trees, not sweeps: ...` | `backfill` without `-sweeps` |
 | `note: sweep TXID goes to the facade only: ...` | mode plane, a sweep with no host but the facade configured |
 | `sweep TXID: published to the facade, but not to every host directly: ...` | mode plane, a host in `hosts` did not take a sweep, exit 2 |
 | `warning: ...` | a setting past a recommended limit ([limits.md](limits.md)); the run goes on |
@@ -820,7 +820,8 @@ configuration needs; `run` publishes new lines and anchors them with all
 three hosts named in `hosts` (so a sweep reaches the third directly), reads
 them back from the two plane hosts, audits the interval at both, backfills
 the third host with `-sweeps` and audits it there, archives all three, and
-requires one root from all six. Each run adds an interval, so it is run twice in a row.
+requires one root from all six. Each run adds an interval, so a second run
+exercises the same path on a stream that already has history.
 
 ### Moving bcommon
 

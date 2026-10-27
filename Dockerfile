@@ -6,13 +6,15 @@
 #   docker build -t ghcr.io/lightwebinc/blogs .                             # the command (default)
 #   docker build --target devchain -t ghcr.io/lightwebinc/blogs-devchain .  # the local chain
 #
-# The builder is pinned by digest and is the builder toolchain
-# (1.27.3), so scanning sees the standard library that ships.
+# The builder image is pinned by digest to the builder toolchain (Go
+# 1.27.3), so a scan sees the standard library that ships.
 #
-# No ENV defaults are baked in. The hosts, the header source, the node and
-# the settlement leg are addresses of somebody's deployment and have no
-# default anywhere: a default would send a producer's objects, or a
-# reader's questions, to a server nobody configured. Pass them as
+# No ENV defaults are baked in. The overlay hosts and the facade are
+# addresses of somebody's deployment and have no default anywhere: a
+# default would send a producer's objects, or a reader's questions, to a
+# server nobody configured. The chain view, header source and broadcaster
+# default to public services on mainnet and testnet, in the image as
+# anywhere else, and a regtest chain has none. Pass settings as
 # BLOGS_<KEY> variables or in a config file (docs/configuration.md).
 #
 # The command keeps a producer's state (identity, coin pool, streams) under

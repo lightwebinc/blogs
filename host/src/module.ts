@@ -1,11 +1,12 @@
 /**
  * The blogs host module: `tm_log_<name>_<suffix>` for each configured stream
  * and `ls_log` for all of them, loaded into a reference overlay host by path
- * (`OVERLAY_MODULES=/abs/path/to/dist/module.js`). The host carries no
- * blogs code; this file's default export is the factory it calls.
+ * (`OVERLAY_MODULES=/abs/path/to/blogs-module.js`, this file bundled by
+ * scripts/bundle.js). The host carries no blogs code; this file's default
+ * export is the factory it calls.
  *
- * Configuration is one environment variable, read when the host calls the
- * factory:
+ * Configuration is read from the environment when the host calls the
+ * factory. BLOGS_STREAMS names the streams:
  *
  *   BLOGS_STREAMS=example_app_qzxkvbmwtr=open,audit_mkvbqzxtrw=02ab...+03cd...
  *
@@ -121,7 +122,7 @@ export function blogsModule(host: ModuleHost, streams: StreamConfig[], overlayTo
   return { topics, lookups: { [LookupService]: ls } }
 }
 
-/** The factory the host calls: streams from BLOGS_STREAMS, checked against OVERLAY_TOPICS. */
+/** The factory the host calls: the configuration from the environment, checked against OVERLAY_TOPICS. */
 export default function create(host: ModuleHost): Module {
   const overlay = process.env['OVERLAY_TOPICS']
   const topics = overlay === undefined ? undefined : overlay.split(',').map((t) => t.trim()).filter((t) => t !== '')

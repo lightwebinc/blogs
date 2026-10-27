@@ -2,9 +2,9 @@
 // for each configured stream and `ls_log` for all of them, written to
 // bcommon's engine-neutral contract (github.com/lightwebinc/bcommon/module)
 // so that any Go overlay host that carries the adapter mounts it. It is the
-// twin of the TypeScript module under host/src (frozen), built from the Go
-// core: the admission rules are logrec.Admit, the questions logrec.ParseQuery,
-// the interval roots logrec.IntervalRoot.
+// twin of the TypeScript module under host/src (frozen: bug fixes only),
+// built from the Go core: the admission rules are logrec.Admit, the
+// questions logrec.ParseQuery, the interval roots logrec.IntervalRoot.
 //
 // Configuration is the TypeScript module's, read from the environment when
 // the host calls the factory (docs/host.md): BLOGS_STREAMS, and for

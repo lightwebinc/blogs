@@ -696,15 +696,15 @@ export class LogLookupService implements LookupService {
   /**
    * Rebuilds the index from storage (spec section 8.5). The host hands the
    * unspent outputs of this module's topics, with their BEEF (a row handed
-   * without it is read again from storage with it); the index
-   * also needs spent ones (each anchor token but the newest is spent by the
-   * next, and a carrier's funding output by the carrier and by any sweep),
-   * so it walks from every row to the outputs its transaction spent
+   * without it is read again from storage with it); the index also needs
+   * spent ones (each anchor token but the newest is spent by the next, and
+   * a carrier's funding output by the carrier and by any sweep), so it
+   * walks from every row to the outputs its transaction spent
    * (outputsConsumed), the outputs that spent it (consumedBy), and its
    * transaction's other outputs, asking storage for each. Every output
    * connected to an unspent one is found, whatever order storage returns
-   * them in; statuses are functions of the set. Storage is kept for the topic
-   * managers' previous coins. A storage failure propagates: a restore that
+   * them in; statuses are functions of the set. Storage is kept for the
+   * topic managers' previous coins. A storage failure propagates: a restore that
    * skipped a retraction would serve retracted batches.
    */
   async restore(outputs: Output[], storage: RestoreStorage): Promise<number> {

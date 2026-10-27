@@ -164,7 +164,7 @@ func FuzzAdmit(f *testing.F) {
 		tx.Inputs[0].UnlockingScript = &us
 		_, err := Admit(context.Background(), tx, Coins{{Txid: *src.TxID(), Index: 0}: {LockingScript: s, Satoshis: 1}}, Host{Stream: "example_app_qzxkvbmwtr", Policy: Policy{Open: true}})
 		if err != nil && Reason(err) == "other" {
-			t.Fatalf("unlabelled refusal: %v", err)
+			t.Fatalf("unlabeled refusal: %v", err)
 		}
 	})
 }

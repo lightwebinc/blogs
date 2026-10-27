@@ -80,6 +80,13 @@ compose up -d` again. The image derives `OVERLAY_TOPICS` from
 only to carry other topics beside them, and then list every blogs topic in
 it as well.
 
+A host keeps every batch it admits by default, so its memory and start
+time grow with the stream. A host that serves logging streams should set
+`BLOGS_KEEP_DAYS=1`, with `BLOGS_STATE_DIR` on a volume of its own that
+the host's user can write (uid 1000, `node`, in `blogs-host`)
+([host.md](host.md#retention)). `deploy/compose.yaml` passes neither: add
+both, and the volume, to the `host` service.
+
 ## 3. Check it
 
 From anywhere with the `blogs` command and a header source:

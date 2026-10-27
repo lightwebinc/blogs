@@ -14,7 +14,7 @@ import (
 	"github.com/lightwebinc/blogs/internal/logrec"
 )
 
-func TestFetchHonoursTheAllowListAndTheOrigin(t *testing.T) {
+func TestFetchHonorsTheAllowListAndTheOrigin(t *testing.T) {
 	content := []byte("x\ny\n")
 	d := sha256.Sum256(content)
 	name := hex.EncodeToString(d[:])

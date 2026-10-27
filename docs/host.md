@@ -5,7 +5,8 @@ host: a `tm_log_<name>_<suffix>` topic manager for each configured stream
 and one `ls_log` lookup service for all of them. The host carries no blogs
 code; it imports this one file by absolute path and calls its default
 export. The rules it applies are the specification's ([spec.md](spec.md)
-sections 7 and 8).
+sections 7 and 8). This TypeScript module is frozen: bug fixes only. New
+behavior goes to its Go counterpart ([The Go module](#the-go-module)).
 
 ## Building it
 
@@ -216,8 +217,9 @@ positions, never a line.
 
 The same module exists in Go, `module/` in this repository, written to
 bcommon's engine-neutral contract (`github.com/lightwebinc/bcommon/module`)
-for a Go overlay host that carries the adapter: `tm_log_<stream>` for each
-configured stream and `ls_log` for all of them, with the same three
+for any Go overlay host that adapts that contract to its engine:
+`tm_log_<stream>` for each configured stream and `ls_log` for all of them,
+with the same three
 question classes and the same answers, the same statuses, restore and
 retention (the state file `blogs-retention.json` is the same file, so a
 host can move between the two). It reads the same `BLOGS_STREAMS`,
@@ -226,7 +228,8 @@ counts the same metrics below. Its admission rules are `logrec.Admit`, its
 questions `logrec.ParseQuery`, and its tests drive it with the transaction
 and refusal vectors and the TypeScript module's own cases. blogs has no
 priced class, so the Go module has no terms route and no port of its own:
-`ls_log` answers through the host's `/lookup`.
+`ls_log` answers through the host's `/lookup`. The `blogs-host` image
+runs the TypeScript bundle, not this module.
 
 On the Go host the topic manager reads the submission's bytes exactly as
 they arrived (`module.WithSubmission`), as the TypeScript manager reads the

@@ -22,12 +22,12 @@ import (
 // funding tree with bcommon carrier.SweepAt, at the fee policy: once it mines
 // and is published, every carrier that spent one of those outputs is a double
 // spend, and hosts stop serving it while keeping its seq as a numbered
-// position. A retirement
-// spends only the unused outputs of a tree no longer in use, paying their
-// value back to the coin pool; it retracts nothing. Each sweep is one
-// transaction per tree, persisted in the state before it is settled and
-// finished (mined, its change pooled, published) by FinishSweeps, so a run
-// that stops part way is resumed rather than rebuilt.
+// position. A retirement spends only the unused outputs of a tree no
+// longer in use, paying their value back to the coin pool; it retracts
+// nothing. Each sweep is one transaction per tree, persisted in the state
+// before it is settled and finished (mined, its change pooled, published)
+// by FinishSweeps, so a run that stops part way is resumed rather than
+// rebuilt.
 
 // ErrSweepInFlight is a new sweep asked for while one is still in flight.
 var ErrSweepInFlight = errors.New("a sweep is still in flight; finish it first")
@@ -404,8 +404,8 @@ func (e *Engine) FinishSweeps(ctx context.Context) error {
 				return err
 			}
 			if e.Legs.Hosts != nil {
-				// No lookup class names the sweep of a batch, so no backfill repairs a
-				// host that missed one: every host must take it.
+				// No lookup class names the sweep of a batch, so no backfill
+				// repairs a host that missed one: every host must take it.
 				o := e.Legs.Hosts.Send(ctx, "sweep "+sw.Txid, e.topic, beef, len(e.Legs.Hosts.Hosts), nil)
 				if err := o.Err(); err != nil {
 					return fmt.Errorf("sweep %s: publish: %w; it is mined and persisted, and the next sweep publishes it to every host", sw.Txid, err)

@@ -30,11 +30,11 @@ Each pass first asks the host again about the seqs it has stored, up to
 about longest ago come first (-recheck-all asks about every one). A stored
 carrier the host no longer serves is checked for a retraction: a mined
 transaction other than the carrier that spends its funding output (the
-chain view names it; the archive checks it against header_url).
-When one is found the archive keeps a receipt (the seq, the commitment,
-its prev, and the sweep with its proof, under retracted/) and drops the
-batch's bytes; the receipt still completes the interval's root. A carrier
-the host stops serving with no such spend is kept.
+chain view names it; the archive checks it against header_url). When one
+is found the archive keeps a receipt (the seq, the commitment, its prev,
+and the sweep with its proof, under retracted/) and drops the batch's
+bytes; the receipt still completes the interval's root. A carrier the host
+stops serving with no such spend is kept.
 
 Each anchor's fee tree is kept too, with its proof, under trees/, when the
 anchor is first proven: the host answers it by txid (the tree class), and
@@ -48,8 +48,8 @@ defaults to the first configured host. Needs header_url, and the chain
 view (chain) to find the spend that retracts a batch and a funding tree the
 host does not serve; both default to WhatsOnChain on mainnet and testnet.
 
-Prints what it stored and proved, then one line
-"latest interval K root R token T" naming the last interval proven.
+Prints what it stored and proved, then one line naming the last interval
+proven: "latest interval K root R token T".
 
 An archive follows one host and asks no other: an answer of that host that
 does not verify is named, with the header source it was checked against,

@@ -217,7 +217,7 @@ func TestClientE2E(t *testing.T) {
 	step("two reference hosts loading the bundle, admitting only this producer")
 
 	// Interval 1: full-bytes lines, a hostile line among them.
-	in1 := linesOf(0, 20) + "colour \x1b[31mred\x1b[0m title\x1b]0;owned\x07 end\n"
+	in1 := linesOf(0, 20) + "color \x1b[31mred\x1b[0m title\x1b]0;owned\x07 end\n"
 	r := h.produce(in1, stream, "-max-lines", "5", "-poll", "50ms")
 	if !strings.Contains(r.stdout, "published seq 1 to 5") || !strings.Contains(r.stdout, "anchored to seq 5: interval 1") {
 		t.Fatalf("produce 1:\n%s\n%s", r.stdout, r.stderr)
@@ -227,7 +227,7 @@ func TestClientE2E(t *testing.T) {
 	}
 	step("produce: 21 lines in 5 full-bytes batches, anchored as interval 1 after it mined")
 	r = h.must("", "read", stream, producer)
-	if !strings.HasPrefix(r.stdout, linesOf(0, 20)) || !strings.HasSuffix(r.stdout, "colour red title end\n") || strings.ContainsAny(r.stdout, "\x1b\x07") {
+	if !strings.HasPrefix(r.stdout, linesOf(0, 20)) || !strings.HasSuffix(r.stdout, "color red title end\n") || strings.ContainsAny(r.stdout, "\x1b\x07") {
 		t.Fatalf("read 1: %q", r.stdout)
 	}
 	step("read: every batch verified and linked, the hostile line filtered")

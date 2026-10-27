@@ -87,10 +87,11 @@ and print its lines, filtered for the terminal. A host that answers what
 does not verify is named and what it answered is not used; a seq the hosts
 answered only with what does not verify is not read, and is not called
 absent. Without -to it reads until no host holds the next seq, which may be
-the stream's end or a hole: an empty answer proves nothing. One read covers at most 65536 seqs; without
--to it stops there and names the -from to continue with. A digest-only batch's content is read from
--content-dir, or fetched from a locator hint whose host is on -allow-host.
-Needs hosts and header_url.
+the stream's end or a hole: an empty answer proves nothing. One read
+covers at most 65536 seqs; without -to it stops there and names the -from
+to continue with. A digest-only batch's content is read from -content-dir,
+or fetched from a locator hint whose host is on -allow-host. Needs hosts
+and header_url.
 
 Exit 0 when every batch read verified and linked; 1 when the links broke,
 a fork was not resolved or content was invalid; 3 when a host answered
@@ -334,9 +335,9 @@ predecessor token, from the funding trees the interval's carriers carry, or
 from the funding tree itself: an anchor's fee tree is asked of the hosts by
 its txid (the tree class), which answer it with its proof however long ago
 its outputs were spent, and only when no host serves it of a copy of the
-chain (chain), which may have pruned it. Every tree is held to
-the txid the anchor's input names, and a host's to its proof against the
-header source. -v names what answered each tree.
+chain (chain), which may have pruned it. Every tree is held to the txid
+the anchor's input names, and a host's to its proof against the header
+source. -v names what answered each tree.
 
 Every host (and the archive, with -archive) is asked every question. An
 answer that does not verify is named with what answered it and is not
@@ -494,13 +495,13 @@ as for a retracted batch, and it is counted unserved instead (retracted,
 or not delivered to any host asked; as verify-interval and archive prove
 an interval across it).
 
-No lookup class names the sweep of a batch, so a host that missed one still
-serves the batches it retracted. -sweeps carries them: every carrier the host holds
-at the seqs filled is checked for a mined spend of its funding output by
-another transaction (the chain view names it; it is checked against
-header_url), and a sweep found is submitted to the host. It costs one
-spend read per held carrier. Without -sweeps, backfill says it carried
-none.
+No lookup class names the sweep of a batch, so a host that missed one
+still serves the batches it retracted. -sweeps carries them: every carrier
+the host holds at the seqs filled is checked for a mined spend of its
+funding output by another transaction (the chain view names it; it is
+checked against header_url), and a sweep found is submitted to the host.
+It costs one spend read per held carrier. Without -sweeps, backfill says
+it carried none.
 
 Exit 0 when every position is held, filled or unserved, whatever a sibling
 answered that does not verify (each is named); 3 when a position is still

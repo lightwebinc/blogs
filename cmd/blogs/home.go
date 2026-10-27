@@ -558,8 +558,8 @@ const doctorHelp = `usage: blogs doctor
 
 Report the home (identity, pool, streams and their state), the chain view,
 the fee policy, and whether the configured node, header source,
-broadcaster and hosts answer. Reads only: it publishes
-nothing and spends nothing.`
+broadcaster and hosts answer. Reads only: it publishes nothing and spends
+nothing.`
 
 func cmdDoctor(ctx context.Context, g *global, args []string) error {
 	fs := g.flagSet("doctor", doctorHelp)
