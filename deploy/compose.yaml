@@ -24,7 +24,7 @@ name: blogs
 
 services:
   db:
-    image: mysql:26@sha256:9d48c42f8341068f199116dfccb919b607c99765b5c61e549a548a43033471a4
+    image: mysql:26@sha256:f51c9c01c16b0eb5d81bb70ab7e7fcb3b96abc6a54114be3a94e8e569cae7815
     environment:
       MYSQL_DATABASE: overlay
       MYSQL_USER: overlay
@@ -61,7 +61,7 @@ services:
     restart: unless-stopped
 
   caddy:
-    image: caddy:2@sha256:685ae3d7c34d9b5f8caeddc5d14051db7bbd88ff1f5a2fa0c16bd8ca328fb7af
+    image: caddy:2@sha256:504a44d7d74bd2bc28a66afc4774912fc21223ca8a67734af1c54ab2f999b489
     depends_on:
       - host
     ports:
