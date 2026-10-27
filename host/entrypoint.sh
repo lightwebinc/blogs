@@ -1,5 +1,5 @@
 #!/bin/sh
-# Starts the reference overlay host with the blogs module. Two things are
+# Starts the reference overlay host with the blogs module. Three things are
 # added to the stock start:
 #
 #  - BLOGS_STREAMS is required, and when OVERLAY_TOPICS is unset it is
@@ -10,6 +10,8 @@
 #  - an unset OVERLAY_ADMIN_TOKEN is replaced by a random one for this run,
 #    because the host requires one. Nothing can use the admin surface until
 #    the operator sets their own.
+#  - with BLOGS_KEEP_DAYS set and BLOGS_STATE_DIR unset, the retention state
+#    goes to /var/lib/blogs, which the image creates for the host's user.
 set -eu
 
 if [ -z "${BLOGS_STREAMS:-}" ]; then
@@ -25,6 +27,13 @@ if [ -z "${OVERLAY_TOPICS:-}" ]; then
   done
   OVERLAY_TOPICS=$topics
   export OVERLAY_TOPICS
+fi
+
+# With BLOGS_KEEP_DAYS set, the retention state defaults to /var/lib/blogs,
+# the image's directory for it; mount a volume there to keep it.
+if [ -n "$(printf '%s' "${BLOGS_KEEP_DAYS:-}" | tr -d ' \t')" ] && [ -z "${BLOGS_STATE_DIR:-}" ]; then
+  BLOGS_STATE_DIR=/var/lib/blogs
+  export BLOGS_STATE_DIR
 fi
 
 if [ -z "${OVERLAY_ADMIN_TOKEN:-}" ]; then

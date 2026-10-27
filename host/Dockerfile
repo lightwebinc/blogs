@@ -28,12 +28,18 @@ COPY host/vendor ./vendor
 RUN npm ci --no-audit --no-fund
 COPY host/ ./
 RUN npm run check && npm run build && npm run bundle
+# An empty directory for the retention state, copied below with its owner.
+RUN mkdir -p /state/blogs
 
 FROM ${REFERENCE_HOST_IMAGE}
 # Beside the host's own node_modules, so the bundle's one import (@bsv/sdk)
 # resolves to the host's copy (docs/host.md).
 COPY --from=bundle /src/host/bundle/blogs-module.js /app/modules/blogs/blogs-module.js
 COPY --chmod=0755 host/entrypoint.sh /usr/local/bin/blogs-host
+# The retention state's default home (BLOGS_STATE_DIR), owned by the
+# reference host's user (uid 1000, node), so a fresh volume mounted here
+# is writable. A COPY, not a RUN, so this stage still needs no emulation.
+COPY --from=bundle --chown=1000:1000 --chmod=0750 /state/blogs /var/lib/blogs
 COPY LICENSE NOTICE LICENSE-THIRD-PARTY /usr/share/doc/blogs/
 ENV OVERLAY_MODULES=/app/modules/blogs/blogs-module.js
 ENTRYPOINT ["/usr/local/bin/blogs-host"]

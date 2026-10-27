@@ -234,6 +234,11 @@ docker-smoke-host:
 	echo "== no BLOGS_STREAMS: exit 64 with the reason"; \
 	rc=0; out=$$(docker run --rm --network none $$img 2>&1) || rc=$$?; echo "$$out"; \
 	[ "$$rc" = 64 ] && echo "$$out" | grep -q 'BLOGS_STREAMS is empty' || { echo "docker-smoke-host: want exit 64, got $$rc"; exit 1; }; \
+	echo "== /var/lib/blogs: a fresh volume there is the host user's to write"; \
+	vol=blogs-smoke-state-$$$$; docker volume create $$vol >/dev/null; \
+	docker run --rm --network none -v $$vol:/var/lib/blogs --entrypoint sh $$img -c 'touch /var/lib/blogs/probe && echo "state dir writable as uid $$(id -u)"' \
+		|| { docker volume rm $$vol >/dev/null; echo "docker-smoke-host: /var/lib/blogs is not writable"; exit 1; }; \
+	docker volume rm $$vol >/dev/null; \
 	echo "docker-smoke-host: ok ($$img)"
 
 # QUICKSTART.md, run as written, in the quickstart compose project: the

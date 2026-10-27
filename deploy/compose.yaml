@@ -15,7 +15,9 @@
 # test or regtest; default the source's own); ADMIN_TOKEN (default a random
 # one per start); DB_PASSWORD (the database is never published outside this
 # project's network); DB_BUFFER_POOL; SYNC_PEERS (hosts to catch up from,
-# tm_log_app_qzxkvbmwtr=https://other-host.example.net); BLOGS_HOST_IMAGE.
+# tm_log_app_qzxkvbmwtr=https://other-host.example.net); BLOGS_KEEP_DAYS
+# (unset keeps everything; 1 for a logging host, its state on the volume
+# `state`); BLOGS_HOST_IMAGE.
 # See docs/self-host.md.
 
 name: blogs
@@ -53,6 +55,9 @@ services:
       OVERLAY_CHAIN_NETWORK: ${NETWORK:-}
       OVERLAY_ADMIN_TOKEN: ${ADMIN_TOKEN:-}
       OVERLAY_SYNC_PEERS: ${SYNC_PEERS:-}
+      BLOGS_KEEP_DAYS: ${BLOGS_KEEP_DAYS:-}
+    volumes:
+      - state:/var/lib/blogs
     restart: unless-stopped
 
   caddy:
@@ -94,3 +99,4 @@ configs:
 volumes:
   db:
   caddy:
+  state:

@@ -71,6 +71,7 @@ variables too: `export` them, or put them in a `.env` file beside
 | `ADMIN_TOKEN` | random per start | bearer token for `/admin` |
 | `SYNC_PEERS` | none | hosts to catch up from with GASP, `tm_log_app_qzxkvbmwtr=https://other-host.example.net` |
 | `DB_PASSWORD` | a fixed internal value | the database is reachable only from the host container |
+| `BLOGS_KEEP_DAYS` | unset: keep everything | days a proven batch is kept, at least 1; `1` for a logging host |
 | `DB_BUFFER_POOL` | `128M` | MySQL's buffer pool; raise it on a bigger server |
 | `BLOGS_HOST_IMAGE` | `ghcr.io/lightwebinc/blogs-host:latest` | the image to run |
 
@@ -82,10 +83,9 @@ it as well.
 
 A host keeps every batch it admits by default, so its memory and start
 time grow with the stream. A host that serves logging streams should set
-`BLOGS_KEEP_DAYS=1`, with `BLOGS_STATE_DIR` on a volume of its own that
-the host's user can write (uid 1000, `node`, in `blogs-host`)
-([host.md](host.md#retention)). `deploy/compose.yaml` passes neither: add
-both, and the volume, to the `host` service.
+`BLOGS_KEEP_DAYS=1` ([host.md](host.md#retention)). The compose file
+passes it to the host, and keeps the retention state on the named volume
+`state`.
 
 ## 3. Check it
 

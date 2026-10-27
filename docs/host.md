@@ -77,8 +77,10 @@ it, and deployments use the bundle.
 overlay host image with the bundle at `/app/modules/blogs/blogs-module.js`
 and `OVERLAY_MODULES` naming it. Its entrypoint requires `BLOGS_STREAMS`
 (exit 64 without it), derives `OVERLAY_TOPICS` from it when unset
-(`tm_log_<stream>` per entry), and uses a random `OVERLAY_ADMIN_TOKEN` for
-the run when none is set. [self-host.md](self-host.md) runs it with MySQL
+(`tm_log_<stream>` per entry), uses a random `OVERLAY_ADMIN_TOKEN` for
+the run when none is set, and, when `BLOGS_KEEP_DAYS` is set without
+`BLOGS_STATE_DIR`, sets `BLOGS_STATE_DIR=/var/lib/blogs`: a directory the
+image creates for the host's user (uid 1000), where a volume belongs. [self-host.md](self-host.md) runs it with MySQL
 and a TLS front; `make docker-smoke-host` checks that the bundle imports
 the host's own `@bsv/sdk`.
 
