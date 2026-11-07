@@ -147,6 +147,25 @@ func (h *harness) poolHoldsTx(txid string) bool {
 	return false
 }
 
+// changeTaken reports whether the wallet took an output of txid: the pool
+// holds it, or a mined transaction spent it. The pool pays with the
+// smallest coin that fits, so a tree's change often pays the next fee of
+// the same run before the test looks.
+func (h *harness) changeTaken(txid string) bool {
+	h.t.Helper()
+	if h.poolHoldsTx(txid) {
+		return true
+	}
+	for _, id := range h.chain.Txids() {
+		for _, in := range h.chain.Tx(id).Inputs {
+			if in.SourceTXID.String() == txid && h.chain.Mined(id) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // stopped is a funded producer whose first produce stopped as its batch
 // funding tree reached the settlement leg: the stream, the producer, the
 // tree, and the outpoint of the coin the tree spends.
@@ -234,8 +253,8 @@ func TestATreeOnTheChainIsAdoptedByTheNextCommand(t *testing.T) {
 	if st.Tree == nil || st.Tree.Txid != id || len(st.Trees) != 1 || len(st.PendingTrees) != 0 || st.Tree.BumpHex == "" {
 		t.Fatalf("the tree was not adopted: tree %+v, %d trees, records %+v", st.Tree, len(st.Trees), st.PendingTrees)
 	}
-	if h.poolCoins()[coin] || !h.poolHoldsTx(id) {
-		t.Fatalf("the pool: spent coin held %t, the tree's change held %t", h.poolCoins()[coin], h.poolHoldsTx(id))
+	if h.poolCoins()[coin] || !h.changeTaken(id) {
+		t.Fatalf("the pool: spent coin held %t, the tree's change taken %t", h.poolCoins()[coin], h.changeTaken(id))
 	}
 	if !h.host.HoldsTree(id) {
 		t.Fatal("the host does not hold the recovered tree")
@@ -443,8 +462,8 @@ func TestATreeMintedAheadAndNotCollectedIsHeldByTheNextRun(t *testing.T) {
 	if st.Tree == nil || st.Tree.Txid != ahead || len(st.Trees) != 2 || len(st.PendingTrees) != 0 || len(st.Ahead) != 0 {
 		t.Fatalf("after the switch: tree %+v, %d trees, records %+v, ahead %d", st.Tree, len(st.Trees), st.PendingTrees, len(st.Ahead))
 	}
-	if !h.poolHoldsTx(ahead) || !h.host.HoldsTree(ahead) {
-		t.Fatalf("the tree's change in the pool %t, the tree at the host %t", h.poolHoldsTx(ahead), h.host.HoldsTree(ahead))
+	if !h.changeTaken(ahead) || !h.host.HoldsTree(ahead) {
+		t.Fatalf("the tree's change taken %t, the tree at the host %t", h.changeTaken(ahead), h.host.HoldsTree(ahead))
 	}
 	if r = h.must("", "read", stream, producer); r.stdout != linesOf(0, 3)+linesOf(3, 2) {
 		t.Fatalf("read: %q", r.stdout)
