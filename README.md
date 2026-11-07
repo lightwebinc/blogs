@@ -39,7 +39,7 @@ or a header service you run, can replace any public service
 then gives a local development sandbox (a private regtest chain, no coin
 needed) with two hosts and a verified interval in about five minutes.
 
-> The TypeScript host module under `host/` is frozen: bug fixes only. New behavior goes to its Go counterpart under `module/`, for Go overlay hosts ([docs/host.md](docs/host.md#the-go-module)). The `blogs-host` image runs the TypeScript module.
+> The TypeScript host module under `host/` is frozen: bug fixes only. New behavior goes to its Go twin under `module/`, written to bcommon's `module` contract and mounted by a Go overlay engine ([docs/host.md](docs/host.md#the-go-module)). The `blogs-host` image runs the TypeScript module.
 
 ## How it works
 
@@ -103,7 +103,7 @@ make quickstart-check  # QUICKSTART.md, run as written, in Docker Compose
 
 `NODE=/path/to/node` selects a Node 24 binary that is not on `PATH`. Two
 direct Go dependencies, both pinned exactly and asserted by `make verify`:
-[go-sdk](https://github.com/bsv-blockchain/go-sdk) at v1.7.1 and
+[go-sdk](https://github.com/bsv-blockchain/go-sdk) and
 [bcommon](https://github.com/lightwebinc/bcommon) (with its `devkit`
 module, used only by tests and the development commands), whose
 TypeScript package at the same version is vendored under `host/vendor`.

@@ -6,7 +6,7 @@ and one `ls_log` lookup service for all of them. The host carries no blogs
 code; it imports this one file by absolute path and calls its default
 export. The rules it applies are the specification's ([spec.md](spec.md)
 sections 7 and 8). This TypeScript module is frozen: bug fixes only. New
-behavior goes to its Go counterpart ([The Go module](#the-go-module)).
+behavior goes to its Go twin ([The Go module](#the-go-module)).
 
 ## Building it
 
