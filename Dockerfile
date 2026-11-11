@@ -7,7 +7,7 @@
 #   docker build --target devchain -t ghcr.io/lightwebinc/blogs-devchain .  # the local chain
 #
 # The builder image is pinned by digest to the builder toolchain (Go
-# 1.27.3), so a scan sees the standard library that ships.
+# 1.27.4), so a scan sees the standard library that ships.
 #
 # No ENV defaults are baked in. The overlay hosts and the facade are
 # addresses of somebody's deployment and have no default anywhere: a
