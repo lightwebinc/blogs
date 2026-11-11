@@ -39,7 +39,7 @@ jobs:
         with:
           cache: false
           # The Dockerfile builder's toolchain; it may lead go.mod's go line.
-          go-version: "1.27.3"
+          go-version: "1.27.4"
 
       - name: Build
         env:
