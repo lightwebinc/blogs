@@ -502,11 +502,14 @@ type txCase struct {
 	reason           string // "" admits
 }
 
-// scriptsVerify runs the interpreter over tx's own inputs.
+// scriptsVerify runs the interpreter over tx's own inputs: scripts, amounts
+// and shape, as go-sdk's spv.VerifyScripts checks them, with no proof and no
+// finality rule. A carrier is not final by design, and from v1.7.2 go-sdk's
+// spv.Verify refuses one, so the vectors do not rest on it.
 func scriptsVerify(ctx context.Context, tx *transaction.Transaction) bool {
 	cp := tx.ShallowClone()
 	cp.MerklePath = nil
-	ok, err := spv.Verify(ctx, cp, &spv.GullibleHeadersClient{}, nil)
+	ok, err := spv.VerifyScripts(ctx, cp)
 	return err == nil && ok
 }
 
