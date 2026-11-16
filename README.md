@@ -116,7 +116,8 @@ Report a vulnerability privately: [SECURITY.md](SECURITY.md).
 
 ## License
 
-Apache-2.0 ([LICENSE](LICENSE)). One dependency is under the Open BSV
-License Version 5, whose grant is revocable and which limits use to the BSV
-blockchains; [NOTICE](NOTICE) explains, and
-[LICENSE-THIRD-PARTY](LICENSE-THIRD-PARTY) carries every license text.
+Apache-2.0 ([LICENSE](LICENSE)). go-sdk is Apache-2.0 from v1.7.5, the
+version blogs builds on. The host module runs beside the overlay host's own
+`@bsv/sdk`, which is under the Open BSV License Version 6; [NOTICE](NOTICE)
+explains, and [LICENSE-THIRD-PARTY](LICENSE-THIRD-PARTY) carries every
+license text.

@@ -579,7 +579,7 @@
           "satoshis": 1000
         }
       ],
-      "scriptsVerify": true,
+      "scriptsVerify": false,
       "verdict": "refuse",
       "reason": "unlock"
     },
@@ -1182,7 +1182,7 @@
           "satoshis": 1000
         }
       ],
-      "scriptsVerify": true,
+      "scriptsVerify": false,
       "verdict": "refuse",
       "reason": "unlock"
     },
