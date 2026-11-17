@@ -70,11 +70,12 @@ this notice does not modify those licenses.
   go.yaml.in/yaml/v3                           MIT License, Apache License 2.0
   golang.org/x/crypto                          BSD License
 
-Two DIRECT dependencies, github.com/bsv-blockchain/go-sdk and
-github.com/lightwebinc/bcommon, are a rule this repository enforces in
-CI. bcommon is Lightweb Inc.'s library of the generic building blocks
-blogs is made from, published separately under Apache-2.0; its devkit
-module is linked only into the development chain and the vector tool.
+Three DIRECT dependencies, github.com/bsv-blockchain/go-sdk,
+github.com/lightwebinc/bcommon and github.com/lightwebinc/bcommon/devkit,
+are a rule this repository enforces in CI. bcommon is Lightweb Inc.'s
+library of the generic building blocks blogs is made from, published
+separately under Apache-2.0; its devkit is the local stand-in chain,
+linked only into the devchain and vectors commands.
 go-sdk brings the other five with it, and a statically linked binary
 contains them whether they were asked for directly or not.
 
