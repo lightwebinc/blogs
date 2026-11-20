@@ -35,7 +35,7 @@ jobs:
         run: |
           v=$(node -p "require('./host/package.json').version")
           [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "host/package.json is $v, the tag is $GITHUB_REF_NAME"; exit 1; }
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           cache: false
           # The Dockerfile builder's toolchain; it may lead go.mod's go line.
