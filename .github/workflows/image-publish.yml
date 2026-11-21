@@ -13,10 +13,12 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   publish:
+    permissions:
+      contents: read
+      packages: write
     if: github.event.inputs.confirm == 'RELEASE'
     runs-on: ubuntu-latest
     steps:
