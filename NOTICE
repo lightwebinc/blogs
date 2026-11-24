@@ -96,10 +96,10 @@ The npm @bsv/sdk at the version the host module names is under the Open
 BSV License Version 6, whose attribution is "© BSV Association" and which
 limits use to the BSV Blockchains.
 
-go-sdk is under the Apache License 2.0 from v1.7.5, the version blogs
-builds on. Earlier versions were under the Open BSV License Version 5,
+go-sdk is under the Apache License 2.0 from v1.7.5; blogs builds on
+v1.7.8. Versions before v1.7.5 were under the Open BSV License Version 5,
 whose grant was revocable and limited to the BSV Blockchains; those terms
-do not apply to v1.7.5. A reader carrying this notice to a repository
+do not apply from v1.7.5. A reader carrying this notice to a repository
 pinned below v1.7.5 must check which applies there rather than assume.
 
 The full text of every license above is reproduced verbatim in

@@ -267,7 +267,7 @@ func TestNewStream(t *testing.T) {
 }
 
 // TestProducerMatchesSDK holds CheckProducer to go-sdk's parser on random
-// keys, and refuses the x >= p alias the SDK accepts.
+// keys, and refuses the x >= p alias (which go-sdk took through v1.7.6).
 func TestProducerMatchesSDK(t *testing.T) {
 	r := rand.New(rand.NewSource(1))
 	for i := 0; i < 300; i++ {

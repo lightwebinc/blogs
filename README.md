@@ -116,8 +116,8 @@ Report a vulnerability privately: [SECURITY.md](SECURITY.md).
 
 ## License
 
-Apache-2.0 ([LICENSE](LICENSE)). go-sdk is Apache-2.0 from v1.7.5, the
-version blogs builds on. The host module runs beside the overlay host's own
+Apache-2.0 ([LICENSE](LICENSE)). go-sdk is Apache-2.0 from v1.7.5; blogs
+builds on v1.7.8. The host module runs beside the overlay host's own
 `@bsv/sdk`, which is under the Open BSV License Version 6; [NOTICE](NOTICE)
 explains, and [LICENSE-THIRD-PARTY](LICENSE-THIRD-PARTY) carries every
 license text.
