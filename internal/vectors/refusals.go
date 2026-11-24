@@ -183,12 +183,20 @@ func refusalVectors(prod []byte) ([]refusalJSON, error) {
 	xIsP[0] = 0x02
 	p.FillBytes(xIsP[1:])
 	// x = p + 1 reduces to x = 1, which is on the curve: a parser that
-	// reduces x accepts it as an alias of 02 || 1.
+	// reduces x accepts it as an alias of 02 || 1. go-sdk did through
+	// v1.7.6; from v1.7.7 it refuses it too. The producer rule must refuse
+	// it whatever the SDK does, and 02 || 1 itself must be a key.
 	xIsP1 := make([]byte, 33)
 	xIsP1[0] = 0x02
 	new(big.Int).Add(p, big.NewInt(1)).FillBytes(xIsP1[1:])
-	if _, err := ec.ParsePubKey(xIsP1); err != nil {
-		return nil, fmt.Errorf("the alias vector no longer parses in go-sdk: %v", err)
+	one := make([]byte, 33)
+	one[0] = 0x02
+	one[32] = 0x01
+	if _, err := ec.ParsePubKey(one); err != nil {
+		return nil, fmt.Errorf("the alias vector's reduced key 02 || 1 does not parse in go-sdk: %v", err)
+	}
+	if logrec.CheckProducer(xIsP1) == nil {
+		return nil, fmt.Errorf("the producer rule takes the alias 02 || p+1")
 	}
 	many := append(cbor.Map{}, vb...)
 	for k := uint64(24); len(many) <= logrec.MaxKeys; k++ {

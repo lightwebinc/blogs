@@ -1,6 +1,6 @@
 {
   "name": "@lightwebinc/blogs-host",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "private": true,
   "description": "The blogs record layer in TypeScript and the host module for an overlay host: batch, locator and anchor records, stream identifiers, the topic manager's transaction rules held to the Go codec's vectors, and tm_log with ls_log as a module the host loads by path",
   "license": "Apache-2.0",
@@ -20,7 +20,7 @@
   },
   "dependencies": {
     "@bsv/sdk": "4.1.2",
-    "@lightwebinc/bcommon": "file:vendor/lightwebinc-bcommon-0.37.0.tgz"
+    "@lightwebinc/bcommon": "file:vendor/lightwebinc-bcommon-0.40.0.tgz"
   },
   "devDependencies": {
     "@bsv/overlay": "2.8.0",
