@@ -58,7 +58,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # asset API and a header source on port 8080. It has no proof of work and
 # no peers, and nothing it mines is money. Its journal, which replays the
 # chain after a restart, is kept in /var/lib/devchain; mount a volume there.
-FROM gcr.io/distroless/static:nonroot@sha256:aafe993665bf6200db38a02c11a9351e782a84b6a45e7f33b6695638c88e3931 AS devchain
+FROM gcr.io/distroless/static:nonroot@sha256:8ce6dd87e9823c5b48dcfb2c8604714ccb351ce59607327bcc4957448da279b5 AS devchain
 USER nonroot:nonroot
 COPY --from=builder /out/devchain /usr/local/bin/devchain
 COPY --from=builder --chown=65532:65532 --chmod=0700 /state/devchain /var/lib/devchain
@@ -67,7 +67,7 @@ EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/devchain", "-journal", "/var/lib/devchain/journal"]
 
 # The command. Last, so a plain build produces it.
-FROM gcr.io/distroless/static:nonroot@sha256:aafe993665bf6200db38a02c11a9351e782a84b6a45e7f33b6695638c88e3931 AS blogs
+FROM gcr.io/distroless/static:nonroot@sha256:8ce6dd87e9823c5b48dcfb2c8604714ccb351ce59607327bcc4957448da279b5 AS blogs
 USER nonroot:nonroot
 COPY --from=builder /out/blogs /usr/local/bin/blogs
 COPY --from=builder --chown=65532:65532 --chmod=0700 /state/.blogs /home/nonroot/.blogs
